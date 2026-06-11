@@ -43,6 +43,30 @@ async def amain() -> None:
             f"主信号门槛 RR≥{cfg.get('signal.min_rr_primary')}，量能≥{cfg.get('signal.vol_multiplier')}x"
         )
 
+    async def daily_report():
+        """每天北京时间08:00发送双轨统计日报。"""
+        import time as _t
+        last_day = None
+        while True:
+            await asyncio.sleep(60)
+            t = _t.gmtime(_t.time() + 8 * 3600)  # UTC+8
+            day = (t.tm_year, t.tm_yday)
+            if t.tm_hour == 8 and day != last_day and bot.enabled:
+                last_day = day
+                r5 = engine.paper.stats("rr5")
+                r25 = engine.paper.stats("rr25")
+                n_sig = db.one("SELECT COUNT(*) c FROM signals WHERE created_at > ?",
+                               (int(_t.time()) - 86400,))["c"]
+                await bot.notify(
+                    f"📅 <b>日报</b>（近24h）\n"
+                    f"信号: {n_sig} 个\n"
+                    f"RR≥5 轨: {r5['closed']}平/{r5['open']}持 | 胜率 {r5['win_rate']}% | "
+                    f"累计 {r5['total_pnl']}U | 期望 {r5['expectancy_r']}R\n"
+                    f"RR≥2.5 轨: {r25['closed']}平/{r25['open']}持 | 胜率 {r25['win_rate']}% | "
+                    f"累计 {r25['total_pnl']}U | 期望 {r25['expectancy_r']}R"
+                )
+    asyncio.create_task(daily_report())
+
     server = uvicorn.Server(uvicorn.Config(
         app, host=cfg.get("web.host", "0.0.0.0"), port=cfg.get("web.port", 8488),
         log_level="warning",
