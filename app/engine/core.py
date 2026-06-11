@@ -41,6 +41,7 @@ class Engine:
         await self.ws.start(self.symbols, self.cfg.timeframes)
         self._tasks.append(asyncio.create_task(self._universe_loop()))
         self._tasks.append(asyncio.create_task(self._watchdog_loop()))
+        self._tasks.append(asyncio.create_task(self._maintenance_loop()))
         log.info("engine started: %d symbols, tfs=%s", len(self.symbols), self.cfg.timeframes)
         self.db.log("info", "engine", f"started with {len(self.symbols)} symbols")
 
@@ -91,6 +92,26 @@ class Engine:
                     await self.ws.start(self.symbols, self.cfg.timeframes)
                 except Exception:
                     log.exception("watchdog restart failed")
+
+    async def _maintenance_loop(self) -> None:
+        """每小时：修剪K线表防膨胀；把超过TTL未处理的信号标记为过期。"""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                keep = self.cfg.get("data.kline_keep_bars", 1500)
+                for sym in self.symbols:
+                    for tf in self.cfg.timeframes:
+                        self.db.trim_klines(sym, tf, keep)
+                ttl_s = self.cfg.get("telegram.confirm_ttl_minutes", 30) * 60
+                cur = self.db.execute(
+                    "UPDATE signals SET status='expired' WHERE status IN ('new','notified') AND created_at < ?",
+                    (int(time.time()) - ttl_s,),
+                )
+                if cur.rowcount:
+                    log.info("maintenance: expired %d stale signals", cur.rowcount)
+                log.info("maintenance done")
+            except Exception:
+                log.exception("maintenance failed")
 
     # ---------- 数据 ----------
     async def backfill_all(self, only: list[str] | None = None) -> None:
