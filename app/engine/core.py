@@ -213,4 +213,5 @@ class Engine:
             "mode": self.cfg.mode,
             "stats_rr5": self.paper.stats("rr5"),
             "stats_rr25": self.paper.stats("rr25"),
+            "funnel": dict(self.signal_engine.funnel),
         }

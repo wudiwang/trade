@@ -50,6 +50,8 @@ class SignalEngine:
         self.funding: dict[str, float] = {}
         # BTC 15m 大盘趋势，由 engine 在 BTC 收盘时刷新
         self.btc_trend: int = 0
+        # 漏斗计数：候选信号死在哪一关（status接口可见，重启清零）
+        self.funnel: dict[str, int] = {}
 
     def _p(self, key: str, default=None):
         return self.cfg.get(key, default)
@@ -69,8 +71,13 @@ class SignalEngine:
         f = fractals[-1]
         last_idx = len(klines) - 1
         if f.confirm_src_idx != last_idx:
-            return None  # 分型尚未确认在本根收盘
+            return None  # 分型尚未确认在本根收盘（常态，不计入漏斗）
 
+        def drop(stage: str):
+            self.funnel[stage] = self.funnel.get(stage, 0) + 1
+            return None
+
+        self.funnel["fractal_confirmed"] = self.funnel.get("fractal_confirmed", 0) + 1
         direction = "long" if f.kind == "bottom" else "short"
 
         # 冷却
@@ -80,27 +87,27 @@ class SignalEngine:
         last_t = self._cooldown.get(key, 0)
         cur_t = int(klines[last_idx]["open_time"])
         if cur_t - last_t < cd_bars * tf_ms:
-            return None
+            return drop("cooldown")
 
         # 量能放大（分型极值K）
         vr = volume_ratio(klines, f.extreme_src_idx, self._p("signal.vol_ma_period", 20))
         vol_min = self._p("signal.vol_multiplier", 1.5)
         if vr < vol_min:
-            return None
+            return drop("volume")
         strength = "strong" if vr >= self._p("signal.vol_strong", 2.0) else "normal"
 
         # 跌破收回 / 冲高回落
         support = prior_support(klines, fractals, f, self._p("signal.break_reclaim_lookback", 30))
         if support is None or not is_break_reclaim(klines, f, support):
-            return None
+            return drop("break_reclaim")
 
         # 趋势过滤（用15m聚合1h EMA50；short 要求趋势向下，long 向上）
         if self._p("signal.trend_filter", True) and klines_15m:
             td = trend_direction(klines_15m, self._p("signal.trend_ema_period", 50))
             if direction == "long" and td == -1:
-                return None
+                return drop("trend")
             if direction == "short" and td == 1:
-                return None
+                return drop("trend")
 
         # ---- 因子打分（基础规则之上的加分项；明细全部入库供后续效果分析）----
         trend_15 = trend_direction(klines_15m, self._p("signal.trend_ema_period", 50)) if klines_15m else 0
@@ -111,7 +118,7 @@ class SignalEngine:
             btc_trend=self.btc_trend,
         )
         if score < self._p("factors.min_score", 1):
-            return None
+            return drop("factor_score")
 
         entry = float(klines[last_idx]["close"])
 
@@ -127,25 +134,26 @@ class SignalEngine:
             sl = f.extreme_price * (1 - buf)
             tp = nearest_hvn_above(profile, entry)
             if tp is None or sl >= entry or tp <= entry:
-                return None
+                return drop("no_tp_hvn")
             rr = (tp - entry) / (entry - sl)
         else:
             sl = f.extreme_price * (1 + buf)
             tp = nearest_hvn_below(profile, entry)
             if tp is None or sl <= entry or tp >= entry:
-                return None
+                return drop("no_tp_hvn")
             rr = (entry - tp) / (sl - entry)
 
         ok, why = sl_atr_sane(entry, sl, atr_val,
                               self._p("factors.sl_atr_min", 0.5), self._p("factors.sl_atr_max", 3.0))
         if not ok:
-            return None
+            return drop("atr_sanity")
 
         rr_pri = self._p("signal.min_rr_primary", 5.0)
         rr_sec = self._p("signal.min_rr_secondary", 2.5)
         if rr < rr_sec:
-            return None
+            return drop("rr_too_low")
         kind = "primary" if rr >= rr_pri else "secondary"
+        self.funnel["passed"] = self.funnel.get("passed", 0) + 1
 
         # 仓位：单笔风险 = 账户 * risk_pct
         equity = self._p("risk.account_equity", 1000)
