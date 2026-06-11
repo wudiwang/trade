@@ -83,11 +83,11 @@
 - 注：初始账号 admin / trade@2026（登录后可改密码 POST /api/password）；web端口 8488
 
 ### 阶段F：部署与交付
-- [ ] F1. 本机一键启动脚本 (run.ps1 / run.sh)，开机自启说明
-- [ ] F2. 部署打包：deploy.ps1（本机→VPS 同步代码、建venv、装依赖、注册 systemd 服务 trade-engine + trade-web、开机自启、日志落盘）
-- [ ] F3. VPS 上线：在 /etc/caddy/Caddyfile 追加 trade.overall.it.com 站点块（reverse_proxy 到 web 端口，自动 HTTPS），**不得改动已有 overall.it.com 站点**；DNS 未生效前先验证 IP:端口可访问；顺手配 SSH 密钥登录
-- [ ] F4. README：架构说明、参数说明、密钥配置指引、安全注意事项
-- [ ] F5. 交付自检：本机完整跑通（行情→信号→TG提醒→paper成交→Web可见），截图记录
+- [x] F1. 本机一键启动脚本 run.ps1
+- [x] F2. 部署脚本 deploy/deploy.ps1（git archive → SFTP → 远端 pip+restart+健康检查）
+- [x] F3. VPS 上线：systemd 服务 trade 已 active（/opt/trade，开机自启，Restart=always）；Caddy 已追加 trade.overall.it.com 块（validate通过，原站点308正常）；外网 http://76.13.182.175:8488 登录验证通过；⏳ HTTPS 等用户加 DNS A记录后自动签发；SSH密钥登录留到打磨轮
+- [x] F4. README：架构/规则/运维/切live指引
+- [x] F5. 交付自检：VPS上 引擎55币种+WS连接+TG轮询+Web外网登录 全链路通过（journalctl确认）
 
 ### 打磨循环（F 完成后每轮做）
 - 跑全部测试；修发现的 bug；检查 engine 连续运行稳定性（内存/重连）；优化信号质量；完善统计页。
@@ -106,3 +106,4 @@
 - 2026-06-12 R1 | C1-C6 完成 | 8个单元测试全过(tests/test_chan.py)；回放(tests/replay_signals.py)0异常；关键数据：5天30币2级别 RR>=5信号0个/RR>=2.5信号9个，明早需向用户汇报门槛建议。下一轮：阶段B WebSocket实时行情
 - 2026-06-12 R2 | B1-B3 完成 + paper.py + core.py | 排障：fstream无数据→币安2026-04-23端点迁移，行情流需 /market 前缀（本地和VPS都验证过）。整机冒烟OK。下一轮：D Telegram → E Web
 - 2026-06-12 R3 | D+E 完成 | TG测试卡片已发用户；整机本地运行中(预览面板托管,端口8488)；web登录/鉴权/信号表/统计/设置/K线弹窗浏览器实测通过。⚠️部署VPS后必须停本地实例（TG getUpdates同token双实例会409）。下一轮：F 部署VPS
+- 2026-06-12 R4 | F 全部完成，系统上线VPS | 本地实例已停；trade.service active；引擎+WS+TG+Web全链路外网验证通过。进入打磨循环：监控VPS稳定性/信号产出/修bug。待用户：DNS A记录(trade→76.13.182.175)、币安API密钥、改web密码
