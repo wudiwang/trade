@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # 缠论分型交易系统 — 主配置
 # 密钥不放这里，放 .env（TELEGRAM_BOT_TOKEN / BINANCE_API_KEY 等）
 # Web 配置页修改的参数会写入 SQLite settings 表并热生效，
@@ -74,7 +74,7 @@ data:
 
 # ---- Telegram ----
 telegram:
-  enabled: true
+  enabled: false
   poll_timeout: 25             # long polling 超时(秒)
   confirm_ttl_minutes: 30      # 确认按钮有效期
 
