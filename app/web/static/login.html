@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 缠论交易系统</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="login-body">
+<div class="login-box">
+  <h1>📈 缠论交易系统</h1>
+  <p class="muted">币安 USDT 合约 · 分型信号引擎</p>
+  <input id="u" placeholder="用户名" autocomplete="username">
+  <input id="p" type="password" placeholder="密码" autocomplete="current-password">
+  <button id="btn" onclick="doLogin()">登 录</button>
+  <p id="err" class="err"></p>
+</div>
+<script>
+async function doLogin() {
+  const err = document.getElementById('err');
+  err.textContent = '';
+  const r = await fetch('/api/login', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({username: u.value.trim(), password: p.value})
+  });
+  if (r.ok) location.href = '/';
+  else err.textContent = (await r.json()).error || '登录失败';
+}
+document.getElementById('p').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+</script>
+</body>
+</html>

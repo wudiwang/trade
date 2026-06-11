@@ -69,17 +69,18 @@
 - [x] C6. 历史回放自测：30币种x2级别x500根真实K线，0异常；RR>=5主信号0个、RR>=2.5次级9个 → 印证RR5门槛极严，双轨统计很必要
 
 ### 阶段D：Telegram 提醒与确认下单
-- [ ] D1. Bot 框架：信号卡片消息（币种/方向/入场/止损/止盈/RR/建议仓位/理由）
-- [ ] D2. inline 按钮 [确认买入] [忽略]；确认后二次确认（防误触）
-- [ ] D3. 币安下单模块：限价/市价入场 + TP/SL 条件单（先对接 testnet，live 需密钥后联调）
-- [ ] D4. paper 模式：确认后记录虚拟成交，由引擎跟踪K线判定 TP/SL 触发并结算
+- [x] D1. Bot 框架：信号卡片消息（实测已发送到用户TG，含完整字段）
+- [x] D2. inline 按钮 [确认买入] [忽略] + 二次确认 + 30分钟TTL + /status指令
+- [x] D3. 币安下单模块（trader.py：市价入场+STOP_MARKET止损+TAKE_PROFIT_MARKET止盈，closePosition，精度取整）——代码就绪，实盘联调待用户提供API密钥
+- [x] D4. paper 模式：信号自动开虚拟仓（双轨），引擎按收盘K结算TP/SL（同K双触按SL保守计），权益曲线落库
 
 ### 阶段E：Web 控制台
-- [ ] E1. FastAPI + 登录（bcrypt密码 + session cookie），未登录全部拦截
-- [ ] E2. 信号流页面：实时信号列表（WebSocket推送到前端），含入场/止损/止盈/RR/仓位/状态
-- [ ] E3. 持仓与统计页：当前持仓、历史交易、胜率/盈亏比/期望/权益曲线（验证模式是否赚钱的核心页面）
-- [ ] E4. 参数配置页：量能倍数、min_rr、risk_pct 等在线修改并热生效
-- [ ] E5. K线详情：点击信号显示该币种K线图 + 分型/买点标注 (lightweight-charts)
+- [x] E1. FastAPI + 登录（pbkdf2密码 + HMAC session cookie），API未登录401、页面跳登录页；实测鉴权拦截生效
+- [x] E2. 信号流页面：实时信号列表 + WebSocket推送toast
+- [x] E3. 持仓与统计页：双轨统计卡（pnl/胜率/期望R）、交易表、权益曲线
+- [x] E4. 参数配置页：13个参数在线修改并热生效（settings表覆盖，重启不丢）
+- [x] E5. K线详情弹窗：蜡烛+成交量+信号箭头标注 (lightweight-charts CDN)；浏览器实测0 console错误
+- 注：初始账号 admin / trade@2026（登录后可改密码 POST /api/password）；web端口 8488
 
 ### 阶段F：部署与交付
 - [ ] F1. 本机一键启动脚本 (run.ps1 / run.sh)，开机自启说明
@@ -104,3 +105,4 @@
 - 2026-06-12 R1 | A1-A4 完成并冒烟通过 | 实测527个USDT永续，50M过滤后55个；Windows控制台需 PYTHONIOENCODING=utf-8（run.ps1 里要加）；smoke: tests/smoke_data_layer.py
 - 2026-06-12 R1 | C1-C6 完成 | 8个单元测试全过(tests/test_chan.py)；回放(tests/replay_signals.py)0异常；关键数据：5天30币2级别 RR>=5信号0个/RR>=2.5信号9个，明早需向用户汇报门槛建议。下一轮：阶段B WebSocket实时行情
 - 2026-06-12 R2 | B1-B3 完成 + paper.py + core.py | 排障：fstream无数据→币安2026-04-23端点迁移，行情流需 /market 前缀（本地和VPS都验证过）。整机冒烟OK。下一轮：D Telegram → E Web
+- 2026-06-12 R3 | D+E 完成 | TG测试卡片已发用户；整机本地运行中(预览面板托管,端口8488)；web登录/鉴权/信号表/统计/设置/K线弹窗浏览器实测通过。⚠️部署VPS后必须停本地实例（TG getUpdates同token双实例会409）。下一轮：F 部署VPS

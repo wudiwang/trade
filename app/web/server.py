@@ -1,0 +1,263 @@
+"""Web 控制台：登录鉴权 + 信号/持仓/统计/配置 API + WebSocket 实时推送。"""
+import asyncio
+import hashlib
+import hmac
+import json
+import logging
+import os
+import secrets
+import time
+
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+log = logging.getLogger("web")
+STATIC = Path(__file__).parent / "static"
+
+APP_STATE: dict = {"engine": None, "bot": None, "cfg": None, "db": None}
+
+# ---------- 密码与会话 ----------
+
+def hash_pwd(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000).hex()
+
+
+def _secret(db) -> str:
+    s = db.get_settings().get("_session_secret")
+    if not s:
+        s = secrets.token_hex(32)
+        db.set_setting("_session_secret", s)
+    return s
+
+
+def make_token(db, username: str, hours: int) -> str:
+    exp = int(time.time()) + hours * 3600
+    payload = f"{username}|{exp}"
+    sig = hmac.new(_secret(db).encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}|{sig}"
+
+
+def check_token(db, token: str) -> str | None:
+    try:
+        username, exp, sig = token.rsplit("|", 2)
+        payload = f"{username}|{exp}"
+        good = hmac.new(_secret(db).encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sig, good) and int(exp) > time.time():
+            return username
+    except Exception:
+        pass
+    return None
+
+
+def ensure_admin(cfg, db) -> None:
+    if not db.one("SELECT username FROM users LIMIT 1"):
+        salt = secrets.token_hex(16)
+        u = cfg.get("web.username", "admin")
+        db.execute(
+            "INSERT INTO users (username, pwd_hash, salt, created_at) VALUES (?,?,?,?)",
+            (u, hash_pwd(cfg.get("web.initial_password", "trade@2026"), salt), salt, int(time.time())),
+        )
+        log.info("created initial web user '%s'", u)
+
+
+# ---------- 应用 ----------
+
+def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
+    APP_STATE.update(engine=engine, bot=bot, cfg=cfg, db=db)
+    ensure_admin(cfg, db)
+    app = FastAPI(docs_url=None, redoc_url=None)
+    ws_clients: set[WebSocket] = set()
+
+    # 引擎事件 → 网页实时推送
+    async def broadcast(kind: str, data: dict):
+        dead = []
+        for ws in ws_clients:
+            try:
+                await ws.send_text(json.dumps({"kind": kind, "data": data}, ensure_ascii=False, default=str))
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            ws_clients.discard(ws)
+
+    if engine:
+        async def on_sig(sid, s):
+            await broadcast("signal", {"id": sid, **s.to_db()})
+        async def on_close(trade):
+            await broadcast("trade_close", trade)
+        engine.signal_subscribers.append(on_sig)
+        engine.trade_close_subscribers.append(on_close)
+
+    def auth_user(request: Request) -> str | None:
+        tok = request.cookies.get("session", "")
+        return check_token(db, tok) if tok else None
+
+    @app.middleware("http")
+    async def auth_mw(request: Request, call_next):
+        path = request.url.path
+        open_paths = ("/api/login", "/login.html", "/style.css", "/favicon.ico")
+        if path.startswith("/api") and path != "/api/login":
+            if not auth_user(request):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+        elif path == "/" or path.endswith(".html") or path.endswith(".js"):
+            if path not in open_paths and not auth_user(request):
+                return FileResponse(STATIC / "login.html")
+        return await call_next(request)
+
+    # ---------- API ----------
+    @app.post("/api/login")
+    async def login(request: Request):
+        body = await request.json()
+        u = db.one("SELECT * FROM users WHERE username=?", (body.get("username", ""),))
+        if not u or hash_pwd(body.get("password", ""), u["salt"]) != u["pwd_hash"]:
+            await asyncio.sleep(1)  # 抗爆破
+            return JSONResponse({"error": "用户名或密码错误"}, status_code=401)
+        tok = make_token(db, u["username"], cfg.get("web.session_hours", 72))
+        resp = JSONResponse({"ok": True})
+        resp.set_cookie("session", tok, httponly=True, samesite="lax",
+                        max_age=cfg.get("web.session_hours", 72) * 3600)
+        return resp
+
+    @app.post("/api/logout")
+    async def logout():
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie("session")
+        return resp
+
+    @app.post("/api/password")
+    async def change_password(request: Request):
+        user = auth_user(request)
+        body = await request.json()
+        u = db.one("SELECT * FROM users WHERE username=?", (user,))
+        if hash_pwd(body.get("old", ""), u["salt"]) != u["pwd_hash"]:
+            return JSONResponse({"error": "旧密码错误"}, status_code=400)
+        new = body.get("new", "")
+        if len(new) < 8:
+            return JSONResponse({"error": "新密码至少8位"}, status_code=400)
+        salt = secrets.token_hex(16)
+        db.execute("UPDATE users SET pwd_hash=?, salt=? WHERE username=?",
+                   (hash_pwd(new, salt), salt, user))
+        return {"ok": True}
+
+    @app.get("/api/status")
+    async def status():
+        eng = APP_STATE["engine"]
+        return eng.status() if eng else {"error": "engine not running"}
+
+    @app.get("/api/signals")
+    async def signals(limit: int = 100, kind: str = ""):
+        sql = "SELECT * FROM signals"
+        args: list = []
+        if kind:
+            sql += " WHERE kind=?"
+            args.append(kind)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(min(limit, 500))
+        return [dict(r) for r in db.query(sql, args)]
+
+    @app.get("/api/trades")
+    async def trades(track: str = "rr25", result: str = "", limit: int = 200):
+        sql = "SELECT * FROM paper_trades WHERE track=?"
+        args: list = [track]
+        if result:
+            sql += " AND result=?"
+            args.append(result)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(min(limit, 1000))
+        return [dict(r) for r in db.query(sql, args)]
+
+    @app.get("/api/stats")
+    async def stats():
+        eng = APP_STATE["engine"]
+        if eng:
+            return {"rr5": eng.paper.stats("rr5"), "rr25": eng.paper.stats("rr25")}
+        from app.engine.paper import PaperBroker
+        pb = PaperBroker(cfg, db)
+        return {"rr5": pb.stats("rr5"), "rr25": pb.stats("rr25")}
+
+    @app.get("/api/equity")
+    async def equity(track: str = "rr25"):
+        return [dict(r) for r in db.query(
+            "SELECT ts, equity FROM equity_curve WHERE track=? ORDER BY ts", (track,))]
+
+    @app.get("/api/klines")
+    async def klines(symbol: str, tf: str = "15m", limit: int = 300):
+        rows = db.get_klines(symbol, tf, min(limit, 500))
+        sigs = db.query(
+            "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, extra FROM signals "
+            "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
+        return {"klines": [dict(r) for r in rows], "signals": [dict(r) for r in sigs]}
+
+    EDITABLE = {
+        "signal.vol_multiplier": float, "signal.vol_strong": float,
+        "signal.min_rr_primary": float, "signal.min_rr_secondary": float,
+        "signal.sl_buffer_pct": float, "signal.cooldown_bars": int,
+        "signal.trend_filter": lambda v: str(v).lower() in ("1", "true", "yes"),
+        "universe.min_quote_volume_24h": float,
+        "risk.account_equity": float, "risk.risk_pct": float,
+        "risk.max_positions": int, "risk.leverage": int,
+        "mode": str,
+    }
+
+    @app.get("/api/settings")
+    async def get_settings():
+        return {k: cfg.get(k) for k in EDITABLE}
+
+    @app.post("/api/settings")
+    async def set_settings(request: Request):
+        body = await request.json()
+        applied = {}
+        for k, v in body.items():
+            if k not in EDITABLE:
+                continue
+            if k == "mode" and v not in ("paper", "live"):
+                return JSONResponse({"error": "mode 必须是 paper 或 live"}, status_code=400)
+            try:
+                tv = EDITABLE[k](v)
+            except (ValueError, TypeError):
+                return JSONResponse({"error": f"{k} 类型错误"}, status_code=400)
+            cfg.set_override(k, tv)
+            db.set_setting(k, json.dumps(tv))
+            applied[k] = tv
+        db.log("info", "web", f"settings updated: {applied}")
+        return {"ok": True, "applied": applied}
+
+    @app.get("/api/events")
+    async def events(limit: int = 100):
+        return [dict(r) for r in db.query(
+            "SELECT * FROM event_log ORDER BY id DESC LIMIT ?", (min(limit, 500),))]
+
+    @app.websocket("/api/ws")
+    async def ws_endpoint(ws: WebSocket):
+        tok = ws.cookies.get("session", "")
+        if not check_token(db, tok):
+            await ws.close(code=4401)
+            return
+        await ws.accept()
+        ws_clients.add(ws)
+        try:
+            while True:
+                await ws.receive_text()   # 客户端心跳
+        except WebSocketDisconnect:
+            pass
+        finally:
+            ws_clients.discard(ws)
+
+    @app.get("/")
+    async def index():
+        return FileResponse(STATIC / "index.html")
+
+    app.mount("/", StaticFiles(directory=STATIC), name="static")
+    return app
+
+
+def load_setting_overrides(cfg, db) -> None:
+    """启动时把 settings 表里的覆盖值灌回 cfg。"""
+    for k, v in db.get_settings().items():
+        if k.startswith("_"):
+            continue
+        try:
+            cfg.set_override(k, json.loads(v))
+        except (ValueError, TypeError):
+            cfg.set_override(k, v)
