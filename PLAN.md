@@ -56,9 +56,9 @@
 - [x] A4. 币安公开 REST：拉取全部 USDT 本位永续币种列表 + 24h成交额过滤 + 历史K线回填（5m/15m 各500根）
 
 ### 阶段B：实时行情
-- [ ] B1. WebSocket 多路订阅管理器（币安单连接最多1024 streams，需分片+自动重连+心跳）
-- [ ] B2. K线聚合器：只在K线收盘(x=true)时触发分析；延迟目标 < 2秒
-- [ ] B3. 数据完整性：断线重连后用 REST 补缺口
+- [x] B1. WebSocket 多路订阅管理器（分片+自动重连+心跳）⚠️ 重要：币安2026-04-23起合约行情流必须用 /market 前缀路径，旧 /stream /ws 静默无数据
+- [x] B2. K线聚合器：只在K线收盘(x=true)时触发分析；实测收盘延迟0.5-1.9s ✓
+- [x] B3. 数据完整性：watchdog 3分钟无消息→重启ws+REST补缺口（core.py）；整机冒烟通过(smoke_engine.py): 55币110流回填2s
 
 ### 阶段C：信号引擎
 - [x] C1. K线包含关系处理（缠论预处理）
@@ -103,3 +103,4 @@
 （每轮循环追加：日期 | 完成项 | 备注/遗留问题）
 - 2026-06-12 R1 | A1-A4 完成并冒烟通过 | 实测527个USDT永续，50M过滤后55个；Windows控制台需 PYTHONIOENCODING=utf-8（run.ps1 里要加）；smoke: tests/smoke_data_layer.py
 - 2026-06-12 R1 | C1-C6 完成 | 8个单元测试全过(tests/test_chan.py)；回放(tests/replay_signals.py)0异常；关键数据：5天30币2级别 RR>=5信号0个/RR>=2.5信号9个，明早需向用户汇报门槛建议。下一轮：阶段B WebSocket实时行情
+- 2026-06-12 R2 | B1-B3 完成 + paper.py + core.py | 排障：fstream无数据→币安2026-04-23端点迁移，行情流需 /market 前缀（本地和VPS都验证过）。整机冒烟OK。下一轮：D Telegram → E Web
