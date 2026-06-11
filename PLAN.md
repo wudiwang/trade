@@ -107,3 +107,4 @@
 - 2026-06-12 R2 | B1-B3 完成 + paper.py + core.py | 排障：fstream无数据→币安2026-04-23端点迁移，行情流需 /market 前缀（本地和VPS都验证过）。整机冒烟OK。下一轮：D Telegram → E Web
 - 2026-06-12 R3 | D+E 完成 | TG测试卡片已发用户；整机本地运行中(预览面板托管,端口8488)；web登录/鉴权/信号表/统计/设置/K线弹窗浏览器实测通过。⚠️部署VPS后必须停本地实例（TG getUpdates同token双实例会409）。下一轮：F 部署VPS
 - 2026-06-12 R4 | F 全部完成，系统上线VPS | 本地实例已停；trade.service active；引擎+WS+TG+Web全链路外网验证通过。进入打磨循环：监控VPS稳定性/信号产出/修bug。待用户：DNS A记录(trade→76.13.182.175)、币安API密钥、改web密码
+- 2026-06-12 P1 | 巡检：VPS健康(92MB内存,28min无错误,K线5.5万行)；30min无信号属正常频率 | 新增每小时维护循环(K线修剪+过期信号标记)并已部署；修复deploy.ps1密码bug(.env里VPS_PASSWORD缺结尾三个点)
