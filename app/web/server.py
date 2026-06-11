@@ -198,6 +198,12 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "risk.account_equity": float, "risk.risk_pct": float,
         "risk.max_positions": int, "risk.leverage": int,
         "mode": str,
+        "factors.min_score": int,
+        "factors.sl_atr_min": float, "factors.sl_atr_max": float,
+        "factors.rsi_extreme.oversold": float, "factors.rsi_extreme.overbought": float,
+        "factors.taker_ratio.min_ratio": float,
+        "factors.wick_rejection.min_ratio": float,
+        "factors.funding.extreme": float,
     }
 
     @app.get("/api/settings")

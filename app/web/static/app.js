@@ -127,6 +127,10 @@ const SETTING_LABELS = {
   'signal.trend_filter': '1h趋势过滤', 'universe.min_quote_volume_24h': '最低24h成交额',
   'risk.account_equity': '账户本金U', 'risk.risk_pct': '单笔风险%',
   'risk.max_positions': '最大持仓数', 'risk.leverage': '杠杆',
+  'factors.min_score': '因子最低分', 'factors.sl_atr_min': '止损下限xATR',
+  'factors.sl_atr_max': '止损上限xATR', 'factors.rsi_extreme.oversold': 'RSI超卖线',
+  'factors.rsi_extreme.overbought': 'RSI超买线', 'factors.taker_ratio.min_ratio': '主动盘占比线',
+  'factors.wick_rejection.min_ratio': '影线拒绝比例', 'factors.funding.extreme': '费率极值线',
 };
 async function loadSettings() {
   const s = await api('/api/settings');

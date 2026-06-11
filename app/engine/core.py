@@ -138,7 +138,7 @@ class Engine:
             async with sem:
                 try:
                     ks = await self.rest.klines(sym, tf, limit=bars)
-                    closed = [r for r in ks if r[7] == 1]
+                    closed = [r for r in ks if r[8] == 1]  # r[8]=closed (r[7]=taker_buy)
                     self.db.upsert_klines(sym, tf, closed)
                     self.cache[(sym, tf)] = collections.deque(
                         (dict(zip(COLS, r)) for r in closed), maxlen=bars + 50
