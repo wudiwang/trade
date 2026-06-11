@@ -89,7 +89,7 @@ class KlineWS:
             if not k or not k.get("x"):   # x=true 才是收盘
                 return
             bar = (int(k["t"]), float(k["o"]), float(k["h"]), float(k["l"]),
-                   float(k["c"]), float(k["v"]), float(k["q"]), 1)
+                   float(k["c"]), float(k["v"]), float(k["q"]), float(k.get("V") or 0), 1)
             await self.on_closed(k["s"], k["i"], bar)
         except Exception:
             log.exception("handle ws message failed")

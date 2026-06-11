@@ -32,6 +32,22 @@ signal:
   cooldown_bars: 10            # 同币种同级别触发后10根K内不重复提醒
   signal_ttl_bars: 3           # 信号3根K内未确认则过期
 
+# ---- 因子打分（基础规则之上的加分项，明细入库便于统计各因子胜率贡献）----
+factors:
+  min_score: 1                 # 因子总分达到该值才出信号（0=只记录不拦截）
+  rsi_period: 14
+  refresh_funding_minutes: 5
+  atr_period: 14
+  sl_atr_min: 0.5              # 止损距离下限(xATR) 硬过滤
+  sl_atr_max: 3.0              # 止损距离上限(xATR) 硬过滤
+  rsi_divergence: { enabled: true }                          # +2 RSI背离
+  rsi_extreme: { enabled: true, oversold: 30, overbought: 70 }  # +1 RSI极值
+  wick_rejection: { enabled: true, min_ratio: 0.5 }          # +1 极值K影线拒绝
+  taker_ratio: { enabled: true, min_ratio: 0.58 }            # +1 确认K主动盘占比
+  funding: { enabled: true, extreme: 0.0005 }                # +1 资金费率极值(0.05%)
+  mtf_resonance: { enabled: true }                           # +1 5m与15m共振
+  btc_resonance: { enabled: true }                           # +1 BTC大盘共振
+
 # ---- 仓位与风控 ----
 risk:
   account_equity: 1000         # 账户规模(USDT), paper模式的虚拟本金

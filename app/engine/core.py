@@ -12,7 +12,7 @@ from .signals import SignalEngine
 
 log = logging.getLogger("core")
 
-COLS = ("open_time", "open", "high", "low", "close", "volume", "quote_volume", "closed")
+COLS = ("open_time", "open", "high", "low", "close", "volume", "quote_volume", "taker_buy", "closed")
 
 
 class Engine:
@@ -38,10 +38,16 @@ class Engine:
         self.started_at = int(time.time())
         await self.refresh_universe()
         await self.backfill_all()
+        btc15 = self.cache.get(("BTCUSDT", "15m"))
+        if btc15:
+            from .chan import trend_direction
+            self.signal_engine.btc_trend = trend_direction(
+                list(btc15), self.cfg.get("signal.trend_ema_period", 50))
         await self.ws.start(self.symbols, self.cfg.timeframes)
         self._tasks.append(asyncio.create_task(self._universe_loop()))
         self._tasks.append(asyncio.create_task(self._watchdog_loop()))
         self._tasks.append(asyncio.create_task(self._maintenance_loop()))
+        self._tasks.append(asyncio.create_task(self._funding_loop()))
         log.info("engine started: %d symbols, tfs=%s", len(self.symbols), self.cfg.timeframes)
         self.db.log("info", "engine", f"started with {len(self.symbols)} symbols")
 
@@ -92,6 +98,15 @@ class Engine:
                     await self.ws.start(self.symbols, self.cfg.timeframes)
                 except Exception:
                     log.exception("watchdog restart failed")
+
+    async def _funding_loop(self) -> None:
+        """每5分钟刷新资金费率，供因子使用。"""
+        while True:
+            try:
+                self.signal_engine.funding = await self.rest.funding_rates()
+            except Exception as e:
+                log.warning("funding refresh failed: %s", e)
+            await asyncio.sleep(self.cfg.get("factors.refresh_funding_minutes", 5) * 60)
 
     async def _maintenance_loop(self) -> None:
         """每小时：修剪K线表防膨胀；把超过TTL未处理的信号标记为过期。"""
@@ -149,6 +164,15 @@ class Engine:
         else:
             dq.append(bd)
         self.db.upsert_klines(symbol, tf, [bar])
+
+        # BTC 15m 收盘 → 刷新大盘趋势（btc_resonance 因子用）
+        if symbol == "BTCUSDT" and tf == "15m":
+            try:
+                from .chan import trend_direction
+                self.signal_engine.btc_trend = trend_direction(
+                    list(dq), self.cfg.get("signal.trend_ema_period", 50))
+            except Exception:
+                log.exception("btc trend update failed")
 
         # paper 结算优先（先看持仓有没有打到TP/SL）
         try:

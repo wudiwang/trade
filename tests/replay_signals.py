@@ -40,8 +40,9 @@ async def main():
         except Exception as e:
             print(f"{sym} 拉取失败: {e}")
             continue
-        k15 = [dict(zip(("open_time", "open", "high", "low", "close", "volume", "quote_volume", "closed"), r)) for r in k15 if r[7] == 1]
-        k5 = [dict(zip(("open_time", "open", "high", "low", "close", "volume", "quote_volume", "closed"), r)) for r in k5 if r[7] == 1]
+        COLS = ("open_time", "open", "high", "low", "close", "volume", "quote_volume", "taker_buy", "closed")
+        k15 = [dict(zip(COLS, r)) for r in k15 if r[8] == 1]
+        k5 = [dict(zip(COLS, r)) for r in k5 if r[8] == 1]
 
         for tf, ks in (("15m", k15), ("5m", k5)):
             for i in range(60, len(ks)):
@@ -67,7 +68,8 @@ async def main():
     print(f"做多: {stats['long']}   做空: {stats['short']}")
     print(f"(15m数据约覆盖{days:.1f}天)")
     for s in samples:
-        print(f"  {s.symbol} {s.tf} {s.direction} {s.kind} entry={s.entry} sl={s.sl} tp={s.tp} rr={s.rr} vol={s.vol_ratio}x")
+        print(f"  {s.symbol} {s.tf} {s.direction} {s.kind} rr={s.rr} vol={s.vol_ratio}x "
+              f"score={s.extra.get('factor_score')} {s.extra.get('factors')}")
     print("REPLAY OK" if errors == 0 else f"REPLAY HAD {errors} ERRORS")
     await rest.close()
 

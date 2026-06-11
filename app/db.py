@@ -74,6 +74,9 @@ class DB:
         self.path = path
         with self.conn() as c:
             c.executescript(SCHEMA)
+            cols = [r[1] for r in c.execute("PRAGMA table_info(klines)")]
+            if "taker_buy" not in cols:
+                c.execute("ALTER TABLE klines ADD COLUMN taker_buy REAL DEFAULT 0")
 
     def conn(self) -> sqlite3.Connection:
         c = getattr(self._local, "conn", None)
@@ -104,10 +107,10 @@ class DB:
 
     # ---------- klines ----------
     def upsert_klines(self, symbol: str, tf: str, rows: list[tuple]) -> None:
-        """rows: (open_time, open, high, low, close, volume, quote_volume, closed)"""
+        """rows: (open_time, open, high, low, close, volume, quote_volume, taker_buy, closed)"""
         self.executemany(
-            "INSERT OR REPLACE INTO klines (symbol, tf, open_time, open, high, low, close, volume, quote_volume, closed) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO klines (symbol, tf, open_time, open, high, low, close, volume, quote_volume, taker_buy, closed) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [(symbol, tf, *r) for r in rows],
         )
 

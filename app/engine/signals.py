@@ -10,6 +10,7 @@ from .chan import (
     find_fractals, merge_klines, volume_ratio, prior_support,
     is_break_reclaim, trend_direction,
 )
+from .factors import atr, score_signal, sl_atr_sane
 from .volume_profile import build_profile, nearest_hvn_above, nearest_hvn_below
 
 log = logging.getLogger("signals")
@@ -45,6 +46,10 @@ class SignalEngine:
         self.db = db
         # 冷却: (symbol, tf, direction) -> 最后触发的 open_time
         self._cooldown: dict[tuple, int] = {}
+        # 资金费率缓存，由 engine._funding_loop 每5分钟刷新
+        self.funding: dict[str, float] = {}
+        # BTC 15m 大盘趋势，由 engine 在 BTC 收盘时刷新
+        self.btc_trend: int = 0
 
     def _p(self, key: str, default=None):
         return self.cfg.get(key, default)
@@ -97,7 +102,22 @@ class SignalEngine:
             if direction == "short" and td == 1:
                 return None
 
+        # ---- 因子打分（基础规则之上的加分项；明细全部入库供后续效果分析）----
+        trend_15 = trend_direction(klines_15m, self._p("signal.trend_ema_period", 50)) if klines_15m else 0
+        score, hits, factor_detail = score_signal(
+            self.cfg, direction=direction, symbol=symbol, tf=tf, klines=klines,
+            fractals=fractals, cur=f, confirm_bar=klines[last_idx],
+            funding_rate=self.funding.get(symbol), trend_15m=trend_15,
+            btc_trend=self.btc_trend,
+        )
+        if score < self._p("factors.min_score", 1):
+            return None
+
         entry = float(klines[last_idx]["close"])
+
+        # ATR 合理性硬过滤（止损距离不能是噪音级也不能过远）
+        atr_val = atr(klines, self._p("factors.atr_period", 14))
+
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
         profile = build_profile(
             klines[-self._p("signal.tp_vp_lookback", 200):],
@@ -115,6 +135,11 @@ class SignalEngine:
             if tp is None or sl <= entry or tp >= entry:
                 return None
             rr = (entry - tp) / (sl - entry)
+
+        ok, why = sl_atr_sane(entry, sl, atr_val,
+                              self._p("factors.sl_atr_min", 0.5), self._p("factors.sl_atr_max", 3.0))
+        if not ok:
+            return None
 
         rr_pri = self._p("signal.min_rr_primary", 5.0)
         rr_sec = self._p("signal.min_rr_secondary", 2.5)
@@ -134,6 +159,8 @@ class SignalEngine:
             f"量能{vr:.1f}x均量 + "
             f"{'跌破前低' + format(support, '.6g') + '后收回' if direction == 'long' else '冲破前高' + format(support, '.6g') + '后回落'}"
         )
+        if hits:
+            reason += " | 因子: " + "、".join(hits) + f" (分{score})"
         return Signal(
             symbol=symbol, tf=tf, direction=direction, kind=kind,
             entry=entry, sl=round(sl, 8), tp=round(tp, 8), rr=round(rr, 2),
@@ -144,5 +171,11 @@ class SignalEngine:
                 "support": support,
                 "fractal_price": f.extreme_price,
                 "fractal_open_time": f.open_time,
+                "factor_score": score,
+                "factors": hits,
+                "factor_detail": factor_detail,
+                "atr": atr_val,
+                "funding": self.funding.get(symbol),
+                "btc_trend": self.btc_trend,
             },
         )

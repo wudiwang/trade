@@ -84,7 +84,7 @@ class BinanceRest:
 
     async def klines(self, symbol: str, interval: str, limit: int = 500,
                      start_time: int | None = None) -> list[tuple]:
-        """返回 (open_time, open, high, low, close, volume, quote_volume, closed) 列表。
+        """返回 (open_time, open, high, low, close, volume, quote_volume, taker_buy, closed) 列表。
         最后一根若未收盘, closed=0。"""
         params: dict = {"symbol": symbol, "interval": interval, "limit": min(limit, 1500)}
         if start_time:
@@ -93,9 +93,20 @@ class BinanceRest:
         now_ms = int(time.time() * 1000)
         return [
             (int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]),
-             float(k[5]), float(k[7]), 1 if int(k[6]) < now_ms else 0)
+             float(k[5]), float(k[7]), float(k[9]), 1 if int(k[6]) < now_ms else 0)
             for k in raw
         ]
+
+    async def funding_rates(self) -> dict[str, float]:
+        """symbol -> 最新资金费率（小数，如 -0.0003 = -0.03%）。"""
+        data = await self._get("/fapi/v1/premiumIndex")
+        out = {}
+        for d in data:
+            try:
+                out[d["symbol"]] = float(d.get("lastFundingRate") or 0)
+            except (ValueError, TypeError):
+                pass
+        return out
 
     # ---------- 签名交易（live 模式用） ----------
     def _sign(self, params: dict) -> dict:
