@@ -1,0 +1,70 @@
+# ============================================================
+# 缠论分型交易系统 — 主配置
+# 密钥不放这里，放 .env（TELEGRAM_BOT_TOKEN / BINANCE_API_KEY 等）
+# Web 配置页修改的参数会写入 SQLite settings 表并热生效，
+# settings 表里的值优先于本文件。
+# ============================================================
+
+mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
+timeframes: ["5m", "15m"]
+
+# ---- 币种筛选 ----
+universe:
+  quote: USDT                  # 只监控 U 本位永续
+  min_quote_volume_24h: 50000000   # 24h成交额低于5000万U的币不监控
+  refresh_minutes: 60          # 每小时刷新一次币种列表
+  exclude: []                  # 手动排除的币种
+
+# ---- 信号规则 ----
+signal:
+  fractal_lookback: 3          # 分型确认所需K线数(包含处理后)
+  vol_ma_period: 20            # 量能均线周期
+  vol_multiplier: 1.5          # 分型最低K量能 >= 1.5x 均量才有效
+  vol_strong: 2.0              # >= 2.0x 标记为强信号
+  break_reclaim_lookback: 30   # 跌破收回: 在最近30根K里找被跌破的前低
+  sl_buffer_pct: 0.3           # 止损=前低下方0.3%
+  tp_vp_lookback: 200          # 止盈: 用最近200根K做Volume Profile找上方密集成交区
+  tp_vp_bins: 50               # Volume Profile 桶数
+  min_rr_primary: 5.0          # 主信号盈亏比门槛(推送TG)
+  min_rr_secondary: 2.5        # 次级信号门槛(只入库统计,用于对比验证)
+  trend_filter: true           # 1h EMA50 趋势过滤(只做顺势)
+  trend_ema_period: 50
+  cooldown_bars: 10            # 同币种同级别触发后10根K内不重复提醒
+  signal_ttl_bars: 3           # 信号3根K内未确认则过期
+
+# ---- 仓位与风控 ----
+risk:
+  account_equity: 1000         # 账户规模(USDT), paper模式的虚拟本金
+  risk_pct: 0.5                # 单笔风险=账户的0.5%
+  max_positions: 5             # 最大同时持仓数
+  max_margin_pct: 50           # 总保证金占用上限%
+  leverage: 5                  # 默认杠杆
+  tiered_tp: false             # 分批止盈(1.5R平1/3, 3R平1/3, 余下移动止损)
+
+# ---- Web ----
+web:
+  host: 0.0.0.0
+  port: 8488
+  username: admin
+  # 首次启动若 users 表为空, 用这个初始密码创建账号(登录后请修改)
+  initial_password: "trade@2026"
+  session_hours: 72
+
+# ---- 数据 ----
+data:
+  db_path: data/trade.db
+  backfill_bars: 500           # 启动时每币每级别回填500根K
+  kline_keep_bars: 1500        # 每币每级别最多保留1500根(自动清理)
+
+# ---- Telegram ----
+telegram:
+  enabled: true
+  poll_timeout: 25             # long polling 超时(秒)
+  confirm_ttl_minutes: 30      # 确认按钮有效期
+
+# ---- 币安 ----
+binance:
+  rest_base: https://fapi.binance.com
+  ws_base: wss://fstream.binance.com
+  testnet: false
+  recv_window: 5000

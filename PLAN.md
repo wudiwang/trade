@@ -1,0 +1,104 @@
+# 缠论分型交易提醒系统 — 施工计划 (PLAN.md)
+
+> 本文件是 loop 模式的施工图纸。每轮循环：读本文件 → 找到第一个未完成任务 → 完成并自测 → 更新状态打勾 → 在「施工日志」追加一行。所有阶段完成后进入「打磨循环」：跑测试、修 bug、完善文档。
+
+## 0. 总体架构
+
+```
+币安 USDT-M 合约 WebSocket (公开行情，无需密钥)
+        │  !markPrice / kline_5m / kline_15m (全币种)
+        ▼
+┌─────────────────────────────────────────────┐
+│  signal-engine (Python, asyncio)             │
+│  - K线聚合与缓存 (内存 + SQLite 持久化)        │
+│  - 缠论分型识别 (顶/底分型，含K线包含处理)      │
+│  - 量能放大检测 (vs MA20成交量)               │
+│  - 跌破收回买点判定                           │
+│  - 止盈(密集成交区/Volume Profile) 止损(前低)  │
+│  - 盈亏比过滤                                 │
+└──────┬──────────────────────┬───────────────┘
+       │ 信号入库               │ 推送
+       ▼                      ▼
+   SQLite (signals,      Telegram Bot (小飞机)
+   orders, positions,    - 信号卡片 + [确认买入]/[忽略] 按钮
+   kline cache)          - 确认后 → 币安下单 + 挂TP/SL
+       │
+       ▼
+  Web 控制台 (FastAPI + 简洁前端)
+  - 登录鉴权 (用户名密码 + session)
+  - 实时信号流 / 持仓 / 盈亏统计 / 参数配置
+  - 部署: 本机先跑 → VPS + Caddy 自动 HTTPS + 域名
+```
+
+技术栈：Python 3.11+ / FastAPI / websockets / aiogram(或python-telegram-bot) / SQLite / 原生JS+轻量图表(lightweight-charts) 前端。单进程 asyncio，全币种 5m+15m 两个级别。
+
+## 1. 交易规则 (V1，可配置参数全部进 config)
+
+- **底分型**：经包含处理后，三K组合中间K最低，且左右K低点抬高。顶分型对称。
+- **量能条件**：分型最低那根K的成交量 ≥ `vol_multiplier` × 前20根K成交量均值。默认 **1.5**（参考值；≥2.0 标记为强信号）。
+- **买点（跌破收回）**：价格跌破近端支撑/前分型低点后，收盘收回到该位之上，且伴随放量 → 底分型确认点即买入参考价。
+- **止损**：前低（分型最低点）下方 `sl_buffer`（默认 0.3%）。
+- **止盈**：上方最近密集成交区（用近 N 根K的 Volume Profile 高量节点 HVN）。
+- **盈亏比过滤**：`min_rr` 可配，默认 5（用户要求），但同时计算并展示 RR≥2.5 的次级信号供统计对比。
+- **辅助过滤**（V1 就加，开关可配）：
+  - 1h EMA50 方向过滤（只做顺大级别方向的信号）
+  - 流动性过滤：24h 成交额 < 5000万 USDT 的币种不监控
+  - 同币种冷却：触发后 N 根K内不重复提醒
+- **分仓**：单笔风险 = 账户的 `risk_pct`（默认 0.5%），由止损距离反推仓位；最大同时持仓 `max_positions`（默认 5）；总保证金占用上限 50%。
+- **模式**：`paper`（默认，模拟盘记录虚拟成交验证胜率/期望）/ `live`（真实下单）。先 paper 验证模式是否赚钱，这是用户的核心目标。
+
+## 2. 施工任务清单
+
+### 阶段A：项目骨架与数据层
+- [x] A1. git init + 项目结构 (app/, app/engine/, app/web/, app/bot/, tests/, config.yaml, requirements.txt, .gitignore, README.md)
+- [x] A2. 配置模块：config.yaml 加载 + 参数校验（所有规则参数、密钥占位）
+- [x] A3. SQLite 数据层：klines、symbols、signals、paper_trades、orders、positions、equity_curve 表 + DAO
+- [x] A4. 币安公开 REST：拉取全部 USDT 本位永续币种列表 + 24h成交额过滤 + 历史K线回填（5m/15m 各500根）
+
+### 阶段B：实时行情
+- [ ] B1. WebSocket 多路订阅管理器（币安单连接最多1024 streams，需分片+自动重连+心跳）
+- [ ] B2. K线聚合器：只在K线收盘(x=true)时触发分析；延迟目标 < 2秒
+- [ ] B3. 数据完整性：断线重连后用 REST 补缺口
+
+### 阶段C：信号引擎
+- [ ] C1. K线包含关系处理（缠论预处理）
+- [ ] C2. 顶/底分型识别 + 单元测试（构造已知K线序列验证）
+- [ ] C3. 量能放大检测 + 跌破收回判定 + 单元测试
+- [ ] C4. Volume Profile 密集成交区计算（止盈位）+ 单元测试
+- [ ] C5. 信号组装：入场价/止损/止盈/RR/建议仓位，过滤器链，信号入库
+- [ ] C6. 历史回放自测：用回填的历史K线跑一遍引擎，确认能产出信号且无异常
+
+### 阶段D：Telegram 提醒与确认下单
+- [ ] D1. Bot 框架：信号卡片消息（币种/方向/入场/止损/止盈/RR/建议仓位/理由）
+- [ ] D2. inline 按钮 [确认买入] [忽略]；确认后二次确认（防误触）
+- [ ] D3. 币安下单模块：限价/市价入场 + TP/SL 条件单（先对接 testnet，live 需密钥后联调）
+- [ ] D4. paper 模式：确认后记录虚拟成交，由引擎跟踪K线判定 TP/SL 触发并结算
+
+### 阶段E：Web 控制台
+- [ ] E1. FastAPI + 登录（bcrypt密码 + session cookie），未登录全部拦截
+- [ ] E2. 信号流页面：实时信号列表（WebSocket推送到前端），含入场/止损/止盈/RR/仓位/状态
+- [ ] E3. 持仓与统计页：当前持仓、历史交易、胜率/盈亏比/期望/权益曲线（验证模式是否赚钱的核心页面）
+- [ ] E4. 参数配置页：量能倍数、min_rr、risk_pct 等在线修改并热生效
+- [ ] E5. K线详情：点击信号显示该币种K线图 + 分型/买点标注 (lightweight-charts)
+
+### 阶段F：部署与交付
+- [ ] F1. 本机一键启动脚本 (run.ps1 / run.sh)，开机自启说明
+- [ ] F2. 部署打包：deploy.ps1（本机→VPS 同步代码、建venv、装依赖、注册 systemd 服务 trade-engine + trade-web、开机自启、日志落盘）
+- [ ] F3. VPS 上线：在 /etc/caddy/Caddyfile 追加 trade.overall.it.com 站点块（reverse_proxy 到 web 端口，自动 HTTPS），**不得改动已有 overall.it.com 站点**；DNS 未生效前先验证 IP:端口可访问；顺手配 SSH 密钥登录
+- [ ] F4. README：架构说明、参数说明、密钥配置指引、安全注意事项
+- [ ] F5. 交付自检：本机完整跑通（行情→信号→TG提醒→paper成交→Web可见），截图记录
+
+### 打磨循环（F 完成后每轮做）
+- 跑全部测试；修发现的 bug；检查 engine 连续运行稳定性（内存/重连）；优化信号质量；完善统计页。
+
+## 3. 等待用户提供（缺什么用占位符，不阻塞施工）
+- [ ] 币安 API Key/Secret（只开"合约交易"权限，禁止提现，绑VPS IP白名单）→ config.yaml
+- [x] Telegram chat_id = 1072583174 (@wudipeter)
+- [x] Telegram Bot Token (@trade_flyyy_bot) → 已存 .env，sendMessage 实测通过 (2026-06-12)
+- [x] VPS：root@76.13.182.175（Hostinger，吉隆坡，Ubuntu 24.04，1核/3.8G/38G 可用），密码在 .env。币安 fapi 实测连通(200)。已有服务：Caddy(80/443，服务 overall.it.com 静态站 /var/www/51-prototypes + 3100端口Next.js)、hermes agent(无端口冲突)。Python 3.12 可用，无 docker → 用 systemd + venv 部署，不用 Docker
+- [x] 域名 overall.it.com → 76.13.182.175 已解析。根域名已被原型站占用，交易系统用子域名 **trade.overall.it.com**（等用户加 A 记录；没加好之前可先用 IP:端口 访问）。部署时在现有 /etc/caddy/Caddyfile 追加站点块，不得改动已有站点配置
+- [ ] 账户规模 / risk_pct / 杠杆上限确认
+
+## 4. 施工日志
+（每轮循环追加：日期 | 完成项 | 备注/遗留问题）
+- 2026-06-12 R1 | A1-A4 完成并冒烟通过 | 实测527个USDT永续，50M过滤后55个；Windows控制台需 PYTHONIOENCODING=utf-8（run.ps1 里要加）；smoke: tests/smoke_data_layer.py
