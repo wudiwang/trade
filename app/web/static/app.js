@@ -243,6 +243,7 @@ const SETTING_LABELS = {
   'spring.body_min': '触发K实体占比', 'spring.newlow_lookback': '破位回看根数',
   'spring.recovery_bars': '收回窗口(根)', 'spring.recovery_vol_max': '收回量上限x触发',
   'spring.easy_vol': '轻松收回阈值', 'spring.watch_score': '观察分数线',
+  'spring.min_rr': '最低盈亏比门槛',
   'spring.pull_shrink': '回测缩量阈值', 'spring.coord_expire_bars': '坐标有效期(根)',
   'spring.btc_filter': 'BTC大盘过滤',
   'risk.account_equity': '账户本金U', 'risk.risk_pct': '单笔风险%',

@@ -23,6 +23,7 @@ def make_cfg(**over):
     cfg = Config()
     cfg.set_override("strategy", "spring_v3")
     cfg.set_override("spring.btc_filter", False)
+    cfg.set_override("spring.min_rr", 0)   # 状态机测试不受RR门槛影响(构造数据VP贴近入场)
     for kk, vv in over.items():
         cfg.set_override(kk, vv)
     return cfg

@@ -21,7 +21,8 @@ spring:
   recovery_bars: 3         # 收回观察窗口
   recovery_vol_max: 0.8    # 收回K量 < 0.8x触发量(更大则走坐标升级路径)
   easy_vol: 0.5            # 轻松收回: 收回量 < 0.5x触发量
-  watch_score: 50          # 达到50分推观察提醒并模拟建仓
+  watch_score: 50          # 达到该分推观察提醒并模拟建仓(线上已调65)
+  min_rr: 1.5              # 预期盈亏比低于此值不进场(止盈=第二密集区)
   pull_shrink: 0.6         # 二买回测须缩量至 0.6x坐标量以下
   coord_expire_bars: 60    # 坐标K跟踪有效期
   btc_filter: true         # BTC大盘方向过滤

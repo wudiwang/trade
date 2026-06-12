@@ -257,6 +257,7 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "spring.recovery_vol_max": float,  # 收回K最大量(x触发量)
         "spring.easy_vol": float,          # 轻松收回阈值(x触发量)
         "spring.watch_score": float,       # 观察提醒分数线
+        "spring.min_rr": float,            # 最低预期盈亏比(低于不进场)
         "spring.pull_shrink": float,       # 回测缩量阈值(x坐标量)
         "spring.coord_expire_bars": int,   # 坐标跟踪有效期(根)
         "spring.btc_filter": _bool,        # BTC大盘过滤

@@ -17,7 +17,10 @@ from .spring import (
     detect_trigger, recovery_score, upper_wick_pct, lower_wick_pct,
     is_bottom_fractal_3, is_top_fractal_3, vol_avg,
 )
-from .volume_profile import build_profile, nearest_hvn_above, nearest_hvn_below
+from .volume_profile import (
+    build_profile, hvn_list_above, hvn_list_below,
+    nearest_hvn_above, nearest_hvn_below,
+)
 
 log = logging.getLogger("signals")
 
@@ -90,20 +93,26 @@ class SignalEngine:
 
     def _make(self, *, symbol, tf, direction, entry, sl, vol_ratio, reason,
               sig_type, score, extra, klines) -> "Signal | None":
-        """组装信号：VP密集区止盈 + RR记录（V3不设RR门槛，全部进模拟盘验证）。"""
+        """组装信号：止盈=第二密集成交区（回测证明第一密集区太近，赢单只有0.59R），
+        且预期 RR < spring.min_rr 的信号不进场。"""
         profile = build_profile(
             klines[-self._p("signal.tp_vp_lookback", 200):],
             self._p("signal.tp_vp_bins", 50))
+        risk = abs(entry - sl)
         if direction == "long":
-            tp = nearest_hvn_above(profile, entry)
-            if tp is None or tp <= entry:
-                tp = entry + 2 * abs(entry - sl)   # 无密集区时退化为2R目标
-            rr = (tp - entry) / max(entry - sl, 1e-12)
+            hvns = [p for p in hvn_list_above(profile, entry) if p > entry]
+            tp = hvns[1] if len(hvns) >= 2 else (hvns[0] if hvns else None)
+            if tp is None:
+                tp = entry + 2 * risk   # 上方无密集区(新低区)→2R目标
+            rr = (tp - entry) / max(risk, 1e-12)
         else:
-            tp = nearest_hvn_below(profile, entry)
-            if tp is None or tp >= entry:
-                tp = entry - 2 * abs(sl - entry)
-            rr = (entry - tp) / max(sl - entry, 1e-12)
+            hvns = [p for p in hvn_list_below(profile, entry) if p < entry]
+            tp = hvns[1] if len(hvns) >= 2 else (hvns[0] if hvns else None)
+            if tp is None:
+                tp = entry - 2 * risk
+            rr = (entry - tp) / max(risk, 1e-12)
+        if rr < self._p("spring.min_rr", 1.5):
+            return self._drop("rr_too_low")
 
         equity = self._p("risk.account_equity", 1000)
         risk_usdt = equity * self._p("risk.risk_pct", 0.5) / 100.0

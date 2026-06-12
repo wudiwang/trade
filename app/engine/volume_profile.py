@@ -42,6 +42,42 @@ def nearest_hvn_above(profile: list[tuple[float, float]], price: float,
     return None
 
 
+def hvn_list_above(profile: list[tuple[float, float]], price: float,
+                   percentile: float = 0.70) -> list[float]:
+    """price 上方全部高量节点（由近到远）。用于把止盈设到第二密集区。"""
+    if not profile:
+        return []
+    vols = sorted(v for _, v in profile)
+    thresh = vols[int(len(vols) * percentile)] if vols else 0
+    out = []
+    for i, (p, v) in enumerate(profile):
+        if p <= price or v < thresh:
+            continue
+        left = profile[i - 1][1] if i > 0 else 0
+        right = profile[i + 1][1] if i < len(profile) - 1 else 0
+        if v >= left and v >= right:
+            out.append(p)
+    return out
+
+
+def hvn_list_below(profile: list[tuple[float, float]], price: float,
+                   percentile: float = 0.70) -> list[float]:
+    if not profile:
+        return []
+    vols = sorted(v for _, v in profile)
+    thresh = vols[int(len(vols) * percentile)] if vols else 0
+    out = []
+    for i in range(len(profile) - 1, -1, -1):
+        p, v = profile[i]
+        if p >= price or v < thresh:
+            continue
+        left = profile[i - 1][1] if i > 0 else 0
+        right = profile[i + 1][1] if i < len(profile) - 1 else 0
+        if v >= left and v >= right:
+            out.append(p)
+    return out
+
+
 def nearest_hvn_below(profile: list[tuple[float, float]], price: float,
                       percentile: float = 0.70) -> float | None:
     if not profile:
