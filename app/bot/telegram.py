@@ -83,13 +83,13 @@ class TgBot:
             self.db.update_signal(sid, status="notified", tg_message_id=r["result"]["message_id"])
 
     async def on_trade_close(self, trade: dict) -> None:
-        """paper 平仓播报（只报 rr5 track 避免刷屏；rr25 看网页）。"""
-        if not self.enabled or trade.get("track") != "rr5":
+        """paper 平仓播报。"""
+        if not self.enabled:
             return
         emo = "🎯止盈" if trade["result"] == "tp" else "🛑止损"
         await self.api(
             "sendMessage", chat_id=self.chat_id,
-            text=f"{emo} [paper] {trade['symbol']} {trade['tf']} {trade['direction']} "
+            text=f"{emo} [paper·{trade.get('track')}] {trade['symbol']} {trade['tf']} {trade['direction']} "
                  f"pnl={trade['pnl']:.2f}U ({trade['pnl_r']:+.2f}R)",
         )
 
@@ -140,13 +140,12 @@ class TgBot:
             eng = APP_STATE.get("engine")
             if eng:
                 st = eng.status()
-                r5, r25 = st["stats_rr5"], st["stats_rr25"]
-                await self.notify(
-                    f"⚙️ 运行 {st['uptime_s']//3600}h{st['uptime_s']%3600//60}m | {st['symbols']}币 | "
-                    f"ws {st['ws_conns']}连接\n"
-                    f"RR5轨: {r5['closed']}平/{r5['open']}持 胜率{r5['win_rate']}% pnl={r5['total_pnl']}U\n"
-                    f"RR2.5轨: {r25['closed']}平/{r25['open']}持 胜率{r25['win_rate']}% pnl={r25['total_pnl']}U"
-                )
+                lines = [f"⚙️ 运行 {st['uptime_s']//3600}h{st['uptime_s']%3600//60}m | "
+                         f"{st['symbols']}币 | ws {st['ws_conns']}连接"]
+                for name, t in st.get("tracks", {}).items():
+                    lines.append(f"{name}: {t['closed']}平/{t['open']}持 "
+                                 f"胜率{t['win_rate']}% pnl={t['total_pnl']}U 期望{t['expectancy_r']}R")
+                await self.notify("\n".join(lines))
 
     async def _on_callback(self, cq: dict) -> None:
         data = cq.get("data", "")

@@ -17,10 +17,9 @@ class PaperBroker:
         self.db = db
 
     def open_from_signal(self, signal_id: int, s) -> None:
-        """s: signals.Signal。按 track 规则开虚拟仓。"""
-        tracks = ["rr25"]
-        if s.rr >= self.cfg.get("signal.min_rr_primary", 5.0):
-            tracks.append("rr5")
+        """s: signals.Signal。track = 信号类型（watch/buy1/buy2/spring/chan），
+        每种入场点独立统计胜率，用于验证哪个买点最有效。"""
+        tracks = [s.extra.get("type", "other") if isinstance(s.extra, dict) else "other"]
         for tr in tracks:
             # 每个track检查最大持仓数
             open_cnt = self.db.one(

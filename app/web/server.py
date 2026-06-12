@@ -189,21 +189,28 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
             "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
         return {"klines": [dict(r) for r in rows], "signals": [dict(r) for r in sigs]}
 
+    _bool = lambda v: str(v).lower() in ("1", "true", "yes")
     EDITABLE = {
-        "signal.vol_multiplier": float, "signal.vol_strong": float,
-        "signal.min_rr_primary": float, "signal.min_rr_secondary": float,
-        "signal.sl_buffer_pct": float, "signal.cooldown_bars": int,
-        "signal.trend_filter": lambda v: str(v).lower() in ("1", "true", "yes"),
-        "universe.min_quote_volume_24h": float,
+        # 弹簧策略V3（仅保留本策略涉及的因子）
+        "spring.vol_mult": float,          # 触发K量倍数(x均量)
+        "spring.quiet_bars": int,          # 稳态观察根数
+        "spring.quiet_mult": float,        # 稳态最大放量倍数
+        "spring.range_atr_min": float,     # 触发K最小振幅(xATR)
+        "spring.body_min": float,          # 触发K最小实体占比
+        "spring.newlow_lookback": int,     # 破位回看根数
+        "spring.recovery_bars": int,       # 收回观察窗口(根)
+        "spring.recovery_vol_max": float,  # 收回K最大量(x触发量)
+        "spring.easy_vol": float,          # 轻松收回阈值(x触发量)
+        "spring.watch_score": float,       # 观察提醒分数线
+        "spring.pull_shrink": float,       # 回测缩量阈值(x坐标量)
+        "spring.coord_expire_bars": int,   # 坐标跟踪有效期(根)
+        "spring.btc_filter": _bool,        # BTC大盘过滤
+        # 仓位与通用
         "risk.account_equity": float, "risk.risk_pct": float,
         "risk.max_positions": int, "risk.leverage": int,
+        "signal.sl_buffer_pct": float,
+        "universe.min_quote_volume_24h": float,
         "mode": str,
-        "factors.min_score": int,
-        "factors.sl_atr_min": float, "factors.sl_atr_max": float,
-        "factors.rsi_extreme.oversold": float, "factors.rsi_extreme.overbought": float,
-        "factors.taker_ratio.min_ratio": float,
-        "factors.wick_rejection.min_ratio": float,
-        "factors.funding.extreme": float,
     }
 
     @app.get("/api/settings")

@@ -19,12 +19,7 @@
   </div>
 </header>
 <main>
-  <div class="cards" id="stat-cards">
-    <div class="card"><h3>RR≥5 主信号轨</h3><div class="big" id="c-rr5">–</div><div class="sub" id="c-rr5-sub">–</div></div>
-    <div class="card"><h3>RR≥2.5 对照轨</h3><div class="big" id="c-rr25">–</div><div class="sub" id="c-rr25-sub">–</div></div>
-    <div class="card"><h3>持仓中</h3><div class="big" id="c-open">–</div><div class="sub" id="c-open-sub">paper 虚拟仓</div></div>
-    <div class="card"><h3>引擎</h3><div class="big" id="c-engine">–</div><div class="sub" id="c-engine-sub">–</div></div>
-  </div>
+  <div class="cards" id="stat-cards"></div>
 
   <div class="panel">
     <h2>📡 实时信号
@@ -47,8 +42,10 @@
     <h2>💼 模拟交易
       <span class="tools">
         <select id="f-track" onchange="loadTrades()">
-          <option value="rr25">RR≥2.5 轨</option>
-          <option value="rr5">RR≥5 轨</option>
+          <option value="watch">⚡观察轨(50+分)</option>
+          <option value="buy1">✅一买轨(吞没)</option>
+          <option value="buy2">🔁二买轨(回测)</option>
+          <option value="spring">💎弹簧轨(假破收回)</option>
         </select>
       </span>
     </h2>

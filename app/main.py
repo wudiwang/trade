@@ -32,6 +32,7 @@ async def amain() -> None:
     bot = TgBot(cfg, db, trader)
     engine.signal_subscribers.append(bot.on_signal)
     engine.trade_close_subscribers.append(bot.on_trade_close)
+    engine.notice_subscribers.append(bot.notify)
 
     app = create_app(cfg, db, engine, bot)
 
@@ -54,18 +55,15 @@ async def amain() -> None:
             if t.tm_hour == 8 and day != last_day and bot.enabled:
                 last_day = day
                 log.info("daily report firing")
-                r5 = engine.paper.stats("rr5")
-                r25 = engine.paper.stats("rr25")
                 n_sig = db.one("SELECT COUNT(*) c FROM signals WHERE created_at > ?",
                                (int(_t.time()) - 86400,))["c"]
-                await bot.notify(
-                    f"📅 <b>日报</b>（近24h）\n"
-                    f"信号: {n_sig} 个\n"
-                    f"RR≥5 轨: {r5['closed']}平/{r5['open']}持 | 胜率 {r5['win_rate']}% | "
-                    f"累计 {r5['total_pnl']}U | 期望 {r5['expectancy_r']}R\n"
-                    f"RR≥2.5 轨: {r25['closed']}平/{r25['open']}持 | 胜率 {r25['win_rate']}% | "
-                    f"累计 {r25['total_pnl']}U | 期望 {r25['expectancy_r']}R"
-                )
+                lines = [f"📅 <b>日报</b>（近24h）", f"信号: {n_sig} 个"]
+                for tr in ("watch", "buy1", "buy2", "spring"):
+                    t = engine.paper.stats(tr)
+                    if t["closed"] or t["open"]:
+                        lines.append(f"{tr}: {t['closed']}平/{t['open']}持 | 胜率 {t['win_rate']}% | "
+                                     f"累计 {t['total_pnl']}U | 期望 {t['expectancy_r']}R")
+                await bot.notify("\n".join(lines))
                 log.info("daily report sent")
     asyncio.create_task(daily_report())
 

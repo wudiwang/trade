@@ -29,6 +29,7 @@ class Engine:
         # 新信号订阅者（telegram bot、web 推送都挂这里）
         self.signal_subscribers: list[Callable[[int, object], Awaitable[None]]] = []
         self.trade_close_subscribers: list[Callable[[dict], Awaitable[None]]] = []
+        self.notice_subscribers: list[Callable[[str], Awaitable[None]]] = []
         self._tasks: list[asyncio.Task] = []
         self.started_at = 0
         self.last_eval_ms = 0.0
@@ -182,6 +183,15 @@ class Engine:
         except Exception:
             log.exception("paper settle failed %s %s", symbol, tf)
 
+        # 状态机文字通知（失效/解除）转发
+        try:
+            while self.signal_engine.notices:
+                note = self.signal_engine.notices.pop(0)
+                for sub in self.notice_subscribers:
+                    await sub(note)
+        except Exception:
+            log.exception("notice forward failed")
+
         # 信号评估
         try:
             klines = list(dq)
@@ -211,7 +221,7 @@ class Engine:
             "ws_last_msg_age_s": round(time.time() - self.ws.last_msg_at, 1) if self.ws.last_msg_at else None,
             "last_eval_ms": round(self.last_eval_ms, 1),
             "mode": self.cfg.mode,
-            "stats_rr5": self.paper.stats("rr5"),
-            "stats_rr25": self.paper.stats("rr25"),
+            "tracks": {t: self.paper.stats(t)
+                       for t in ("watch", "buy1", "buy2", "spring")},
             "funnel": dict(self.signal_engine.funnel),
         }
