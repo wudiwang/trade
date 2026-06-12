@@ -13,15 +13,19 @@ from app.engine.backtest import run_backtest
 
 async def main():
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
-    symbols = sys.argv[2:] or ["BTCUSDT", "ETHUSDT"]
+    tfs = (sys.argv[2].split(",") if len(sys.argv) > 2 else ["5m", "15m", "1h", "4h"])
+    btc_filter = len(sys.argv) > 3 and sys.argv[3] == "btc_on"
     cfg = get_config()
-    # 与线上当前设置一致的放宽参数
+    # 与线上一致的放宽参数 + 实验开关
     for k, v in {"spring.vol_mult": 2.5, "spring.quiet_bars": 8, "spring.quiet_mult": 1.8,
                  "spring.range_atr_min": 1.2, "spring.newlow_lookback": 20,
-                 "spring.btc_filter": False}.items():
+                 "spring.watch_score": 65, "spring.min_rr": 1.5,
+                 "spring.btc_filter": btc_filter}.items():
         cfg.set_override(k, v)
+    from app.db import DB
+    symbols = DB(cfg.db_path).enabled_symbols() or ["BTCUSDT", "ETHUSDT"]
     rest = BinanceRest(cfg.get("binance.rest_base"))
-    res = await run_backtest(cfg, rest, symbols, ["5m", "15m", "1h", "4h"], days,
+    res = await run_backtest(cfg, rest, symbols, tfs, days,
                              progress=lambda d, t, m: print(f"  {d}/{t} {m}"))
     await rest.close()
     print(json.dumps({k: res[k] for k in ("total", "by_tf", "by_type", "by_direction", "elapsed_s")},
