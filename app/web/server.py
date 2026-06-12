@@ -176,6 +176,47 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         pb = PaperBroker(cfg, db)
         return {"rr5": pb.stats("rr5"), "rr25": pb.stats("rr25")}
 
+    @app.post("/api/backtest")
+    async def backtest_start(request: Request):
+        """启动回测（后台任务，GET /api/backtest 轮询进度/结果）。"""
+        bt = APP_STATE.get("backtest") or {}
+        if bt.get("running"):
+            return JSONResponse({"error": "已有回测在运行"}, status_code=409)
+        body = await request.json()
+        days = max(1, min(int(body.get("days", 7)), 60))
+        tfs = [t for t in (body.get("tfs") or ["5m", "15m", "1h", "4h"])
+               if t in ("5m", "15m", "1h", "4h")]
+        eng = APP_STATE["engine"]
+        if not eng:
+            return JSONResponse({"error": "engine 未运行"}, status_code=400)
+        symbols = list(eng.symbols)
+        state = {"running": True, "progress": "启动中…", "result": None, "started_at": int(time.time())}
+        APP_STATE["backtest"] = state
+
+        def prog(done, total, msg):
+            state["progress"] = f"{done}/{total} ({msg})"
+
+        async def job():
+            from app.engine.backtest import run_backtest
+            try:
+                state["result"] = await run_backtest(cfg, eng.rest, symbols, tfs, days, prog)
+                db.log("info", "backtest", f"{days}d {tfs} 完成: {state['result']['total']}")
+            except Exception as e:
+                log.exception("backtest failed")
+                state["result"] = {"error": str(e)}
+            finally:
+                state["running"] = False
+        asyncio.get_event_loop().create_task(job())
+        return {"ok": True}
+
+    @app.get("/api/backtest")
+    async def backtest_status():
+        bt = APP_STATE.get("backtest")
+        if not bt:
+            return {"running": False, "result": None}
+        return {"running": bt["running"], "progress": bt.get("progress"),
+                "result": bt.get("result"), "started_at": bt.get("started_at")}
+
     @app.get("/api/stats_by_tf")
     async def stats_by_tf():
         """按级别(可再按轨道)统计胜率，验证哪个级别准确率最高。"""

@@ -39,6 +39,21 @@
   </div>
 
   <div class="panel">
+    <h2>🧪 策略回测
+      <span class="tools">
+        <select id="bt-days">
+          <option value="7">近 1 周</option>
+          <option value="14">近 2 周</option>
+          <option value="30">近 1 月</option>
+        </select>
+        <button class="btn" id="bt-run" onclick="runBacktest()">运行回测</button>
+        <span class="muted" id="bt-status"></span>
+      </span>
+    </h2>
+    <div id="bt-result" class="muted">用当前参数对全部监控币种做多空双向回测（逻辑与实盘同一套代码）</div>
+  </div>
+
+  <div class="panel">
     <h2>📐 级别准确率对比 <span class="tools"><span class="muted">同一策略在不同K线级别的表现</span></span></h2>
     <table>
       <thead><tr><th>级别</th><th>总单</th><th>持仓中</th><th>已平仓</th><th>胜率</th><th>总盈亏(U)</th><th>平均R</th></tr></thead>

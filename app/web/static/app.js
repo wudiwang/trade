@@ -96,6 +96,57 @@ function openChartFromTrade(id) {
     extra: sig ? sig.extra : null, opened_at: t.opened_at, exit_price: t.exit_price});
 }
 
+// ---------- 策略回测 ----------
+let btTimer = null;
+async function runBacktest() {
+  const days = $('bt-days').value;
+  const r = await api('/api/backtest', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({days: Number(days)})});
+  if (r.error) { toast('❌ ' + r.error); return; }
+  $('bt-run').disabled = true;
+  $('bt-status').textContent = '回测中…';
+  if (btTimer) clearInterval(btTimer);
+  btTimer = setInterval(pollBacktest, 2000);
+}
+async function pollBacktest() {
+  const d = await api('/api/backtest');
+  if (d.running) { $('bt-status').textContent = '回测中 ' + (d.progress || ''); return; }
+  clearInterval(btTimer); btTimer = null;
+  $('bt-run').disabled = false;
+  $('bt-status').textContent = '';
+  if (d.result) renderBacktest(d.result);
+}
+function btTable(title, obj) {
+  const rows = Object.entries(obj).map(([k, b]) => `
+    <tr><td><b>${TYPE_TAG[k] || k}</b></td><td>${b.signals}</td><td>${b.closed}</td><td>${b.open}</td>
+    <td>${b.win_rate}%</td>
+    <td class="${b.total_r > 0 ? 'green' : b.total_r < 0 ? 'red' : ''}">${b.total_r}R</td>
+    <td>${b.avg_r}R</td></tr>`).join('');
+  return `<h3 style="margin:10px 0 6px">${title}</h3>
+    <table><thead><tr><th></th><th>信号</th><th>已平</th><th>未平</th><th>胜率</th><th>总盈亏</th><th>均值</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+function renderBacktest(r) {
+  if (r.error) { $('bt-result').innerHTML = `<span class="red">回测失败: ${r.error}</span>`; return; }
+  const t = r.total;
+  let html = `<p>近 <b>${r.period_days}</b> 天 · ${r.symbols} 币 · ${r.tfs.join('/')} · 耗时 ${r.elapsed_s}s ·
+    共 <b>${t.signals}</b> 信号 · 胜率 <b>${t.win_rate}%</b> ·
+    总盈亏 <b class="${t.total_r > 0 ? 'green' : 'red'}">${t.total_r}R</b> · 期望 <b>${t.avg_r}R</b>/笔</p>`;
+  html += btTable('按级别', r.by_tf) + btTable('按信号类型', r.by_type) + btTable('按方向', r.by_direction);
+  const sigRows = (r.signals || []).slice(-60).reverse().map(s => `
+    <tr class="clickable" onclick="openChart('${s.symbol}','${s.tf}',{entry:${s.entry},sl:${s.sl},tp:${s.tp}})">
+      <td>${fmtT(s.time)}</td><td><b>${s.symbol}</b></td><td>${s.tf}</td>
+      <td><span class="tag ${s.direction}">${s.direction === 'long' ? '多' : '空'}</span></td>
+      <td>${TYPE_TAG[s.type] || s.type} ${s.score ?? ''}</td>
+      <td>${fmtP(s.entry)}</td><td>${s.result === 'open' ? '⏳' : s.result === 'tp' ? '🎯' : '🛑'}</td>
+      <td class="${(s.pnl_r ?? 0) > 0 ? 'green' : (s.pnl_r ?? 0) < 0 ? 'red' : ''}">${s.pnl_r == null ? '–' : s.pnl_r.toFixed(2) + 'R'}</td>
+    </tr>`).join('');
+  html += `<h3 style="margin:10px 0 6px">最近信号明细（点击看图）</h3>
+    <table><thead><tr><th>时间</th><th>币种</th><th>级别</th><th>方向</th><th>类型</th><th>入场</th><th>结果</th><th>盈亏</th></tr></thead>
+    <tbody>${sigRows}</tbody></table>`;
+  $('bt-result').innerHTML = html;
+}
+
 // ---------- 级别准确率 ----------
 async function loadTfStats() {
   const d = await api('/api/stats_by_tf');
