@@ -10,10 +10,11 @@ now = int(time.time())
 total = db.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
 last24 = db.execute("SELECT COUNT(*) FROM signals WHERE created_at>?", (now - 86400,)).fetchone()[0]
 print(f"signals: total={total} last24h={last24}")
-for r in db.execute("SELECT id,symbol,tf,direction,kind,rr,status,extra FROM signals ORDER BY id DESC LIMIT 6"):
+for r in db.execute("SELECT id,symbol,tf,direction,kind,rr,status,extra,reason FROM signals ORDER BY id DESC LIMIT 6"):
     e = json.loads(r[7] or "{}")
-    age_h = ""
-    print(f"  #{r[0]} {r[1]} {r[2]} {r[3]} {r[4]} rr={r[5]} {r[6]} score={e.get('factor_score')} {e.get('factors')}")
+    print(f"  #{r[0]} {r[1]} {r[2]} {r[3]} type={e.get('type')} score={e.get('score')} rr={r[5]} {r[6]}")
+    if r[8]:
+        print(f"      {r[8][:90]}")
 
 print("paper:", dict(db.execute("SELECT result, COUNT(*) FROM paper_trades GROUP BY result").fetchall()))
 kl = db.execute("SELECT COUNT(*), MAX(open_time) FROM klines").fetchone()
