@@ -39,6 +39,14 @@
   </div>
 
   <div class="panel">
+    <h2>📐 级别准确率对比 <span class="tools"><span class="muted">同一策略在不同K线级别的表现</span></span></h2>
+    <table>
+      <thead><tr><th>级别</th><th>总单</th><th>持仓中</th><th>已平仓</th><th>胜率</th><th>总盈亏(U)</th><th>平均R</th></tr></thead>
+      <tbody id="t-tfstats"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
     <h2>💼 模拟交易
       <span class="tools">
         <select id="f-track" onchange="loadTrades()">

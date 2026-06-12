@@ -176,6 +176,20 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         pb = PaperBroker(cfg, db)
         return {"rr5": pb.stats("rr5"), "rr25": pb.stats("rr25")}
 
+    @app.get("/api/stats_by_tf")
+    async def stats_by_tf():
+        """按级别(可再按轨道)统计胜率，验证哪个级别准确率最高。"""
+        rows = db.query(
+            "SELECT tf, track, COUNT(*) n, SUM(result='tp') wins, "
+            "ROUND(SUM(pnl),2) pnl, ROUND(AVG(pnl_r),3) avg_r "
+            "FROM paper_trades WHERE result IN ('tp','sl') GROUP BY tf, track ORDER BY tf, track")
+        agg = db.query(
+            "SELECT tf, COUNT(*) n, SUM(result='tp') wins, "
+            "ROUND(SUM(pnl),2) pnl, ROUND(AVG(pnl_r),3) avg_r, "
+            "SUM(result IS NULL OR result='open') open_cnt "
+            "FROM paper_trades GROUP BY tf ORDER BY tf")
+        return {"by_tf_track": [dict(r) for r in rows], "by_tf": [dict(r) for r in agg]}
+
     @app.get("/api/equity")
     async def equity(track: str = "rr25"):
         return [dict(r) for r in db.query(

@@ -96,6 +96,19 @@ function openChartFromTrade(id) {
     extra: sig ? sig.extra : null, opened_at: t.opened_at, exit_price: t.exit_price});
 }
 
+// ---------- 级别准确率 ----------
+async function loadTfStats() {
+  const d = await api('/api/stats_by_tf');
+  $('t-tfstats').innerHTML = (d.by_tf || []).map(r => {
+    const closed = r.n - (r.open_cnt || 0);
+    const wr = closed > 0 ? (100 * r.wins / closed).toFixed(1) : '–';
+    return `<tr><td><b>${r.tf}</b></td><td>${r.n}</td><td>${r.open_cnt || 0}</td>
+      <td>${closed}</td><td>${wr}${closed > 0 ? '%' : ''}</td>
+      <td class="${(r.pnl ?? 0) > 0 ? 'green' : (r.pnl ?? 0) < 0 ? 'red' : ''}">${r.pnl ?? 0}</td>
+      <td>${r.avg_r ?? '–'}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted">暂无成交数据</td></tr>';
+}
+
 // ---------- 权益曲线 ----------
 let eqChart, eqSeries;
 async function loadEquity() {
@@ -223,5 +236,6 @@ function connectWS() {
 }
 
 // ---------- 启动 ----------
-loadStatus(); loadSignals(); loadTrades(); loadSettings(); connectWS();
+loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadSettings(); connectWS();
 setInterval(loadStatus, 15000);
+setInterval(loadTfStats, 60000);

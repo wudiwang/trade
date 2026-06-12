@@ -7,7 +7,7 @@
 
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
 strategy: spring_v3    # spring_v3=弹簧策略(用户核心策略) / chan_v1=缠论分型(旧版保留)
-timeframes: ["15m", "1h"]
+timeframes: ["5m", "15m", "1h", "4h"]   # 四级别并行，验证哪个级别准确率最高
 
 # ---- 弹簧策略V3 ----
 spring:
