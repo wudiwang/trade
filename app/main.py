@@ -53,6 +53,7 @@ async def amain() -> None:
             day = (t.tm_year, t.tm_yday)
             if t.tm_hour == 8 and day != last_day and bot.enabled:
                 last_day = day
+                log.info("daily report firing")
                 r5 = engine.paper.stats("rr5")
                 r25 = engine.paper.stats("rr25")
                 n_sig = db.one("SELECT COUNT(*) c FROM signals WHERE created_at > ?",
@@ -65,6 +66,7 @@ async def amain() -> None:
                     f"RR≥2.5 轨: {r25['closed']}平/{r25['open']}持 | 胜率 {r25['win_rate']}% | "
                     f"累计 {r25['total_pnl']}U | 期望 {r25['expectancy_r']}R"
                 )
+                log.info("daily report sent")
     asyncio.create_task(daily_report())
 
     server = uvicorn.Server(uvicorn.Config(
