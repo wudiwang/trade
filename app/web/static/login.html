@@ -18,13 +18,23 @@
 <script>
 async function doLogin() {
   const err = document.getElementById('err');
+  const btn = document.getElementById('btn');
   err.textContent = '';
-  const r = await fetch('/api/login', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({username: u.value.trim(), password: p.value})
-  });
-  if (r.ok) location.href = '/';
-  else err.textContent = (await r.json()).error || '登录失败';
+  btn.disabled = true;
+  btn.textContent = '登录中…';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: u.value.trim(), password: p.value})
+    });
+    if (r.ok) { location.replace('/'); return; }
+    err.textContent = (await r.json()).error || '登录失败';
+  } catch (e) {
+    err.textContent = '网络错误: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '登 录';
+  }
 }
 document.getElementById('p').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 </script>
