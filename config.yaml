@@ -7,7 +7,7 @@
 
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
 strategy: chan_bi      # chan_bi=缠论笔+停顿K(当前) / spring_v4=破位+底分型 / chan_v1=旧
-timeframes: ["5m", "15m", "1h"]
+timeframes: ["15m", "1h"]
 
 # ---- 缠论笔策略 ----
 chan:

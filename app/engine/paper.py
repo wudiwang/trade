@@ -20,14 +20,17 @@ class PaperBroker:
         """s: signals.Signal。track = 信号类型（watch/buy1/buy2/spring/chan），
         每种入场点独立统计胜率，用于验证哪个买点最有效。"""
         tracks = [s.extra.get("type", "other") if isinstance(s.extra, dict) else "other"]
+        # paper 模式不设仓位上限：每个信号都开模拟单、都跟踪胜负，统计才完整(验证策略用)。
+        # 仓位上限只在 live 实盘起作用(真钱风控)。
+        live = self.cfg.mode == "live"
         for tr in tracks:
-            # 每个track检查最大持仓数
-            open_cnt = self.db.one(
-                "SELECT COUNT(*) c FROM paper_trades WHERE result='open' AND track=?", (tr,)
-            )["c"]
-            if open_cnt >= self.cfg.get("risk.max_positions", 5):
-                log.info("track %s 已满仓(%d)，跳过 %s", tr, open_cnt, s.symbol)
-                continue
+            if live:
+                open_cnt = self.db.one(
+                    "SELECT COUNT(*) c FROM paper_trades WHERE result='open' AND track=?", (tr,)
+                )["c"]
+                if open_cnt >= self.cfg.get("risk.max_positions", 5):
+                    log.info("track %s 已满仓(%d)，跳过 %s", tr, open_cnt, s.symbol)
+                    continue
             self.db.execute(
                 "INSERT INTO paper_trades (signal_id, symbol, tf, direction, track, entry, sl, tp, qty, opened_at) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?)",
