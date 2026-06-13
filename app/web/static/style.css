@@ -77,3 +77,31 @@ tr.clickable { cursor: pointer; }
 #toast div { background: var(--panel2); border: 1px solid var(--accent); border-radius: 8px;
   padding: 10px 14px; font-size: 13px; animation: fadein .2s; max-width: 360px; }
 @keyframes fadein { from { opacity: 0; transform: translateY(6px); } }
+
+/* ============ 手机端适配 ============ */
+@media (max-width: 680px) {
+  body { font-size: 13px; }
+  main { padding: 8px; gap: 10px; }
+  header { padding: 8px 10px; gap: 8px; }
+  header h1 { font-size: 15px; margin-right: 0; }
+  header .pill { font-size: 11px; padding: 2px 8px; }
+  header .right { margin-left: auto; }
+  .panel { padding: 12px 10px; overflow-x: auto; }       /* 宽表格可横向滑动 */
+  .panel h2 { font-size: 14px; flex-wrap: wrap; }
+  .panel h2 .tools { margin-left: 0; width: 100%; margin-top: 6px; }
+  .cards { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .card .big { font-size: 18px; }
+  table { font-size: 12px; min-width: 560px; }            /* 强制宽度→面板内横滑 */
+  th, td { padding: 5px 6px; }
+  .settings-grid { grid-template-columns: 1fr 1fr; }
+  .settings-grid input, .settings-grid select { width: 90px; }
+  .modal { width: 96vw; padding: 10px; }
+  #chart { height: 300px; }
+  #toast { right: 8px; left: 8px; bottom: 8px; }
+  #toast div { max-width: none; }
+  .login-box { width: 92vw; padding: 28px 22px; }
+}
+@media (max-width: 420px) {
+  .cards { grid-template-columns: 1fr; }
+  .settings-grid { grid-template-columns: 1fr; }
+}
