@@ -103,7 +103,11 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         elif path == "/" or path.endswith(".html") or path.endswith(".js"):
             if path not in open_paths and not auth_user(request):
                 return FileResponse(STATIC / "login.html")
-        return await call_next(request)
+        resp = await call_next(request)
+        # 前端资源禁缓存：部署后用户打开即拿到最新JS/HTML/CSS
+        if path == "/" or path.endswith((".html", ".js", ".css")):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return resp
 
     # ---------- API ----------
     @app.post("/api/login")
