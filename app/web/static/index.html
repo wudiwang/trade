@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>缠论交易系统</title>
-<link rel="stylesheet" href="/style.css?v=5">
+<link rel="stylesheet" href="/style.css?v=6">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -35,6 +35,28 @@
       <thead><tr><th>#</th><th>时间</th><th>币种</th><th>级别</th><th>方向</th><th>类型</th>
         <th>入场</th><th>止损</th><th>止盈</th><th>RR</th><th>量能</th><th>状态</th></tr></thead>
       <tbody id="t-signals"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>🎬 预演 Playbook <span class="muted" style="font-weight:400">为某币记剧本，价格到预演位/假突破回收即提醒</span>
+      <span class="tools"><button class="btn" onclick="togglePbForm()">+ 新建预演</button></span>
+    </h2>
+    <div id="pb-form" style="display:none;margin-bottom:10px" class="settings-grid">
+      <label>币种<input id="pb-symbol" placeholder="如 BTCUSDT" style="width:120px"></label>
+      <label>级别<select id="pb-tf"><option value="">不限</option><option>5m</option><option>15m</option><option>1h</option></select></label>
+      <label>方向<select id="pb-dir"><option value="long">做多</option><option value="short">做空</option><option value="watch">观察</option></select></label>
+      <label>触发<select id="pb-trig"><option value="price_reach">到价</option><option value="sweep_reclaim">假突破回收</option></select></label>
+      <label>关键位<input id="pb-trigprice" style="width:110px"></label>
+      <label>买点<input id="pb-entry" style="width:110px"></label>
+      <label>止盈<input id="pb-tp" style="width:110px"></label>
+      <label>止损<input id="pb-sl" style="width:110px"></label>
+      <label style="flex:1 1 240px">描述<input id="pb-title" placeholder="形态/剧本说明" style="width:100%"></label>
+      <button class="btn" onclick="savePlaybook()">保存预演</button>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>币种</th><th>级别</th><th>方向</th><th>触发</th><th>关键位</th><th>买点</th><th>止盈</th><th>止损</th><th>状态</th><th>描述</th><th></th></tr></thead>
+      <tbody id="t-playbooks"></tbody>
     </table>
   </div>
 
@@ -102,6 +124,6 @@
   </div>
 </div>
 <div id="toast"></div>
-<script src="/app.js?v=5"></script>
+<script src="/app.js?v=6"></script>
 </body>
 </html>

@@ -62,6 +62,20 @@ CREATE TABLE IF NOT EXISTS event_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts INTEGER, level TEXT, source TEXT, message TEXT
 );
+CREATE TABLE IF NOT EXISTS playbooks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL, symbol TEXT NOT NULL, tf TEXT,
+    direction TEXT,                     -- long / short / watch
+    title TEXT,                         -- 形态/剧本描述
+    entry REAL, tp REAL, sl REAL,       -- 预判买点/止盈目标/止损
+    trigger_type TEXT,                  -- price_reach(到价) / sweep_reclaim(假突破回收)
+    trigger_price REAL,                 -- 监控的关键位
+    status TEXT DEFAULT 'active',       -- active / triggered / done / cancelled
+    triggered_at INTEGER, source TEXT,  -- manual / auto
+    extra TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_playbooks_status ON playbooks(status);
+CREATE INDEX IF NOT EXISTS idx_playbooks_symbol ON playbooks(symbol, tf);
 """
 
 
@@ -168,6 +182,43 @@ class DB:
             "SELECT * FROM signals WHERE symbol=? AND tf=? AND direction=? AND created_at>=? ORDER BY created_at DESC LIMIT 1",
             (symbol, tf, direction, since_ts),
         )
+
+    # ---------- playbooks (预演) ----------
+    def insert_playbook(self, p: dict) -> int:
+        cur = self.execute(
+            "INSERT INTO playbooks (created_at, symbol, tf, direction, title, entry, tp, sl, "
+            "trigger_type, trigger_price, status, source, extra) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (int(time.time()), p["symbol"], p.get("tf"), p.get("direction"), p.get("title", ""),
+             p.get("entry"), p.get("tp"), p.get("sl"), p.get("trigger_type", "price_reach"),
+             p.get("trigger_price"), p.get("status", "active"), p.get("source", "manual"),
+             json.dumps(p.get("extra", {}), ensure_ascii=False)),
+        )
+        return cur.lastrowid
+
+    def active_playbooks(self, symbol: str | None = None, tf: str | None = None) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM playbooks WHERE status='active'"
+        args: list = []
+        if symbol:
+            sql += " AND symbol=?"
+            args.append(symbol)
+        if tf:
+            sql += " AND (tf=? OR tf IS NULL OR tf='')"
+            args.append(tf)
+        return self.query(sql, args)
+
+    def list_playbooks(self, status: str = "", limit: int = 200) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM playbooks"
+        args: list = []
+        if status:
+            sql += " WHERE status=?"
+            args.append(status)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        return self.query(sql, args)
+
+    def update_playbook(self, pid: int, **fields: Any) -> None:
+        keys = ", ".join(f"{k}=?" for k in fields)
+        self.execute(f"UPDATE playbooks SET {keys} WHERE id=?", (*fields.values(), pid))
 
     # ---------- settings ----------
     def get_settings(self) -> dict[str, str]:

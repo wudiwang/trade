@@ -185,6 +185,40 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         pb = PaperBroker(cfg, db)
         return {"rr5": pb.stats("rr5"), "rr25": pb.stats("rr25")}
 
+    # ---------- 预演 Playbook ----------
+    @app.get("/api/playbooks")
+    async def playbooks_list(status: str = ""):
+        return [dict(r) for r in db.list_playbooks(status)]
+
+    @app.post("/api/playbooks")
+    async def playbook_create(request: Request):
+        b = await request.json()
+        if not b.get("symbol"):
+            return JSONResponse({"error": "缺少币种"}, status_code=400)
+        def num(x):
+            try:
+                return float(x) if x not in (None, "") else None
+            except (ValueError, TypeError):
+                return None
+        pid = db.insert_playbook({
+            "symbol": b["symbol"].upper().strip(), "tf": b.get("tf", ""),
+            "direction": b.get("direction", "long"), "title": b.get("title", ""),
+            "entry": num(b.get("entry")), "tp": num(b.get("tp")), "sl": num(b.get("sl")),
+            "trigger_type": b.get("trigger_type", "price_reach"),
+            "trigger_price": num(b.get("trigger_price")), "source": "manual",
+        })
+        db.log("info", "playbook", f"created #{pid} {b['symbol']}")
+        return {"ok": True, "id": pid}
+
+    @app.post("/api/playbooks/{pid}")
+    async def playbook_update(pid: int, request: Request):
+        b = await request.json()
+        allowed = {k: b[k] for k in ("status", "title", "entry", "tp", "sl",
+                                     "trigger_price", "trigger_type", "direction") if k in b}
+        if allowed:
+            db.update_playbook(pid, **allowed)
+        return {"ok": True}
+
     @app.post("/api/backtest")
     async def backtest_start(request: Request):
         """启动回测（后台任务，GET /api/backtest 轮询进度/结果）。"""

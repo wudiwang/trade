@@ -183,6 +183,16 @@ class Engine:
         except Exception:
             log.exception("paper settle failed %s %s", symbol, tf)
 
+        # 预演(Playbook)检查：到预演位/假突破回收即推提醒
+        try:
+            from .playbook import check_bar
+            for fired in check_bar(self.db, symbol, tf, bar):
+                self.db.log("info", "playbook", f"triggered #{fired['id']} {symbol} {tf}")
+                for sub in self.notice_subscribers:
+                    await sub(fired["message"])
+        except Exception:
+            log.exception("playbook check failed %s %s", symbol, tf)
+
         # 状态机文字通知（失效/解除）转发
         try:
             while self.signal_engine.notices:

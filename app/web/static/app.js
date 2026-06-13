@@ -97,6 +97,41 @@ function openChartFromTrade(id) {
     extra: sig ? sig.extra : null, opened_at: t.opened_at, exit_price: t.exit_price});
 }
 
+// ---------- 预演 Playbook ----------
+const PB_STATUS = {active: '⏳监控中', triggered: '🎬已触发', done: '✅完成', cancelled: '已取消'};
+const PB_TRIG = {price_reach: '到价', sweep_reclaim: '假突破回收'};
+function togglePbForm() { const f = $('pb-form'); f.style.display = f.style.display === 'none' ? 'flex' : 'none'; }
+async function savePlaybook() {
+  const body = {
+    symbol: $('pb-symbol').value, tf: $('pb-tf').value, direction: $('pb-dir').value,
+    trigger_type: $('pb-trig').value, trigger_price: $('pb-trigprice').value,
+    entry: $('pb-entry').value, tp: $('pb-tp').value, sl: $('pb-sl').value, title: $('pb-title').value,
+  };
+  if (!body.symbol) { toast('❌ 请填币种'); return; }
+  const r = await api('/api/playbooks', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (r.ok) { toast('✅ 预演已建 #' + r.id); togglePbForm(); ['pb-symbol','pb-trigprice','pb-entry','pb-tp','pb-sl','pb-title'].forEach(i => $(i).value = ''); loadPlaybooks(); }
+  else toast('❌ ' + (r.error || '失败'));
+}
+async function pbAction(id, status) {
+  await api('/api/playbooks/' + id, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status})});
+  loadPlaybooks();
+}
+async function loadPlaybooks() {
+  const rows = await api('/api/playbooks');
+  $('t-playbooks').innerHTML = rows.map(p => `
+    <tr class="clickable" onclick="openChart('${p.symbol}','${p.tf || '15m'}',{entry:${p.entry},sl:${p.sl},tp:${p.tp}})">
+      <td>${p.id}</td><td><b>${p.symbol}</b></td><td>${p.tf || '不限'}</td>
+      <td><span class="tag ${p.direction}">${p.direction === 'long' ? '多' : p.direction === 'short' ? '空' : '观'}</span></td>
+      <td>${PB_TRIG[p.trigger_type] || p.trigger_type}</td>
+      <td class="gold">${fmtP(p.trigger_price)}</td><td>${fmtP(p.entry)}</td>
+      <td class="green">${fmtP(p.tp)}</td><td class="red">${fmtP(p.sl)}</td>
+      <td>${PB_STATUS[p.status] || p.status}</td><td class="muted">${p.title || ''}</td>
+      <td onclick="event.stopPropagation()">${p.status === 'active'
+        ? `<button class="btn" style="padding:2px 8px" onclick="pbAction(${p.id},'cancelled')">取消</button>`
+        : `<button class="btn" style="padding:2px 8px;background:var(--panel2)" onclick="pbAction(${p.id},'done')">归档</button>`}</td>
+    </tr>`).join('') || '<tr><td colspan="12" class="muted">还没有预演，点「+ 新建预演」记录一个剧本</td></tr>';
+}
+
 // ---------- 策略回测 ----------
 let btTimer = null;
 async function runBacktest() {
@@ -286,6 +321,7 @@ function connectWS() {
 }
 
 // ---------- 启动 ----------
-loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadSettings(); connectWS();
+loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); connectWS();
 setInterval(loadStatus, 15000);
 setInterval(loadTfStats, 60000);
+setInterval(loadPlaybooks, 30000);
