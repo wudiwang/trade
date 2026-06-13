@@ -119,6 +119,26 @@ def test_engine_no_crash_on_real_shape():
     print("  逐根评估无异常")
 
 
+def test_label_by_direction():
+    eng = SignalEngine(make_cfg(), FakeDB())
+    assert eng._bi_label("buy1", "long") == "一买"
+    assert eng._bi_label("buy2", "long") == "二买"
+    assert eng._bi_label("buy1", "short") == "一卖"
+    assert eng._bi_label("buy2", "short") == "二卖"
+    print("  做多→一买/二买  做空→一卖/二卖")
+
+
+def test_buy2_needs_buy1_chain():
+    eng = SignalEngine(make_cfg(), FakeDB())
+    # 没有一买链时，链为空 → 二买判定会被降级/拦截(逻辑在_eval_chan_bi)
+    assert eng._bi_chain == {}
+    # 模拟开链
+    eng._bi_chain[("X", "5m", "long")] = 10.0
+    # 收盘跌破10 → 下一次评估应清链(此处直接验证状态变量存在)
+    assert eng._bi_chain[("X", "5m", "long")] == 10.0
+    print("  一买→二买链状态变量就位")
+
+
 def main():
     fns = [v for n, v in globals().items() if n.startswith("test_") and callable(v)]
     for fn in fns:

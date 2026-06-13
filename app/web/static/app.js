@@ -49,6 +49,10 @@ async function loadStatus() {
 
 // ---------- 信号 ----------
 const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', chan: '分型'};
+function typeLabel(type, dir) {
+  if (dir === 'short') return type === 'buy1' ? '✅一卖' : type === 'buy2' ? '🔁二卖' : (TYPE_TAG[type] || type);
+  return TYPE_TAG[type] || type;
+}
 let signalCache = {};
 function sigType(s) {
   try { return JSON.parse(s.extra || '{}').type || ''; } catch (e) { return ''; }
@@ -66,7 +70,7 @@ async function loadSignals() {
       <td>${s.id}</td><td>${fmtT(s.created_at)}</td>
       <td><b>${s.symbol}</b></td><td>${s.tf}</td>
       <td><span class="tag ${s.direction}">${s.direction === 'long' ? '多' : '空'}</span></td>
-      <td><span class="tag primary">${TYPE_TAG[sigType(s)] || s.kind} ${sigScore(s)}</span></td>
+      <td><span class="tag primary">${typeLabel(sigType(s), s.direction)} ${sigScore(s)}</span></td>
       <td>${fmtP(s.entry)}</td><td class="red">${fmtP(s.sl)}</td><td class="green">${fmtP(s.tp)}</td>
       <td><b>${s.rr}</b></td><td>${s.vol_ratio}x</td><td>${s.status}</td>
     </tr>`).join('');
@@ -86,7 +90,7 @@ async function loadTrades() {
   $('t-trades').innerHTML = rows.map(t => `
     <tr class="clickable" onclick="openChartFromTrade(${t.id})" title="点击查看当时K线形态与买卖点">
       <td>${t.id}</td><td><b>${t.symbol}</b></td><td>${t.tf}</td>
-      <td><span class="tag primary">${TYPE_TAG[t.track] || t.track}</span></td>
+      <td><span class="tag primary">${typeLabel(t.track, t.direction)}</span></td>
       <td><span class="tag ${t.direction}">${t.direction === 'long' ? '多' : '空'}</span></td>
       <td>${fmtP(t.entry)}</td><td class="red">${fmtP(t.sl)}</td><td class="green">${fmtP(t.tp)}</td>
       <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : '🛑止损'}</td>
@@ -292,7 +296,7 @@ async function openChart(symbol, tf, ref) {
       time: s.created_at, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
       color: s.direction === 'long' ? '#2ecc71' : '#e74c3c',
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
-      text: `${TYPE_TAG[ex.type] || s.kind} #${s.id}`,
+      text: `${typeLabel(ex.type, s.direction)} #${s.id}`,
     });
     if (ex.breakdown && ex.breakdown.time) {
       markers.push({time: Math.floor(ex.breakdown.time / 1000), position: 'aboveBar',

@@ -73,6 +73,14 @@ class SignalEngine:
         self.watch_set: set = set()
         # 缠论笔策略：每个分型只发一次
         self._bi_fired: dict[tuple, int] = {}
+        # 一买→二买链：(symbol,tf,dir)->一买的极值价。无链不发二买；跌破即清链
+        self._bi_chain: dict[tuple, float] = {}
+
+    @staticmethod
+    def _bi_label(sig_type: str, direction: str) -> str:
+        if direction == "short":
+            return "一卖" if sig_type == "buy1" else "二卖"
+        return "一买" if sig_type == "buy1" else "二买"
 
     def load_macro(self, db) -> None:
         s = db.get_settings()
@@ -118,24 +126,41 @@ class SignalEngine:
             return None
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
         i = len(klines) - 1
+        c_now = float(klines[i]["close"])
+        # 链失效：收盘跌破一买低点(long)/升破一卖高点(short) → 清链，二买重新需要一买
+        for d in ("long", "short"):
+            lv = self._bi_chain.get((symbol, tf, d))
+            if lv is not None and ((d == "long" and c_now < lv) or (d == "short" and c_now > lv)):
+                del self._bi_chain[(symbol, tf, d)]
 
-        # A路：笔 → 底/顶分型 → 停顿K（一买/二买，双向）
+        # A路：笔 → 底/顶分型 → 停顿K
         r = detect(klines, min_bars, self._p("chan.stall_max_gap", 3))
         if r:
             direction, sig_type, fx, s = r
-            if self._bi_fired.get((symbol, tf, direction)) != fx.open_time:
+            ck = (symbol, tf, direction)
+            if self._bi_fired.get(ck) != fx.open_time:
                 if not self._btc_ok(direction):
                     return self._drop("btc_filter")
-                self._bi_fired[(symbol, tf, direction)] = fx.open_time
+                chain_lv = self._bi_chain.get(ck)
+                # 二买必须先有一买；没有一买链时，这一信号就是一买(开链)
+                eff = sig_type if (sig_type == "buy1" or chain_lv is not None) else "buy1"
+                # 真二买还要比一买极值更高的低点(long)/更低的高点(short)
+                if eff == "buy2" and chain_lv is not None:
+                    if (direction == "long" and fx.extreme_price <= chain_lv) or \
+                       (direction == "short" and fx.extreme_price >= chain_lv):
+                        return self._drop("buy2_not_higher")
+                self._bi_fired[ck] = fx.open_time
+                if eff == "buy1":
+                    self._bi_chain[ck] = fx.extreme_price   # 开/重置链
                 entry = float(klines[s]["close"])
                 sl = fx.extreme_price * (1 - buf) if direction == "long" else fx.extreme_price * (1 + buf)
-                label = "一买" if sig_type == "buy1" else "二买"
+                label = self._bi_label(eff, direction)
                 side = "做多" if direction == "long" else "做空"
                 leg = "下跌成笔" if direction == "long" else "上涨成笔"
                 fxn = "底分型" if direction == "long" else "顶分型"
-                reason = f"{'✅' if sig_type == 'buy1' else '🔁'}{label}({side}): {leg} → {fxn} → 停顿K确认"
+                reason = f"{'✅' if eff == 'buy1' else '🔁'}{label}({side}): {leg} → {fxn} → 停顿K确认"
                 return self._spring_make(
-                    symbol, tf, direction, entry, sl, sig_type, {"detail": {"vol_ratio": 0.0}}, klines,
+                    symbol, tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}}, klines,
                     extra={"fractal_price": fx.extreme_price, "fractal_time": fx.open_time, "path": "笔"},
                     reason=reason)
 
@@ -160,9 +185,12 @@ class SignalEngine:
             self._bi_fired[(symbol, tf, direction)] = anchor
             entry = float(vk["open"])  # 收回到放量K的顶部(开盘)
             vr = round(float(vk["volume"]) / max(vol_avg(klines, j, 20), 1e-9), 1)
-            sl = float(vk["low"]) * (1 - buf) if direction == "long" else float(vk["high"]) * (1 + buf)
+            vlow, vhigh = float(vk["low"]), float(vk["high"])
+            sl = vlow * (1 - buf) if direction == "long" else vhigh * (1 + buf)
+            self._bi_chain[(symbol, tf, direction)] = vlow if direction == "long" else vhigh  # 放量收回也是一买,开链
             side = "做多" if direction == "long" else "做空"
-            reason = f"✅一买({side}): 下跌成笔 + 放量{vr}x{'阴线' if direction == 'long' else '阳线'}被收回"
+            label = self._bi_label("buy1", direction)
+            reason = f"✅{label}({side}): 下跌成笔 + 放量{vr}x{'阴线' if direction == 'long' else '阳线'}被收回"
             return self._spring_make(
                 symbol, tf, direction, entry, sl, "buy1",
                 {"detail": {"vol_ratio": vr}}, klines,
