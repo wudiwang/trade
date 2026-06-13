@@ -71,6 +71,8 @@ class SignalEngine:
         self.macro_view: dict = {"direction": "neutral", "note": "", "at": 0}
         # 关注列表币种集合（由 engine 刷新）
         self.watch_set: set = set()
+        # 缠论笔策略：每个分型只发一次
+        self._bi_fired: dict[tuple, int] = {}
 
     def load_macro(self, db) -> None:
         s = db.get_settings()
@@ -100,9 +102,72 @@ class SignalEngine:
 
     def evaluate(self, symbol: str, tf: str, klines: list,
                  klines_15m: list | None = None) -> Signal | None:
-        if self._p("strategy", "spring_v4") == "spring_v4":
+        strat = self._p("strategy", "chan_bi")
+        if strat == "chan_bi":
+            return self._eval_chan_bi(symbol, tf, klines)
+        if strat == "spring_v4":
             return self._eval_spring(symbol, tf, klines)
         return self._evaluate_chan(symbol, tf, klines, klines_15m)
+
+    # ======================= 策略: 缠论笔 + 停顿K =======================
+
+    def _eval_chan_bi(self, symbol: str, tf: str, klines: list) -> "Signal | None":
+        from .chan_bi import detect, vol_reclaim
+        min_bars = self._p("chan.bi_min_bars", 5)
+        if len(klines) < min_bars * 3 + 10:
+            return None
+        buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
+        i = len(klines) - 1
+
+        # A路：笔 → 底/顶分型 → 停顿K（一买/二买，双向）
+        r = detect(klines, min_bars, self._p("chan.stall_max_gap", 3))
+        if r:
+            direction, sig_type, fx, s = r
+            if self._bi_fired.get((symbol, tf, direction)) != fx.open_time:
+                if not self._btc_ok(direction):
+                    return self._drop("btc_filter")
+                self._bi_fired[(symbol, tf, direction)] = fx.open_time
+                entry = float(klines[s]["close"])
+                sl = fx.extreme_price * (1 - buf) if direction == "long" else fx.extreme_price * (1 + buf)
+                label = "一买" if sig_type == "buy1" else "二买"
+                side = "做多" if direction == "long" else "做空"
+                leg = "下跌成笔" if direction == "long" else "上涨成笔"
+                fxn = "底分型" if direction == "long" else "顶分型"
+                reason = f"{'✅' if sig_type == 'buy1' else '🔁'}{label}({side}): {leg} → {fxn} → 停顿K确认"
+                return self._spring_make(
+                    symbol, tf, direction, entry, sl, sig_type, {"detail": {"vol_ratio": 0.0}}, klines,
+                    extra={"fractal_price": fx.extreme_price, "fractal_time": fx.open_time, "path": "笔"},
+                    reason=reason)
+
+        # B路：前期下跌成笔 + 放量(≥3x)下跌K被收回 = 一买（去掉破平台限制，比A早一步入场）
+        rv = vol_reclaim(klines, i, self._p("chan.vol_mult", 3.0),
+                         self._p("chan.vol_lookback", 8))
+        if rv:
+            direction, j = rv
+            # 前期必须成笔：最后一笔是下跌笔(做多,seq末端为底) / 上涨笔(做空,末端为顶)
+            from .chan_bi import build_bi
+            _, seq = build_bi(klines, min_bars)
+            ok_bi = seq and ((direction == "long" and seq[-1].kind == "bottom")
+                             or (direction == "short" and seq[-1].kind == "top"))
+            if not ok_bi:
+                return None
+            vk = klines[j]
+            anchor = int(vk["open_time"])
+            if self._bi_fired.get((symbol, tf, direction)) == anchor:
+                return None
+            if not self._btc_ok(direction):
+                return self._drop("btc_filter")
+            self._bi_fired[(symbol, tf, direction)] = anchor
+            entry = float(vk["open"])  # 收回到放量K的顶部(开盘)
+            vr = round(float(vk["volume"]) / max(vol_avg(klines, j, 20), 1e-9), 1)
+            sl = float(vk["low"]) * (1 - buf) if direction == "long" else float(vk["high"]) * (1 + buf)
+            side = "做多" if direction == "long" else "做空"
+            reason = f"✅一买({side}): 下跌成笔 + 放量{vr}x{'阴线' if direction == 'long' else '阳线'}被收回"
+            return self._spring_make(
+                symbol, tf, direction, entry, sl, "buy1",
+                {"detail": {"vol_ratio": vr}}, klines,
+                extra={"vol_k_time": anchor, "path": "放量收回"}, reason=reason)
+        return None
 
     # ======================= 策略V4: 破位+底分型 =======================
 

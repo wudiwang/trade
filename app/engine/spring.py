@@ -74,6 +74,26 @@ def is_main_k(klines: list, i: int, ref_vol: float, atr_val: float,
     return True
 
 
+def liquidity_pool(klines: list, i: int, direction: str,
+                   lookback: int = 50, tol_pct: float = 0.3, min_touches: int = 2):
+    """检测破位K(i)是否扫掉一个"等低点/等高点"流动性池(多个低点/高点聚在同一位)。
+    返回 (是否扫池, 池价位, 触及次数)。触及越多池越厚，扫破+收回质量越高。"""
+    start = max(0, i - lookback)
+    if start >= i:
+        return False, None, 0
+    if direction == "long":
+        lows = [float(klines[j]["low"]) for j in range(start, i)]
+        pool = min(lows)
+        touches = sum(1 for lo in lows if lo <= pool * (1 + tol_pct / 100))
+        swept = float(klines[i]["low"]) < pool
+        return (swept and touches >= min_touches), pool, touches
+    highs = [float(klines[j]["high"]) for j in range(start, i)]
+    pool = max(highs)
+    touches = sum(1 for hi in highs if hi >= pool * (1 - tol_pct / 100))
+    swept = float(klines[i]["high"]) > pool
+    return (swept and touches >= min_touches), pool, touches
+
+
 def prior_peak(klines: list, i: int, lookback: int, direction: str):
     """下跌前的顶(做多)/底(做空)：最近 lookback 根的极值。"""
     seg = klines[max(0, i - lookback): i + 1]

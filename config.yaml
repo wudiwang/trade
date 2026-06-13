@@ -6,8 +6,15 @@
 # ============================================================
 
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
-strategy: spring_v4    # spring_v4=破位+底分型(用户策略) / chan_v1=缠论(旧版保留)
+strategy: chan_bi      # chan_bi=缠论笔+停顿K(当前) / spring_v4=破位+底分型 / chan_v1=旧
 timeframes: ["5m", "15m", "1h"]
+
+# ---- 缠论笔策略 ----
+chan:
+  bi_min_bars: 5         # 一笔至少N根合并K(去包含后)
+  stall_max_gap: 3       # 底/顶分型后N根内出现停顿K才确认(A路)
+  vol_mult: 3.0          # B路:放量下跌K量≥N×均量
+  vol_lookback: 8        # B路:近N根内找放量下跌K
 
 # ---- 策略V4: 放量破位 → 底分型收回破位K顶部 ----
 spring:
