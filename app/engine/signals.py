@@ -142,16 +142,22 @@ class SignalEngine:
 
     def _eval_mtf(self, symbol: str, struct_tf: str, struct_klines: list,
                   trig_tf: str, trig_klines: list) -> "Signal | None":
-        from .chan_bi import detect, structure_fractal
+        from .chan_bi import detect, structure_fractal, GRADE_CN
         min_bars = self._p("chan.bi_min_bars", 5)
+        v_ma = self._p("chan.fractal_vol_ma", 10)
+        v_mult = self._p("chan.fractal_vol_mult", 2.0)
         if len(struct_klines) < min_bars * 3 + 10 or len(trig_klines) < min_bars * 3 + 10:
             return None
-        r = detect(trig_klines, min_bars, self._p("chan.stall_max_gap", 3))   # 触发级停顿
+        r = detect(trig_klines, min_bars, self._p("chan.stall_max_gap", 3),
+                   apply_quality=False)                                        # 触发级只要停顿,不卡分型质量
         if not r:
             return None
-        direction, _t, fx_t, s = r
-        sfx = structure_fractal(struct_klines, min_bars)                       # 结构级笔末端分型
-        if not sfx or (direction == "long") != (sfx.kind == "bottom"):
+        direction, _t, fx_t, s, _g = r
+        sres = structure_fractal(struct_klines, min_bars, v_ma, v_mult)        # 结构级笔末端分型(最强/标准+放量)
+        if not sres:
+            return None
+        sfx, sgrade = sres
+        if (direction == "long") != (sfx.kind == "bottom"):
             return None
         tol = self._p("chan.mtf_tol_pct", 0.6) / 100.0
         if sfx.extreme_price <= 0 or abs(fx_t.extreme_price - sfx.extreme_price) / sfx.extreme_price > tol:
@@ -186,11 +192,11 @@ class SignalEngine:
         side = "做多" if direction == "long" else "做空"
         fxn = "底分型" if direction == "long" else "顶分型"
         reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side})·{struct_tf}级: "
-                  f"{struct_tf}{fxn} + {trig_tf}停顿确认")
+                  f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn} + {trig_tf}停顿确认")
         return self._spring_make(
             symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}},
             struct_klines, extra={"fractal_price": sfx.extreme_price, "struct_tf": struct_tf,
-                                  "trig_tf": trig_tf, "path": "多级别"}, reason=reason)
+                                  "trig_tf": trig_tf, "grade": sgrade, "path": "多级别"}, reason=reason)
 
     # ======================= 策略: 缠论笔 + 停顿K =======================
 
@@ -208,10 +214,11 @@ class SignalEngine:
             if lv is not None and ((d == "long" and c_now < lv) or (d == "short" and c_now > lv)):
                 del self._bi_chain[(symbol, tf, d)]
 
-        # A路：笔 → 底/顶分型 → 停顿K
-        r = detect(klines, min_bars, self._p("chan.stall_max_gap", 3))
+        # A路：笔 → 底/顶分型(最强/标准+前2根放量) → 停顿K
+        r = detect(klines, min_bars, self._p("chan.stall_max_gap", 3),
+                   self._p("chan.fractal_vol_ma", 10), self._p("chan.fractal_vol_mult", 2.0))
         if r:
-            direction, sig_type, fx, s = r
+            direction, sig_type, fx, s, grade = r
             ck = (symbol, tf, direction)
             if self._bi_fired.get(ck) != fx.open_time:
                 if not self._btc_ok(direction):
@@ -233,10 +240,13 @@ class SignalEngine:
                 side = "做多" if direction == "long" else "做空"
                 leg = "下跌成笔" if direction == "long" else "上涨成笔"
                 fxn = "底分型" if direction == "long" else "顶分型"
-                reason = f"{'✅' if eff == 'buy1' else '🔁'}{label}({side}): {leg} → {fxn} → 停顿K确认"
+                from .chan_bi import GRADE_CN
+                reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side}): {leg} → "
+                          f"{GRADE_CN.get(grade, '')}{fxn} → 停顿K确认")
                 return self._spring_make(
                     symbol, tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}}, klines,
-                    extra={"fractal_price": fx.extreme_price, "fractal_time": fx.open_time, "path": "笔"},
+                    extra={"fractal_price": fx.extreme_price, "fractal_time": fx.open_time,
+                           "grade": grade, "path": "笔"},
                     reason=reason)
 
         # B路：前期下跌成笔 + 放量(≥3x)下跌K被收回 = 一买（去掉破平台限制，比A早一步入场）

@@ -5,7 +5,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import Config
-from app.engine.chan_bi import build_bi, stall_idx, detect, vol_reclaim
+from app.engine.chan import merge_klines, find_fractals
+from app.engine.chan_bi import (build_bi, stall_idx, detect, vol_reclaim,
+                                 fractal_grade, vol_spike_before, quality_ok)
 from app.engine.signals import SignalEngine
 
 
@@ -137,6 +139,40 @@ def test_buy2_needs_buy1_chain():
     # 收盘跌破10 → 下一次评估应清链(此处直接验证状态变量存在)
     assert eng._bi_chain[("X", "5m", "long")] == 10.0
     print("  一买→二买链状态变量就位")
+
+
+def _bottom3(left_vol=100):
+    """20根均量基线 + 一个干净底分型(左/中/右)，右K最高>左K最高=最强。
+    left_vol 控制左K是否放量。"""
+    pad = [k(20, 20.1, 19.9, 20, v=100, t=-20 + i) for i in range(20)]
+    body = [
+        k(18.0, 18.2, 16.0, 16.2, v=left_vol, t=1),   # 左K
+        k(16.2, 16.4, 14.0, 14.2, v=100, t=2),         # 中K(最低)
+        k(14.2, 18.6, 14.1, 18.4, v=100, t=3),         # 右K(收回, high18.6>左18.2)
+    ]
+    full = pad + body
+    merged = merge_klines(full)
+    fx = [f for f in find_fractals(full, merged) if f.kind == "bottom"][-1]
+    return full, merged, fx
+
+
+def test_fractal_grade_strongest():
+    full, merged, fx = _bottom3()
+    g = fractal_grade(full, merged, fx)
+    assert g == "strongest", g                         # 右K最高>左K最高
+    print(f"  右K突破左K高点 → {g}")
+
+
+def test_volume_gate():
+    # 左K不放量(100) → 最强但量不达标 → 拦截
+    full, merged, fx = _bottom3(left_vol=100)
+    ok, g = quality_ok(full, merged, fx, vol_ma=10, vol_mult=2.0)
+    assert g == "strongest" and ok is False, (g, ok)
+    # 左K放量(300=3x均量) → 前2根放量达标 → 通过
+    full2, merged2, fx2 = _bottom3(left_vol=300)
+    ok2, g2 = quality_ok(full2, merged2, fx2, vol_ma=10, vol_mult=2.0)
+    assert g2 == "strongest" and ok2 is True, (g2, ok2)
+    print("  无放量→拦截; 左K 3x放量→通过")
 
 
 def main():

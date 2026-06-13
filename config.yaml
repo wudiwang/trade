@@ -16,6 +16,8 @@ chan:
   vol_mult: 3.0          # B路:放量下跌K量≥N×均量
   vol_lookback: 8        # B路:近N根内找放量下跌K
   mtf_tol_pct: 0.6       # 多级别:次级停顿与高级别分型的价位容差%
+  fractal_vol_ma: 10     # 量能规则:底分型前2根均量回看根数
+  fractal_vol_mult: 2.0  # 量能规则:底分型前2根任意一根量≥N×均量(只认最强/标准分型)
 
 # ---- 策略V4: 放量破位 → 底分型收回破位K顶部 ----
 spring:
