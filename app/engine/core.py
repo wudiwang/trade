@@ -148,6 +148,19 @@ class Engine:
                 self.squeeze[sym] = {"symbol": sym, "at": int(time.time()), **detail}
                 if new:
                     new_cands.append(self.squeeze[sym])
+                # 🔥强候选 → 自动建草稿预演(无重复时)，用户审核
+                if detail.get("strong") and new and kl and not self.db.active_playbooks(sym):
+                    seg = kl[-200:]
+                    hi = max(float(k["high"]) for k in seg)
+                    lo = min(float(k["low"]) for k in seg)
+                    cur = float(seg[-1]["close"])
+                    self.db.insert_playbook({
+                        "symbol": sym, "tf": "1h", "direction": "long",
+                        "title": f"逼空自动建档 OI+{detail['oi_change_pct']:.0f}% "
+                                 f"费率{(detail['funding'] or 0)*100:.3f}% 低位{int(detail['pos']*100)}%",
+                        "trigger_type": "price_reach", "trigger_price": round(hi, 8),
+                        "entry": round(cur, 8), "sl": round(lo, 8), "source": "auto"})
+                    self.db.log("info", "squeeze", f"auto-playbook {sym}")
             else:
                 self.squeeze.pop(sym, None)
 
