@@ -1,8 +1,8 @@
 """信号引擎。
 
-默认策略 spring_v3（用户的弹簧策略）：触发巨量K → 收回打分(50观察/100一买)
-→ 坐标K跟踪 → 二买/二次弹簧。每个 (币种,级别) 一个状态机。
-保留 chan_v1（缠论分型+因子）可通过 strategy 配置切回。
+默认策略 spring_v4（用户策略）：放量破前低 → 底分型(倒三角)收回破位K顶部 → 一买；
+之后更高低点的底分型 → 二买（主力K可选标注）。每个 (币种,级别) 一个状态机。
+保留 chan_v1（缠论分型+因子）可通过 strategy=chan_v1 切回。
 """
 import logging
 import time
@@ -14,8 +14,8 @@ from .chan import (
 )
 from .factors import atr, score_signal, sl_atr_sane
 from .spring import (
-    detect_trigger, recovery_score, upper_wick_pct, lower_wick_pct,
-    is_bottom_fractal_3, is_top_fractal_3, vol_avg,
+    vol_avg, detect_breakdown, is_bottom_fractal, is_top_fractal,
+    is_main_k, prior_peak,
 )
 from .volume_profile import (
     build_profile, hvn_list_above, hvn_list_below,
@@ -26,10 +26,9 @@ log = logging.getLogger("signals")
 
 TF_MS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
 
-# 信号类型 → paper统计轨道
-SIGNAL_TYPES = ("watch", "buy1", "buy2", "spring")
-TYPE_LABEL = {"watch": "⚡观察(50+分)", "buy1": "✅一买(吞没100分)",
-              "buy2": "🔁二买(回测确认)", "spring": "💎二次弹簧(假破收回)"}
+# paper 统计轨道
+SIGNAL_TYPES = ("buy1", "buy2")
+TYPE_LABEL = {"buy1": "✅一买", "buy2": "🔁二买"}
 
 
 @dataclass
@@ -37,7 +36,7 @@ class Signal:
     symbol: str
     tf: str
     direction: str       # long / short
-    kind: str            # primary(推送TG) / secondary
+    kind: str            # primary(推送TG)
     entry: float
     sl: float
     tp: float
@@ -62,11 +61,11 @@ class SignalEngine:
         self.db = db
         self._cooldown: dict[tuple, int] = {}
         self.funding: dict[str, float] = {}
-        self.btc_trend: int = 0          # BTC 15m聚合1h EMA50 趋势
+        self.btc_trend: int = 0
         self.funnel: dict[str, int] = {}
-        # V3 状态机: (symbol, tf) -> state dict
+        # 状态机: (symbol, tf) -> state dict
         self._state: dict[tuple, dict] = {}
-        # 失效/解除等文字通知回调（engine 转发到 TG）
+        # 失效/解除等文字通知（engine 转发到 TG）
         self.notices: list[str] = []
 
     def _p(self, key: str, default=None):
@@ -80,275 +79,190 @@ class SignalEngine:
 
     def evaluate(self, symbol: str, tf: str, klines: list,
                  klines_15m: list | None = None) -> Signal | None:
-        if self._p("strategy", "spring_v3") == "spring_v3":
+        if self._p("strategy", "spring_v4") == "spring_v4":
             return self._eval_spring(symbol, tf, klines)
         return self._evaluate_chan(symbol, tf, klines, klines_15m)
 
-    # ======================= 策略V3 =======================
+    # ======================= 策略V4: 破位+底分型 =======================
 
     def _btc_ok(self, direction: str) -> bool:
         if not self._p("spring.btc_filter", True):
             return True
         return self.btc_trend != (-1 if direction == "long" else 1)
 
-    def _make(self, *, symbol, tf, direction, entry, sl, vol_ratio, reason,
-              sig_type, score, extra, klines) -> "Signal | None":
-        """组装信号：止盈=第二密集成交区（回测证明第一密集区太近，赢单只有0.59R），
-        且预期 RR < spring.min_rr 的信号不进场。"""
-        profile = build_profile(
-            klines[-self._p("signal.tp_vp_lookback", 200):],
-            self._p("signal.tp_vp_bins", 50))
-        risk = abs(entry - sl)
-        if direction == "long":
-            hvns = [p for p in hvn_list_above(profile, entry) if p > entry]
-            tp = hvns[1] if len(hvns) >= 2 else (hvns[0] if hvns else None)
-            if tp is None:
-                tp = entry + 2 * risk   # 上方无密集区(新低区)→2R目标
-            rr = (tp - entry) / max(risk, 1e-12)
-        else:
-            hvns = [p for p in hvn_list_below(profile, entry) if p < entry]
-            tp = hvns[1] if len(hvns) >= 2 else (hvns[0] if hvns else None)
-            if tp is None:
-                tp = entry - 2 * risk
-            rr = (entry - tp) / max(risk, 1e-12)
-        if rr < self._p("spring.min_rr", 1.5):
-            return self._drop("rr_too_low")
-
-        equity = self._p("risk.account_equity", 1000)
-        risk_usdt = equity * self._p("risk.risk_pct", 0.5) / 100.0
-        sl_dist = abs(entry - sl)
-        qty = risk_usdt / sl_dist if sl_dist > 0 else 0.0
-        self.funnel[f"signal_{sig_type}"] = self.funnel.get(f"signal_{sig_type}", 0) + 1
-        return Signal(
-            symbol=symbol, tf=tf, direction=direction, kind="primary",
-            entry=entry, sl=round(sl, 8), tp=round(tp, 8), rr=round(rr, 2),
-            vol_ratio=round(vol_ratio, 2), strength="strong" if score >= 100 else "normal",
-            suggested_qty=round(qty, 8), risk_usdt=round(risk_usdt, 2),
-            reason=reason, created_at=int(time.time()),
-            extra={"type": sig_type, "score": round(score, 1),
-                   "btc_trend": self.btc_trend, **extra},
-        )
-
     def _eval_spring(self, symbol: str, tf: str, klines: list) -> "Signal | None":
-        need = max(self._p("spring.newlow_lookback", 50) + 5, 60)
+        need = max(self._p("spring.newlow_lookback", 20) + 30, 60)
         if len(klines) < need:
             return None
         i = len(klines) - 1
         key = (symbol, tf)
         st = self._state.get(key)
         if st:
-            return self._advance_state(key, st, klines, i)
-        return self._try_trigger(key, klines, i)
+            if st["phase"] == "await_buy1":
+                return self._spring_buy1(key, st, klines, i)
+            return self._spring_buy2(key, st, klines, i)
+        return self._spring_seek(key, klines, i)
 
-    # ---------- 阶段2: 触发 ----------
+    # ---------- 找放量破位K ----------
 
-    def _try_trigger(self, key, klines, i) -> None:
-        symbol, tf = key
-        atr_val = atr(klines, self._p("factors.atr_period", 14))
-        direction, detail = detect_trigger(
-            klines, i, atr_val=atr_val,
-            vol_mult=self._p("spring.vol_mult", 3.0),
-            vol_max_lookback=self._p("spring.vol_max_lookback", 30),
-            body_min=self._p("spring.body_min", 0.5),
-            range_atr_min=self._p("spring.range_atr_min", 1.5),
-            newlow_lookback=self._p("spring.newlow_lookback", 50),
-            quiet_bars=self._p("spring.quiet_bars", 15),
-            quiet_mult=self._p("spring.quiet_mult", 1.5),
-        )
+    def _spring_seek(self, key, klines, i) -> None:
+        direction, detail = detect_breakdown(
+            klines, i,
+            vol_mult=self._p("spring.vol_mult", 4.0),
+            newlow_lookback=self._p("spring.newlow_lookback", 20),
+            body_min=self._p("spring.body_min", 0.5))
         if not direction:
             return None
-        self.funnel["trigger"] = self.funnel.get("trigger", 0) + 1
+        self.funnel["breakdown"] = self.funnel.get("breakdown", 0) + 1
         if not self._btc_ok(direction):
             return self._drop("btc_filter")
         k = klines[i]
-        self._state[(symbol, tf)] = {
-            "phase": "recovery", "direction": direction,
-            "trig": {"time": int(k["open_time"]), "open": float(k["open"]),
-                     "high": float(k["high"]), "low": float(k["low"]),
-                     "close": float(k["close"]), "vol": float(k["volume"]),
-                     "detail": detail},
-            "bars": 0, "watch_sent": False, "buy1_sent": False,
+        self._state[key] = {
+            "direction": direction, "phase": "await_buy1",
+            "bd": {"time": int(k["open_time"]), "open": float(k["open"]),
+                   "high": float(k["high"]), "low": float(k["low"]),
+                   "vol": float(k["volume"]), "detail": detail},
+            "bars": 0, "prot": float(k["low"]) if direction == "long" else float(k["high"]),
+            "main_k": None,
         }
-        self.db.log("info", "spring", f"⚡触发 {symbol} {tf} {direction} 巨量破位K 量{detail['vol_ratio']}x")
-        return None  # 触发本身不出信号，只建档观察
+        return None  # 破位本身不出信号，等底分型
 
-    # ---------- 状态推进 ----------
+    # ---------- 一买：破位后第一个底分型收回破位K顶部 ----------
 
-    def _advance_state(self, key, st, klines, i) -> "Signal | None":
-        if st["phase"] == "recovery":
-            return self._phase_recovery(key, st, klines, i)
-        return self._phase_coord(key, st, klines, i)
-
-    # ---------- 阶段3: 收回打分 ----------
-
-    def _phase_recovery(self, key, st, klines, i) -> "Signal | None":
+    def _spring_buy1(self, key, st, klines, i) -> "Signal | None":
         symbol, tf = key
         d = st["direction"]
-        trig = st["trig"]
-        k = klines[i]
-        o, h, l, c, v = (float(k["open"]), float(k["high"]), float(k["low"]),
-                         float(k["close"]), float(k["volume"]))
+        bd = st["bd"]
         st["bars"] += 1
+        k = klines[i]
+        c, l, h = float(k["close"]), float(k["low"]), float(k["high"])
 
-        # 再创极值 → 观察作废，且本K可能是新触发
-        if (d == "long" and l < trig["low"]) or (d == "short" and h > trig["high"]):
-            del self._state[key]
-            self._drop("recovery_newlow")
-            return self._try_trigger(key, klines, i)
-
-        # 路径b: 量比触发K更大的反向K → 坐标升级 + 直接按其收盘打分
-        bigger = v > trig["vol"] and ((d == "long" and c > o) or (d == "short" and c < o))
-        # 路径a: 常规缩量收回（反弹K量必须 < 0.8 x 触发量）
-        vol_cap_ok = v < self._p("spring.recovery_vol_max", 0.8) * trig["vol"]
-
-        if not bigger and not vol_cap_ok:
-            # 量处于灰色区间：既不算缩量收回也不是坐标升级，跳过本K
-            if st["bars"] >= self._p("spring.recovery_bars", 3):
-                del self._state[key]
-                return self._drop("recovery_timeout")
+        # 期间出现更极端的新破位 → 参考下移并重新计时
+        nd, ndetail = detect_breakdown(
+            klines, i, vol_mult=self._p("spring.vol_mult", 4.0),
+            newlow_lookback=self._p("spring.newlow_lookback", 20),
+            body_min=self._p("spring.body_min", 0.5))
+        if nd == d and ((d == "long" and l < bd["low"]) or (d == "short" and h > bd["high"])):
+            st["bd"] = {"time": int(k["open_time"]), "open": float(k["open"]),
+                        "high": h, "low": l, "vol": float(k["volume"]), "detail": ndetail}
+            st["prot"] = l if d == "long" else h
+            st["bars"] = 0
             return None
 
-        score = recovery_score(d, trig, c)
-        coord_k = k if bigger else None
-
-        if score >= 100 and not st["buy1_sent"]:
-            sig_type = "buy1"
-        elif score >= self._p("spring.watch_score", 50) and not st["watch_sent"] and not st["buy1_sent"]:
-            sig_type = "watch"
-        else:
-            sig_type = None
-
-        if sig_type:
-            labels = []
-            if bigger:
-                labels.append("坐标升级(量超触发K)")
-                if (d == "long" and upper_wick_pct(k) >= 0.35) or \
-                   (d == "short" and lower_wick_pct(k) >= 0.35):
-                    labels.append("长影线(天量换手)")
-            if (d == "long" and is_bottom_fractal_3(klines, i)) or \
-               (d == "short" and is_top_fractal_3(klines, i)):
-                labels.append("分型形态")
-            if v < self._p("spring.easy_vol", 0.5) * trig["vol"]:
-                labels.append("轻松收回(缩量)")
-            if st["bars"] <= 2:
-                labels.append(f"第{st['bars']}根完成")
-
-            buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
-            sl = trig["low"] * (1 - buf) if d == "long" else trig["high"] * (1 + buf)
-            emoji = "✅一买" if sig_type == "buy1" else "⚡观察"
-            reason = (f"{emoji}[{score:.0f}分] {'做多' if d == 'long' else '做空'} "
-                      f"巨量破位后{'吞没收回' if score >= 100 else '收回过中点'} | "
-                      f"触发量{trig['detail']['vol_ratio']}x | {'、'.join(labels) if labels else '常规收回'}")
-            sig = self._make(symbol=symbol, tf=tf, direction=d, entry=c, sl=sl,
-                             vol_ratio=v / max(trig["vol"], 1e-12), reason=reason,
-                             sig_type=sig_type, score=score,
-                             extra={"trigger": trig, "labels": labels,
-                                    "coord_upgraded": bool(coord_k)},
-                             klines=klines)
-            if sig_type == "buy1":
-                st["buy1_sent"] = True
-            else:
-                st["watch_sent"] = True
-            # 进入坐标期（坐标K = 升级K 或 触发K）
-            ck = coord_k or None
-            st.update(phase="coord",
-                      coord={"time": int((ck or {}).get("open_time", trig["time"])),
-                             "low": float(ck["low"]) if ck else trig["low"],
-                             "high": float(ck["high"]) if ck else trig["high"],
-                             "close": float(ck["close"]) if ck else trig["close"],
-                             "vol": float(ck["volume"]) if ck else trig["vol"]},
-                      coord_bars=0, fake_break=0, pulled=False, buy2_sent=False)
-            return sig
-
-        if st["bars"] >= self._p("spring.recovery_bars", 3):
+        if st["bars"] > self._p("spring.fractal_window", 8):
             del self._state[key]
-            return self._drop("recovery_timeout")
-        return None
+            return self._drop("buy1_window")
 
-    # ---------- 阶段4/5: 坐标期（升级/二买/弹簧/失效） ----------
+        buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
+        if d == "long":
+            if not is_bottom_fractal(klines, i) or c < bd["open"]:
+                return None  # 没出底分型 或 还没收回到破位K顶部
+            frac_low = float(klines[i - 1]["low"])
+            prot = min(frac_low, bd["low"])
+            entry, sl = bd["open"], prot * (1 - buf)
+        else:
+            if not is_top_fractal(klines, i) or c > bd["open"]:
+                return None
+            frac_high = float(klines[i - 1]["high"])
+            prot = max(frac_high, bd["high"])
+            entry, sl = bd["open"], prot * (1 + buf)
 
-    def _phase_coord(self, key, st, klines, i) -> "Signal | None":
+        reason = (f"✅一买 {'做多' if d == 'long' else '做空'}: "
+                  f"放量{bd['detail']['vol_ratio']}x破{'前低' if d == 'long' else '前高'} → "
+                  f"底分型收回{'破位K顶部' if d == 'long' else '破位K底部'}")
+        sig = self._spring_make(symbol, tf, d, entry, sl, "buy1", bd, klines,
+                                extra={"breakdown": bd}, reason=reason)
+        # 进入二买跟踪期
+        st.update(phase="await_buy2", prot=prot, buy2_bars=0)
+        return sig
+
+    # ---------- 二买：更高低点的底分型(主力K可选) ----------
+
+    def _spring_buy2(self, key, st, klines, i) -> "Signal | None":
         symbol, tf = key
         d = st["direction"]
-        co = st["coord"]
+        st["buy2_bars"] += 1
         k = klines[i]
-        o, h, l, c, v = (float(k["open"]), float(k["high"]), float(k["low"]),
-                         float(k["close"]), float(k["volume"]))
-        st["coord_bars"] += 1
-        if st["coord_bars"] > self._p("spring.coord_expire_bars", 60):
+        c, l, h = float(k["close"]), float(k["low"]), float(k["high"])
+
+        # 实质跌破保护位 → 整组失效
+        if (d == "long" and c < st["prot"]) or (d == "short" and c > st["prot"]):
             del self._state[key]
-            return self._drop("coord_expired")
+            self.notices.append(
+                f"❌失效 {symbol} {tf} 收盘{'跌破' if d == 'long' else '升破'}保护位，解除跟踪")
+            return self._drop("invalidated")
+        if st["buy2_bars"] > self._p("spring.buy2_window", 60):
+            del self._state[key]
+            return self._drop("buy2_window")
 
-        # 坐标升级：量更大 → 坐标转移
-        if v > co["vol"]:
-            st["coord"] = {"time": int(k["open_time"]), "low": l, "high": h,
-                           "close": c, "vol": v}
-            co = st["coord"]
-            self.db.log("info", "spring", f"🚩坐标升级 {symbol} {tf} 新坐标量更大")
+        # 主力K（可选标注，量超破位K且振幅够）
+        if st["main_k"] is None:
+            atr_val = atr(klines, self._p("factors.atr_period", 14))
+            if is_main_k(klines, i, st["bd"]["vol"], atr_val,
+                         self._p("spring.maink_range_atr", 1.2)):
+                st["main_k"] = {"time": int(k["open_time"]), "low": l, "high": h}
+                self.db.log("info", "spring", f"🚩主力K {symbol} {tf}")
 
-        breach = (d == "long" and l < co["low"]) or (d == "short" and h > co["high"])
-        close_breach = (d == "long" and c < co["low"]) or (d == "short" and c > co["high"])
-
-        if close_breach:
-            st["fake_break"] += 1
-            if st["fake_break"] > 2:   # 收盘破且2根内没收回 = 实质跌破
-                del self._state[key]
-                self.notices.append(
-                    f"❌失效 {symbol} {tf} 收盘实质跌破坐标K{'低点' if d == 'long' else '高点'}，解除跟踪")
-                return self._drop("coord_invalidated")
-            return None
-        elif breach:
-            # 盘中插破但收盘收回 → 武装二次弹簧
-            st["spring_armed"] = True
-            st["pull_ext"] = l if d == "long" else h
-            st["fake_break"] = 0
-            return None
-        elif st["fake_break"] > 0:
-            # 之前收盘破过、本根收盘收回了 → 也是假破收回
-            st["fake_break"] = 0
-            st["spring_armed"] = True
-            st["pull_ext"] = l if d == "long" else h
-
-        # 回测跟踪（缩量回落到坐标K收盘价内侧）
-        shrink = v <= self._p("spring.pull_shrink", 0.6) * co["vol"]
-        if d == "long" and l <= co["close"] and shrink:
-            st["pulled"] = True
-            st["pull_ext"] = min(st.get("pull_ext") or l, l)
-        if d == "short" and h >= co["close"] and shrink:
-            st["pulled"] = True
-            st["pull_ext"] = max(st.get("pull_ext") or h, h)
-
-        # 重启K：方向K + 收过前K极值 + 量大于前K
-        prev = klines[i - 1]
-        if d == "long":
-            restart = c > o and c > float(prev["high"]) and v > float(prev["volume"])
-        else:
-            restart = c < o and c < float(prev["low"]) and v > float(prev["volume"])
-        if not restart or st.get("buy2_sent"):
-            return None
-
-        armed_spring = st.get("spring_armed", False)
-        if not (armed_spring or st.get("pulled")):
-            return None
-
-        sig_type = "spring" if armed_spring else "buy2"
+        # 更高低点的底分型
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
-        ref = st.get("pull_ext") or (co["low"] if d == "long" else co["high"])
-        sl = ref * (1 - buf) if d == "long" else ref * (1 + buf)
-        vr = v / max(vol_avg(klines, i, 20), 1e-12)
-        reason = (f"{'💎二次弹簧' if sig_type == 'spring' else '🔁二买'} "
-                  f"{'做多' if d == 'long' else '做空'}: "
-                  f"{'假破坐标K后快速收回' if sig_type == 'spring' else '缩量回测坐标K不破'}"
-                  f" + 放量重启({vr:.1f}x均量)")
-        sig = self._make(symbol=symbol, tf=tf, direction=d, entry=c, sl=sl,
-                         vol_ratio=vr, reason=reason, sig_type=sig_type,
-                         score=100 if sig_type == "spring" else 80,
-                         extra={"coord": co, "trigger": st["trig"],
-                                "pull_ext": st.get("pull_ext")},
-                         klines=klines)
-        st["buy2_sent"] = True
-        del self._state[key]   # 一轮完整结束
+        if d == "long":
+            if not is_bottom_fractal(klines, i):
+                return None
+            frac_low = float(klines[i - 1]["low"])
+            if frac_low <= st["prot"] or c < float(klines[i - 1]["high"]):
+                return None  # 必须更高低点 + 收回过中间K高点
+            entry, sl = float(klines[i - 1]["open"]), frac_low * (1 - buf)
+        else:
+            if not is_top_fractal(klines, i):
+                return None
+            frac_high = float(klines[i - 1]["high"])
+            if frac_high >= st["prot"] or c > float(klines[i - 1]["low"]):
+                return None
+            entry, sl = float(klines[i - 1]["open"]), frac_high * (1 + buf)
+
+        tag = "(含主力K)" if st["main_k"] else ""
+        reason = (f"🔁二买 {'做多' if d == 'long' else '做空'}{tag}: "
+                  f"更高低点的底分型，回测不破保护位")
+        sig = self._spring_make(symbol, tf, d, entry, sl, "buy2", st["bd"], klines,
+                                extra={"breakdown": st["bd"], "main_k": st["main_k"]},
+                                reason=reason)
+        del self._state[key]   # 一轮结束
         return sig
+
+    # ---------- 组装：止盈=下跌前的顶/密集区 ----------
+
+    def _spring_make(self, symbol, tf, direction, entry, sl, sig_type, bd,
+                     klines, *, extra, reason) -> "Signal | None":
+        i = len(klines) - 1
+        look = self._p("spring.tp_lookback", 100)
+        seg = klines[max(0, i - look): i + 1]
+        profile = build_profile(seg, self._p("signal.tp_vp_bins", 50))
+        risk = abs(entry - sl)
+        peak = prior_peak(klines, i, look, direction)
+        if direction == "long":
+            hvns = [p for p in hvn_list_above(profile, entry) if entry < p <= (peak or 1e18)]
+            tp = max(hvns) if hvns else (peak if peak and peak > entry else entry + 2 * risk)
+            rr = (tp - entry) / max(risk, 1e-12)
+        else:
+            hvns = [p for p in hvn_list_below(profile, entry) if (peak or 0) <= p < entry]
+            tp = min(hvns) if hvns else (peak if peak and peak < entry else entry - 2 * risk)
+            rr = (entry - tp) / max(risk, 1e-12)
+        if rr < self._p("spring.min_rr", 1.5):
+            return self._drop("rr_too_low")
+
+        equity = self._p("risk.account_equity", 1000)
+        risk_usdt = equity * self._p("risk.risk_pct", 0.5) / 100.0
+        qty = risk_usdt / risk if risk > 0 else 0.0
+        self.funnel[f"signal_{sig_type}"] = self.funnel.get(f"signal_{sig_type}", 0) + 1
+        return Signal(
+            symbol=symbol, tf=tf, direction=direction, kind="primary",
+            entry=round(entry, 8), sl=round(sl, 8), tp=round(tp, 8), rr=round(rr, 2),
+            vol_ratio=round(bd["detail"].get("vol_ratio", 0), 2),
+            strength="strong" if sig_type == "buy1" else "normal",
+            suggested_qty=round(qty, 8), risk_usdt=round(risk_usdt, 2),
+            reason=reason, created_at=int(time.time()),
+            extra={"type": sig_type, "btc_trend": self.btc_trend, **extra},
+        )
 
     # ======================= 策略V1: 缠论(保留) =======================
 

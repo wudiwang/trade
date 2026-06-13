@@ -161,10 +161,9 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
     all_sigs.sort(key=lambda s: s["created_at"])
 
     snapshot = {k: cfg.get(k) for k in (
-        "spring.vol_mult", "spring.quiet_bars", "spring.quiet_mult", "spring.range_atr_min",
-        "spring.body_min", "spring.newlow_lookback", "spring.recovery_bars",
-        "spring.recovery_vol_max", "spring.watch_score", "spring.pull_shrink",
-        "spring.btc_filter")}
+        "spring.vol_mult", "spring.newlow_lookback", "spring.body_min",
+        "spring.fractal_window", "spring.buy2_window", "spring.tp_lookback",
+        "spring.min_rr", "spring.btc_filter")}
     result = {
         "period_days": days, "tfs": tfs, "symbols": len(symbols),
         "elapsed_s": round(time.time() - t0, 1),

@@ -221,7 +221,6 @@ class Engine:
             "ws_last_msg_age_s": round(time.time() - self.ws.last_msg_at, 1) if self.ws.last_msg_at else None,
             "last_eval_ms": round(self.last_eval_ms, 1),
             "mode": self.cfg.mode,
-            "tracks": {t: self.paper.stats(t)
-                       for t in ("watch", "buy1", "buy2", "spring")},
+            "tracks": {t: self.paper.stats(t) for t in ("buy1", "buy2")},
             "funnel": dict(self.signal_engine.funnel),
         }

@@ -6,26 +6,20 @@
 # ============================================================
 
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
-strategy: spring_v3    # spring_v3=弹簧策略(用户核心策略) / chan_v1=缠论分型(旧版保留)
-timeframes: ["5m", "15m", "1h", "4h"]   # 四级别并行，验证哪个级别准确率最高
+strategy: spring_v4    # spring_v4=破位+底分型(用户策略) / chan_v1=缠论(旧版保留)
+timeframes: ["5m", "15m", "1h"]
 
-# ---- 弹簧策略V3 ----
+# ---- 策略V4: 放量破位 → 底分型收回破位K顶部 ----
 spring:
-  quiet_bars: 15           # 触发前稳态观察根数
-  quiet_mult: 1.5          # 稳态期任何K量不得超过均量的倍数
-  vol_mult: 3.0            # 触发K量 >= 3x均量
-  vol_max_lookback: 30     # 触发K量须为近30根最大
-  body_min: 0.5            # 触发K实体占比
-  range_atr_min: 1.5       # 触发K振幅 >= 1.5xATR
-  newlow_lookback: 50      # 破位=创近50根新低(做空看新高)
-  recovery_bars: 3         # 收回观察窗口
-  recovery_vol_max: 0.8    # 收回K量 < 0.8x触发量(更大则走坐标升级路径)
-  easy_vol: 0.5            # 轻松收回: 收回量 < 0.5x触发量
-  watch_score: 50          # 达到该分推观察提醒并模拟建仓(线上已调65)
-  min_rr: 1.5              # 预期盈亏比低于此值不进场(止盈=第二密集区)
-  pull_shrink: 0.6         # 二买回测须缩量至 0.6x坐标量以下
-  coord_expire_bars: 60    # 坐标K跟踪有效期
-  btc_filter: true         # BTC大盘方向过滤
+  vol_mult: 4.0            # 破位K量 >= N×前20根均量
+  newlow_lookback: 20      # 破位=创近N根新低(做空看新高)
+  body_min: 0.5            # 破位K实体占比下限
+  fractal_window: 8        # 破位后N根内须出底分型(收回破位K顶部)，否则作废
+  buy2_window: 60          # 一买后N根内跟踪二买
+  maink_range_atr: 1.2     # 主力K振幅 >= N×ATR(可选标注)
+  tp_lookback: 100         # 止盈回看根数(找下跌前的顶/密集区)
+  min_rr: 1.5              # 预期盈亏比低于此值不进场
+  btc_filter: true         # BTC大盘方向过滤(下跌不做多/上涨不做空)
 
 # ---- 币种筛选 ----
 universe:

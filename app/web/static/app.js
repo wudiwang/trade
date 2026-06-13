@@ -19,8 +19,7 @@ function toast(msg) {
 async function logout() { await fetch('/api/logout', {method: 'POST'}); location.href = '/login.html'; }
 
 // ---------- 状态与统计 ----------
-const TRACK_NAMES = {watch: '⚡ 观察轨 (50+分)', buy1: '✅ 一买轨 (吞没)',
-                     buy2: '🔁 二买轨 (回测)', spring: '💎 弹簧轨 (假破收回)'};
+const TRACK_NAMES = {buy1: '✅ 一买', buy2: '🔁 二买'};
 async function loadStatus() {
   const s = await api('/api/status');
   if (s.error) { $('stat-cards').innerHTML = '<div class="card"><h3>引擎</h3><div class="big red">未运行</div></div>'; return; }
@@ -31,7 +30,7 @@ async function loadStatus() {
   $('st-uptime').textContent = `运行 ${h}h${m}m`;
   let cards = `<div class="card"><h3>引擎</h3>
     <div class="big ${s.ws_conns > 0 ? '' : 'red'}">${s.ws_conns > 0 ? '正常' : '异常'}</div>
-    <div class="sub">评估 ${s.last_eval_ms}ms · 跟踪中状态机 ${Object.entries(s.funnel || {}).filter(([k]) => k === 'trigger').map(([, v]) => v)[0] || 0} 次触发</div></div>`;
+    <div class="sub">评估 ${s.last_eval_ms}ms · 累计破位 ${(s.funnel || {}).breakdown || 0} 次</div></div>`;
   for (const [key, t] of Object.entries(s.tracks || {})) {
     const cls = t.total_pnl > 0 ? 'green' : t.total_pnl < 0 ? 'red' : '';
     cards += `<div class="card"><h3>${TRACK_NAMES[key] || key}</h3>
@@ -42,7 +41,7 @@ async function loadStatus() {
 }
 
 // ---------- 信号 ----------
-const TYPE_TAG = {watch: '⚡观察', buy1: '✅一买', buy2: '🔁二买', spring: '💎弹簧', chan: '分型'};
+const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', chan: '分型'};
 let signalCache = {};
 function sigType(s) {
   try { return JSON.parse(s.extra || '{}').type || ''; } catch (e) { return ''; }
@@ -73,19 +72,21 @@ function openChartFromSignal(id) {
 // ---------- 交易 ----------
 let tradeCache = {};
 async function loadTrades() {
-  const rows = await api('/api/trades?track=' + $('f-track').value);
+  const q = `?track=${$('f-track').value}&result=${$('f-result').value}`;
+  const rows = await api('/api/trades' + q);
   tradeCache = {};
   rows.forEach(t => tradeCache[t.id] = t);
   $('t-trades').innerHTML = rows.map(t => `
-    <tr class="clickable" onclick="openChartFromTrade(${t.id})" title="点击查看K线与买卖点标注">
+    <tr class="clickable" onclick="openChartFromTrade(${t.id})" title="点击查看当时K线形态与买卖点">
       <td>${t.id}</td><td><b>${t.symbol}</b></td><td>${t.tf}</td>
+      <td><span class="tag primary">${TYPE_TAG[t.track] || t.track}</span></td>
       <td><span class="tag ${t.direction}">${t.direction === 'long' ? '多' : '空'}</span></td>
-      <td>${fmtP(t.entry)}</td><td>${fmtP(t.sl)}</td><td>${fmtP(t.tp)}</td>
+      <td>${fmtP(t.entry)}</td><td class="red">${fmtP(t.sl)}</td><td class="green">${fmtP(t.tp)}</td>
       <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : '🛑止损'}</td>
       <td class="${(t.pnl ?? 0) > 0 ? 'green' : (t.pnl ?? 0) < 0 ? 'red' : ''}">${t.pnl == null ? '–' : t.pnl.toFixed(2)}</td>
       <td>${t.pnl_r == null ? '–' : t.pnl_r.toFixed(2)}</td>
       <td>${fmtT(t.opened_at)}</td>
-    </tr>`).join('');
+    </tr>`).join('') || '<tr><td colspan="12" class="muted">暂无记录</td></tr>';
   loadEquity();
 }
 function openChartFromTrade(id) {
@@ -163,9 +164,9 @@ async function loadTfStats() {
 // ---------- 权益曲线 ----------
 let eqChart, eqSeries;
 async function loadEquity() {
-  const track = $('f-track').value;
+  const track = $('f-track').value || 'buy1';
   const data = await api('/api/equity?track=' + track);
-  $('eq-note').textContent = track + ' 轨 · ' + data.length + ' 个结算点';
+  $('eq-note').textContent = TRACK_NAMES[track] + ' · ' + data.length + ' 个结算点';
   if (!eqChart) {
     eqChart = LightweightCharts.createChart($('equity-chart'), {
       layout: {background: {color: 'transparent'}, textColor: '#7a869c'},
@@ -199,27 +200,26 @@ async function openChart(symbol, tf, ref) {
   klChart.priceScale('vol').applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
   vs.setData(d.klines.map(k => ({time: k.open_time / 1000, value: k.volume, color: k.close >= k.open ? '#2ecc7144' : '#e74c3c44'})));
 
-  // 信号标记（含类型emoji + 分数）
+  // 信号标记：买点箭头 + 破位K + 主力K(可选)
   const markers = [];
   for (const s of d.signals.filter(x => x.status !== 'error')) {
     let ex = {};
     try { ex = JSON.parse(s.extra || '{}'); } catch (e) {}
-    const tag = TYPE_TAG[ex.type] || '';
     markers.push({
       time: s.created_at, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
       color: s.direction === 'long' ? '#2ecc71' : '#e74c3c',
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
-      text: `${tag}${ex.score ? ' ' + ex.score + '分' : ''} #${s.id}`,
+      text: `${TYPE_TAG[ex.type] || s.kind} #${s.id}`,
     });
-    // 触发巨量K标注（出发点）
-    if (ex.trigger && ex.trigger.time) {
-      markers.push({
-        time: Math.floor(ex.trigger.time / 1000), position: 'belowBar',
-        color: '#f1c40f', shape: 'circle', text: '⚡触发K',
-      });
+    if (ex.breakdown && ex.breakdown.time) {
+      markers.push({time: Math.floor(ex.breakdown.time / 1000), position: 'aboveBar',
+        color: '#f1c40f', shape: 'circle', text: '破位K'});
+    }
+    if (ex.main_k && ex.main_k.time) {
+      markers.push({time: Math.floor(ex.main_k.time / 1000), position: 'aboveBar',
+        color: '#9b59b6', shape: 'square', text: '🚩主力K'});
     }
   }
-  // 去重(同一时间多标记保留)并按时间排序
   cs.setMarkers(markers.sort((a, b) => a.time - b.time));
 
   // 买入/止盈/止损 价格线
@@ -238,17 +238,14 @@ function closeModal() { $('modal').classList.remove('show'); if (klChart) { klCh
 // ---------- 设置 ----------
 const SETTING_LABELS = {
   'mode': '运行模式',
-  'spring.vol_mult': '触发K量倍数', 'spring.quiet_bars': '稳态观察根数',
-  'spring.quiet_mult': '稳态最大放量', 'spring.range_atr_min': '触发K振幅xATR',
-  'spring.body_min': '触发K实体占比', 'spring.newlow_lookback': '破位回看根数',
-  'spring.recovery_bars': '收回窗口(根)', 'spring.recovery_vol_max': '收回量上限x触发',
-  'spring.easy_vol': '轻松收回阈值', 'spring.watch_score': '观察分数线',
-  'spring.min_rr': '最低盈亏比门槛',
-  'spring.pull_shrink': '回测缩量阈值', 'spring.coord_expire_bars': '坐标有效期(根)',
-  'spring.btc_filter': 'BTC大盘过滤',
+  'spring.vol_mult': '破位量倍数', 'spring.newlow_lookback': '破位回看根数',
+  'spring.body_min': '破位K实体占比', 'spring.fractal_window': '底分型窗口(根)',
+  'spring.buy2_window': '二买跟踪(根)', 'spring.maink_range_atr': '主力K振幅xATR',
+  'spring.tp_lookback': '止盈回看根数', 'spring.min_rr': '最低盈亏比门槛',
+  'spring.btc_filter': 'BTC大盘过滤', 'signal.sl_buffer_pct': '止损缓冲%',
   'risk.account_equity': '账户本金U', 'risk.risk_pct': '单笔风险%',
   'risk.max_positions': '最大持仓数', 'risk.leverage': '杠杆',
-  'signal.sl_buffer_pct': '止损缓冲%', 'universe.min_quote_volume_24h': '最低24h成交额',
+  'universe.min_quote_volume_24h': '最低24h成交额',
 };
 async function loadSettings() {
   const s = await api('/api/settings');

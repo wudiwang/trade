@@ -62,18 +62,22 @@
   </div>
 
   <div class="panel">
-    <h2>💼 模拟交易
+    <h2>💼 模拟交易 <span class="muted" style="font-weight:400">点任意一行看当时K线形态</span>
       <span class="tools">
         <select id="f-track" onchange="loadTrades()">
-          <option value="watch">⚡观察轨(50+分)</option>
-          <option value="buy1">✅一买轨(吞没)</option>
-          <option value="buy2">🔁二买轨(回测)</option>
-          <option value="spring">💎弹簧轨(假破收回)</option>
+          <option value="">全部策略</option>
+          <option value="buy1">✅ 一买</option>
+          <option value="buy2">🔁 二买</option>
+        </select>
+        <select id="f-result" onchange="loadTrades()">
+          <option value="">全部状态</option>
+          <option value="open">持仓中</option>
+          <option value="closed">已结束</option>
         </select>
       </span>
     </h2>
     <table>
-      <thead><tr><th>#</th><th>币种</th><th>级别</th><th>方向</th><th>入场</th><th>止损</th><th>止盈</th>
+      <thead><tr><th>#</th><th>币种</th><th>级别</th><th>策略</th><th>方向</th><th>入场</th><th>止损</th><th>止盈</th>
         <th>结果</th><th>盈亏(U)</th><th>R</th><th>开仓时间</th></tr></thead>
       <tbody id="t-trades"></tbody>
     </table>

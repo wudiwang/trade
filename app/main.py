@@ -58,7 +58,7 @@ async def amain() -> None:
                 n_sig = db.one("SELECT COUNT(*) c FROM signals WHERE created_at > ?",
                                (int(_t.time()) - 86400,))["c"]
                 lines = [f"📅 <b>日报</b>（近24h）", f"信号: {n_sig} 个"]
-                for tr in ("watch", "buy1", "buy2", "spring"):
+                for tr in ("buy1", "buy2"):
                     t = engine.paper.stats(tr)
                     if t["closed"] or t["open"]:
                         lines.append(f"{tr}: {t['closed']}平/{t['open']}持 | 胜率 {t['win_rate']}% | "

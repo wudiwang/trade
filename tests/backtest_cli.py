@@ -16,12 +16,7 @@ async def main():
     tfs = (sys.argv[2].split(",") if len(sys.argv) > 2 else ["5m", "15m", "1h", "4h"])
     btc_filter = len(sys.argv) > 3 and sys.argv[3] == "btc_on"
     cfg = get_config()
-    # 与线上一致的放宽参数 + 实验开关
-    for k, v in {"spring.vol_mult": 2.5, "spring.quiet_bars": 8, "spring.quiet_mult": 1.8,
-                 "spring.range_atr_min": 1.2, "spring.newlow_lookback": 20,
-                 "spring.watch_score": 65, "spring.min_rr": 1.5,
-                 "spring.btc_filter": btc_filter}.items():
-        cfg.set_override(k, v)
+    cfg.set_override("spring.btc_filter", btc_filter)
     from app.db import DB
     symbols = DB(cfg.db_path).enabled_symbols() or ["BTCUSDT", "ETHUSDT"]
     rest = BinanceRest(cfg.get("binance.rest_base"))

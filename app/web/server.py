@@ -157,14 +157,19 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         return [dict(r) for r in db.query(sql, args)]
 
     @app.get("/api/trades")
-    async def trades(track: str = "rr25", result: str = "", limit: int = 200):
-        sql = "SELECT * FROM paper_trades WHERE track=?"
-        args: list = [track]
-        if result:
-            sql += " AND result=?"
-            args.append(result)
+    async def trades(track: str = "", result: str = "", limit: int = 500):
+        """track 空=全部策略；result: ''=全部, open=持仓中, closed=已结束。"""
+        sql = "SELECT * FROM paper_trades WHERE 1=1"
+        args: list = []
+        if track:
+            sql += " AND track=?"
+            args.append(track)
+        if result == "open":
+            sql += " AND result='open'"
+        elif result == "closed":
+            sql += " AND result IN ('tp','sl')"
         sql += " ORDER BY id DESC LIMIT ?"
-        args.append(min(limit, 1000))
+        args.append(min(limit, 2000))
         return [dict(r) for r in db.query(sql, args)]
 
     @app.get("/api/stats")
@@ -246,25 +251,20 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
 
     _bool = lambda v: str(v).lower() in ("1", "true", "yes")
     EDITABLE = {
-        # 弹簧策略V3（仅保留本策略涉及的因子）
-        "spring.vol_mult": float,          # 触发K量倍数(x均量)
-        "spring.quiet_bars": int,          # 稳态观察根数
-        "spring.quiet_mult": float,        # 稳态最大放量倍数
-        "spring.range_atr_min": float,     # 触发K最小振幅(xATR)
-        "spring.body_min": float,          # 触发K最小实体占比
-        "spring.newlow_lookback": int,     # 破位回看根数
-        "spring.recovery_bars": int,       # 收回观察窗口(根)
-        "spring.recovery_vol_max": float,  # 收回K最大量(x触发量)
-        "spring.easy_vol": float,          # 轻松收回阈值(x触发量)
-        "spring.watch_score": float,       # 观察提醒分数线
-        "spring.min_rr": float,            # 最低预期盈亏比(低于不进场)
-        "spring.pull_shrink": float,       # 回测缩量阈值(x坐标量)
-        "spring.coord_expire_bars": int,   # 坐标跟踪有效期(根)
+        # 策略V4: 破位 + 底分型（仅保留本策略参数）
+        "spring.vol_mult": float,          # 破位K量倍数(x均量)
+        "spring.newlow_lookback": int,     # 破位回看根数(创新低)
+        "spring.body_min": float,          # 破位K实体占比
+        "spring.fractal_window": int,      # 底分型窗口(根)
+        "spring.buy2_window": int,         # 二买跟踪根数
+        "spring.maink_range_atr": float,   # 主力K振幅(xATR)
+        "spring.tp_lookback": int,         # 止盈回看根数
+        "spring.min_rr": float,            # 最低盈亏比门槛
         "spring.btc_filter": _bool,        # BTC大盘过滤
-        # 仓位与通用
+        "signal.sl_buffer_pct": float,     # 止损缓冲%
+        # 风控与通用
         "risk.account_equity": float, "risk.risk_pct": float,
         "risk.max_positions": int, "risk.leverage": int,
-        "signal.sl_buffer_pct": float,
         "universe.min_quote_volume_24h": float,
         "mode": str,
     }
