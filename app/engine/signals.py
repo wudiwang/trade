@@ -163,11 +163,11 @@ class SignalEngine:
                    apply_quality=False)                                        # 触发级只要停顿,不卡分型质量
         if not r:
             return None
-        direction, _t, fx_t, s, _g, _seq = r
+        direction, _t, fx_t, s, _g, _vr, _seq = r
         sres = structure_fractal(struct_klines, min_bars, v_ma, v_mult)        # 结构级笔末端分型(最强/标准+放量)
         if not sres:
             return None
-        sfx, sgrade = sres
+        sfx, sgrade, svr = sres
         if (direction == "long") != (sfx.kind == "bottom"):
             return None
         from .chan_bi import build_bi
@@ -215,7 +215,7 @@ class SignalEngine:
         reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side})·{struct_tf}级: "
                   f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn} + {trig_tf}停顿确认{dsuf}")
         return self._spring_make(
-            symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}},
+            symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": svr}},
             struct_klines, extra={"fractal_price": sfx.extreme_price, "struct_tf": struct_tf,
                                   "trig_tf": trig_tf, "grade": sgrade, "path": "多级别"}, reason=reason)
 
@@ -239,7 +239,7 @@ class SignalEngine:
         r = detect(klines, min_bars, self._p("chan.stall_max_gap", 3),
                    self._p("chan.fractal_vol_ma", 10), self._p("chan.fractal_vol_mult", 2.0))
         if r:
-            direction, sig_type, fx, s, grade, seq = r
+            direction, sig_type, fx, s, grade, vratio, seq = r
             ck = (symbol, tf, direction)
             if self._bi_fired.get(ck) != fx.open_time:
                 if not self._btc_ok(direction):
@@ -273,7 +273,7 @@ class SignalEngine:
                 reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side}): {leg} → "
                           f"{GRADE_CN.get(grade, '')}{fxn} → 停顿K确认{dsuf}")
                 return self._spring_make(
-                    symbol, tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}}, klines,
+                    symbol, tf, direction, entry, sl, eff, {"detail": {"vol_ratio": vratio}}, klines,
                     extra={"fractal_price": fx.extreme_price, "fractal_time": fx.open_time,
                            "grade": grade, "path": "笔"},
                     reason=reason)

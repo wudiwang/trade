@@ -167,13 +167,13 @@ def test_fractal_grade_strongest():
 def test_volume_gate():
     # 左K不放量(100) → 最强但量不达标 → 拦截
     full, merged, fx = _bottom3(left_vol=100)
-    ok, g = quality_ok(full, merged, fx, vol_ma=10, vol_mult=2.0)
-    assert g == "strongest" and ok is False, (g, ok)
-    # 左K放量(300=3x均量) → 前2根放量达标 → 通过
+    ok, g, vr = quality_ok(full, merged, fx, vol_ma=10, vol_mult=2.0)
+    assert g == "strongest" and ok is False and vr < 2.0, (g, ok, vr)
+    # 左K放量(300=3x均量) → 前2根放量达标 → 通过, 倍数被接出
     full2, merged2, fx2 = _bottom3(left_vol=300)
-    ok2, g2 = quality_ok(full2, merged2, fx2, vol_ma=10, vol_mult=2.0)
-    assert g2 == "strongest" and ok2 is True, (g2, ok2)
-    print("  无放量→拦截; 左K 3x放量→通过")
+    ok2, g2, vr2 = quality_ok(full2, merged2, fx2, vol_ma=10, vol_mult=2.0)
+    assert g2 == "strongest" and ok2 is True and vr2 >= 2.0, (g2, ok2, vr2)
+    print(f"  无放量({vr}x)→拦截; 左K放量({vr2}x)→通过")
 
 
 def _confirm_low(ks, start, steps=3, up=0.6):

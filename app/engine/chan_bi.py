@@ -97,31 +97,38 @@ def fractal_grade(klines: list, merged: list, fx) -> str:
         return "weak"
 
 
-def vol_spike_before(klines: list, merged: list, fx, ma: int = 10, mult: float = 2.0) -> bool:
-    """量能规则：底分型前2根(左K、中K)任意一根放量 ≥ mult×前ma根均量。
+def front_vol_ratio(klines: list, merged: list, fx, ma: int = 10) -> float:
+    """底分型前2根(左K、中K)中,合并K量/前ma根均量 的最大值(放量倍数)。
     合并K的量 = 其覆盖原始K量之和；均量 = 该合并K起点前 ma 根原始K均量。"""
     mid = fx.mid_merged_idx
     if mid < 1:
-        return False
+        return 0.0
+    best = 0.0
     for mk in (merged[mid - 1], merged[mid]):
         start = mk.src_idx[0]
         if start < ma:
             continue
         avg = sum(float(klines[x]["volume"]) for x in range(start - ma, start)) / ma
         vol = sum(float(klines[x]["volume"]) for x in mk.src_idx)
-        if avg > 0 and vol >= mult * avg:
-            return True
-    return False
+        if avg > 0:
+            best = max(best, vol / avg)
+    return best
+
+
+def vol_spike_before(klines: list, merged: list, fx, ma: int = 10, mult: float = 2.0) -> bool:
+    """量能规则：底分型前2根任意一根放量 ≥ mult×前ma根均量。"""
+    return front_vol_ratio(klines, merged, fx, ma) >= mult
 
 
 def quality_ok(klines: list, merged: list, fx, vol_ma: int = 10, vol_mult: float = 2.0):
-    """返回 (是否通过, 强度grade)。通过 = 最强/标准 且 前2根放量达标。"""
+    """返回 (是否通过, 强度grade, 放量倍数)。通过 = 最强/标准 且 前2根放量达标。"""
     grade = fractal_grade(klines, merged, fx)
+    vr = round(front_vol_ratio(klines, merged, fx, vol_ma), 2)
     if grade not in _GOOD_GRADES:
-        return False, grade
-    if not vol_spike_before(klines, merged, fx, vol_ma, vol_mult):
-        return False, grade
-    return True, grade
+        return False, grade, vr
+    if vr < vol_mult:
+        return False, grade, vr
+    return True, grade, vr
 
 
 # ======================= 背驰(力度衰竭) =======================
@@ -217,16 +224,17 @@ def structure_fractal(klines: list, min_merged: int = 5,
     if len(seq) < 2 or seq[-1].kind == seq[-2].kind:
         return None
     fx = seq[-1]
-    ok, grade = quality_ok(klines, merged, fx, vol_ma, vol_mult)
+    ok, grade, vr = quality_ok(klines, merged, fx, vol_ma, vol_mult)
     if not ok:
         return None
-    return fx, grade
+    return fx, grade, vr
 
 
 def detect(klines: list, min_merged: int = 5, max_gap: int = 3,
            vol_ma: int = 10, vol_mult: float = 2.0, apply_quality: bool = True):
-    """返回 (direction, sig_type, fx, stall, grade, seq) 或 None。
-    direction: long(底分型) / short(顶分型)；sig_type: buy1/buy2；seq=笔分型序列(供背驰判定)。
+    """返回 (direction, sig_type, fx, stall, grade, vol_ratio, seq) 或 None。
+    direction: long(底分型) / short(顶分型)；sig_type: buy1/buy2；
+    vol_ratio=底分型前2根放量倍数；seq=笔分型序列(供背驰判定)。
     apply_quality=True 时强制 最强/标准 强度 + 前2根放量；False 仅用于多级别触发停顿(不卡分型质量)。"""
     if len(klines) < min_merged * 3:
         return None
@@ -241,8 +249,9 @@ def detect(klines: list, min_merged: int = 5, max_gap: int = 3,
         return None
 
     grade = "unknown"
+    vratio = 0.0
     if apply_quality:
-        ok, grade = quality_ok(klines, merged, last_fx, vol_ma, vol_mult)
+        ok, grade, vratio = quality_ok(klines, merged, last_fx, vol_ma, vol_mult)
         if not ok:
             return None
 
@@ -261,4 +270,4 @@ def detect(klines: list, min_merged: int = 5, max_gap: int = 3,
         tops = [f for f in seq if f.kind == "top"]
         # 二卖：上一个顶存在 且 本顶更低(更低的高点)；类型名沿用 buy1/buy2，方向分多空
         sig_type = "buy2" if (len(tops) >= 2 and last_fx.extreme_price < tops[-2].extreme_price) else "buy1"
-    return direction, sig_type, last_fx, s, grade, seq
+    return direction, sig_type, last_fx, s, grade, vratio, seq
