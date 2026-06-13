@@ -1,0 +1,31 @@
+name: deploy-to-vps
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:        # 也可在 Actions 页手动触发
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id
+          chmod 600 ~/.ssh/id
+          ssh-keyscan -H 76.13.182.175 >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Rsync code to VPS (keep data/.env)
+        run: |
+          rsync -az \
+            --exclude='.git' --exclude='data' --exclude='.env' \
+            --exclude='__pycache__' --exclude='*.pyc' --exclude='deploy/trade.tar.gz' \
+            -e "ssh -i ~/.ssh/id -o StrictHostKeyChecking=no" \
+            ./ root@76.13.182.175:/opt/trade/
+
+      - name: Install deps & restart service
+        run: |
+          ssh -i ~/.ssh/id -o StrictHostKeyChecking=no root@76.13.182.175 \
+            'cd /opt/trade && venv/bin/pip install -q -r requirements.txt && systemctl restart trade && sleep 6 && systemctl is-active trade'
