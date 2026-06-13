@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS playbooks (
 );
 CREATE INDEX IF NOT EXISTS idx_playbooks_status ON playbooks(status);
 CREATE INDEX IF NOT EXISTS idx_playbooks_symbol ON playbooks(symbol, tf);
+CREATE TABLE IF NOT EXISTS watchlist (
+    symbol TEXT PRIMARY KEY, created_at INTEGER, note TEXT,
+    source TEXT DEFAULT 'manual', active INTEGER DEFAULT 1
+);
 """
 
 
@@ -219,6 +223,23 @@ class DB:
     def update_playbook(self, pid: int, **fields: Any) -> None:
         keys = ", ".join(f"{k}=?" for k in fields)
         self.execute(f"UPDATE playbooks SET {keys} WHERE id=?", (*fields.values(), pid))
+
+    # ---------- watchlist (关注列表) ----------
+    def add_watch(self, symbol: str, note: str = "", source: str = "manual") -> None:
+        self.execute(
+            "INSERT INTO watchlist (symbol, created_at, note, source, active) VALUES (?,?,?,?,1) "
+            "ON CONFLICT(symbol) DO UPDATE SET note=excluded.note, active=1",
+            (symbol, int(time.time()), note, source),
+        )
+
+    def remove_watch(self, symbol: str) -> None:
+        self.execute("UPDATE watchlist SET active=0 WHERE symbol=?", (symbol,))
+
+    def list_watch(self) -> list[sqlite3.Row]:
+        return self.query("SELECT * FROM watchlist WHERE active=1 ORDER BY created_at DESC")
+
+    def watch_symbols(self) -> set[str]:
+        return {r["symbol"] for r in self.query("SELECT symbol FROM watchlist WHERE active=1")}
 
     # ---------- settings ----------
     def get_settings(self) -> dict[str, str]:

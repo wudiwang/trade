@@ -69,6 +69,8 @@ class SignalEngine:
         self.notices: list[str] = []
         # 大盘观点(提阿非罗/手动)：direction=long/short/neutral
         self.macro_view: dict = {"direction": "neutral", "note": "", "at": 0}
+        # 关注列表币种集合（由 engine 刷新）
+        self.watch_set: set = set()
 
     def load_macro(self, db) -> None:
         s = db.get_settings()
@@ -275,14 +277,16 @@ class SignalEngine:
         self.funnel[f"signal_{sig_type}"] = self.funnel.get(f"signal_{sig_type}", 0) + 1
         macro_tag = self._macro_tag(direction)
         against = "⚠逆大盘" in macro_tag
+        watched = symbol in self.watch_set
+        star = "⭐关注 " if watched else ""
         return Signal(
             symbol=symbol, tf=tf, direction=direction, kind="primary",
             entry=round(entry, 8), sl=round(sl, 8), tp=round(tp, 8), rr=round(rr, 2),
             vol_ratio=round(bd["detail"].get("vol_ratio", 0), 2),
             strength="strong" if sig_type == "buy1" else "normal",
             suggested_qty=round(qty, 8), risk_usdt=round(risk_usdt, 2),
-            reason=reason + macro_tag, created_at=int(time.time()),
-            extra={"type": sig_type, "btc_trend": self.btc_trend,
+            reason=star + reason + macro_tag, created_at=int(time.time()),
+            extra={"type": sig_type, "btc_trend": self.btc_trend, "watched": watched,
                    "macro": self.macro_view.get("direction"), "against_macro": against, **extra},
         )
 

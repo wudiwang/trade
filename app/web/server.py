@@ -185,6 +185,36 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         pb = PaperBroker(cfg, db)
         return {"rr5": pb.stats("rr5"), "rr25": pb.stats("rr25")}
 
+    # ---------- 关注列表 Watchlist (P4) ----------
+    @app.get("/api/watchlist")
+    async def watch_list():
+        return [dict(r) for r in db.list_watch()]
+
+    @app.post("/api/watchlist")
+    async def watch_add(request: Request):
+        b = await request.json()
+        sym = (b.get("symbol") or "").upper().strip()
+        if not sym:
+            return JSONResponse({"error": "缺少币种"}, status_code=400)
+        if not sym.endswith("USDT"):
+            sym += "USDT"
+        db.add_watch(sym, b.get("note", ""), b.get("source", "manual"))
+        eng = APP_STATE.get("engine")
+        if eng:
+            try:
+                await eng.refresh_universe()
+                await eng.backfill_all(only=[sym])
+                await eng.ws.start(eng.symbols, cfg.timeframes)
+            except Exception:
+                log.exception("watch add refresh failed")
+        return {"ok": True, "symbol": sym}
+
+    @app.post("/api/watchlist/remove")
+    async def watch_remove(request: Request):
+        b = await request.json()
+        db.remove_watch((b.get("symbol") or "").upper().strip())
+        return {"ok": True}
+
     # ---------- 大盘观点 (P2a，提阿非罗每日例程写入) ----------
     def _macro_token() -> str:
         t = db.get_settings().get("macro_token")

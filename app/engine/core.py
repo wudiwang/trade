@@ -71,7 +71,11 @@ class Engine:
             enabled = 1 if qv >= min_vol and s["symbol"] not in exclude else 0
             rows.append({**s, "quote_volume_24h": qv, "enabled": enabled})
         self.db.upsert_symbols(rows)
-        self.symbols = self.db.enabled_symbols()
+        # 关注列表的币强制纳入监控（即使24h成交额不达标）
+        valid = {r["symbol"] for r in syms}
+        watch = self.db.watch_symbols() & valid
+        self.symbols = sorted(set(self.db.enabled_symbols()) | watch)
+        self.signal_engine.watch_set = watch
 
     async def _universe_loop(self) -> None:
         interval = self.cfg.get("universe.refresh_minutes", 60) * 60

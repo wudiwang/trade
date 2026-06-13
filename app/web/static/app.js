@@ -97,6 +97,28 @@ function openChartFromTrade(id) {
     extra: sig ? sig.extra : null, opened_at: t.opened_at, exit_price: t.exit_price});
 }
 
+// ---------- 关注列表 ----------
+async function loadWatch() {
+  const rows = await api('/api/watchlist');
+  $('watch-chips').innerHTML = rows.map(w => `
+    <span class="pill" title="${w.note || ''}" style="cursor:pointer" onclick="openChart('${w.symbol}','15m')">
+      ${w.symbol}${w.note ? ' · ' + w.note : ''}
+      <span style="color:var(--red);margin-left:6px" onclick="event.stopPropagation();removeWatch('${w.symbol}')">✕</span>
+    </span>`).join('') || '<span class="muted">还没关注的币，加一个（会强制纳入监控，即使成交额不达标）</span>';
+}
+async function addWatch() {
+  const sym = $('watch-symbol').value, note = $('watch-note').value;
+  if (!sym) { toast('❌ 请填币种'); return; }
+  toast('⏳ 加入并回填K线中…');
+  const r = await api('/api/watchlist', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol: sym, note})});
+  if (r.ok) { toast('✅ 已关注 ' + r.symbol); $('watch-symbol').value = ''; $('watch-note').value = ''; loadWatch(); }
+  else toast('❌ ' + (r.error || '失败'));
+}
+async function removeWatch(sym) {
+  await api('/api/watchlist/remove', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol: sym})});
+  loadWatch();
+}
+
 // ---------- 大盘观点 ----------
 const MACRO = {long: {t: '看多 🟢', c: 'green'}, short: {t: '看空 🔴', c: 'red'}, neutral: {t: '中性 ⚪', c: 'muted'}};
 async function loadMacro() {
@@ -339,7 +361,7 @@ function connectWS() {
 }
 
 // ---------- 启动 ----------
-loadMacro(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); connectWS();
+loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); connectWS();
 setInterval(loadStatus, 15000);
 setInterval(loadTfStats, 60000);
 setInterval(loadPlaybooks, 30000);
