@@ -108,6 +108,29 @@ class SignalEngine:
 
     # ======================= 路由 =======================
 
+    # 多级别联立：高级别结构 + 次级别停顿触发
+    SUB_TF = {"15m": "5m", "1h": "15m"}   # 结构级 -> 触发级
+
+    def evaluate_all(self, symbol: str, tf: str, kbt: dict) -> list:
+        """tf=刚收盘的级别；kbt={级别:klines}。返回该次收盘产生的所有信号(可多个)。"""
+        if self._p("strategy", "chan_bi") != "chan_bi":
+            s = self.evaluate(symbol, tf, kbt.get(tf, []))
+            return [s] if s else []
+        out = []
+        own = kbt.get(tf, [])
+        if tf == "5m":
+            s = self._eval_chan_bi(symbol, "5m", own)        # 5m 自身(底分型+5m停顿)
+            if s:
+                out.append(s)
+            s2 = self._eval_mtf(symbol, "15m", kbt.get("15m", []), "5m", own)  # 15m结构+5m停顿
+            if s2:
+                out.append(s2)
+        elif tf == "15m":
+            s3 = self._eval_mtf(symbol, "1h", kbt.get("1h", []), "15m", own)   # 1h结构+15m停顿
+            if s3:
+                out.append(s3)
+        return out
+
     def evaluate(self, symbol: str, tf: str, klines: list,
                  klines_15m: list | None = None) -> Signal | None:
         strat = self._p("strategy", "chan_bi")
@@ -116,6 +139,58 @@ class SignalEngine:
         if strat == "spring_v4":
             return self._eval_spring(symbol, tf, klines)
         return self._evaluate_chan(symbol, tf, klines, klines_15m)
+
+    def _eval_mtf(self, symbol: str, struct_tf: str, struct_klines: list,
+                  trig_tf: str, trig_klines: list) -> "Signal | None":
+        from .chan_bi import detect, structure_fractal
+        min_bars = self._p("chan.bi_min_bars", 5)
+        if len(struct_klines) < min_bars * 3 + 10 or len(trig_klines) < min_bars * 3 + 10:
+            return None
+        r = detect(trig_klines, min_bars, self._p("chan.stall_max_gap", 3))   # 触发级停顿
+        if not r:
+            return None
+        direction, _t, fx_t, s = r
+        sfx = structure_fractal(struct_klines, min_bars)                       # 结构级笔末端分型
+        if not sfx or (direction == "long") != (sfx.kind == "bottom"):
+            return None
+        tol = self._p("chan.mtf_tol_pct", 0.6) / 100.0
+        if sfx.extreme_price <= 0 or abs(fx_t.extreme_price - sfx.extreme_price) / sfx.extreme_price > tol:
+            return None   # 触发停顿要在结构分型的同一摆动低/高点附近
+
+        ck = (symbol, struct_tf, direction)
+        fkey = ("mtf", symbol, struct_tf, direction)
+        if self._bi_fired.get(fkey) == sfx.open_time:
+            return None
+        if not self._btc_ok(direction):
+            return self._drop("btc_filter")
+        # 链失效 + 一买/二买
+        c_now = float(trig_klines[-1]["close"])
+        lv = self._bi_chain.get(ck)
+        if lv is not None and ((direction == "long" and c_now < lv) or (direction == "short" and c_now > lv)):
+            del self._bi_chain[ck]
+            lv = None
+        if lv is None:
+            eff = "buy1"
+        else:
+            higher = (direction == "long" and sfx.extreme_price > lv) or \
+                     (direction == "short" and sfx.extreme_price < lv)
+            eff = "buy2" if higher else "buy1"
+        self._bi_fired[fkey] = sfx.open_time
+        if eff == "buy1":
+            self._bi_chain[ck] = sfx.extreme_price
+
+        buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
+        entry = float(trig_klines[s]["close"])                                # 入场=触发级停顿K收盘
+        sl = sfx.extreme_price * (1 - buf) if direction == "long" else sfx.extreme_price * (1 + buf)
+        label = self._bi_label(eff, direction)
+        side = "做多" if direction == "long" else "做空"
+        fxn = "底分型" if direction == "long" else "顶分型"
+        reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side})·{struct_tf}级: "
+                  f"{struct_tf}{fxn} + {trig_tf}停顿确认")
+        return self._spring_make(
+            symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}},
+            struct_klines, extra={"fractal_price": sfx.extreme_price, "struct_tf": struct_tf,
+                                  "trig_tf": trig_tf, "path": "多级别"}, reason=reason)
 
     # ======================= 策略: 缠论笔 + 停顿K =======================
 

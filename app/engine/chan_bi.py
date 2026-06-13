@@ -72,6 +72,15 @@ def stall_idx(klines: list, merged: list, fx, max_gap: int = 3):
     return None
 
 
+def structure_fractal(klines: list, min_merged: int = 5):
+    """只取"笔末端的最新分型"(下跌成笔→底分型 / 上涨成笔→顶分型)，**不要求本级别停顿**。
+    供多级别联立用：高级别给结构，低级别给停顿。返回末端分型或 None。"""
+    _, seq = build_bi(klines, min_merged)
+    if len(seq) < 2 or seq[-1].kind == seq[-2].kind:
+        return None
+    return seq[-1]
+
+
 def detect(klines: list, min_merged: int = 5, max_gap: int = 3):
     """返回 (direction, sig_type, fx, stall) 或 None。
     direction: long(底分型) / short(顶分型)；sig_type: buy1/buy2。"""

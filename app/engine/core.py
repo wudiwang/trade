@@ -266,16 +266,14 @@ class Engine:
         except Exception:
             log.exception("notice forward failed")
 
-        # 信号评估
+        # 信号评估（多级别联立：一次收盘可能产出多个信号）
         try:
-            klines = list(dq)
-            k15 = list(self.cache.get((symbol, "15m"), ())) or None
-            sig = self.signal_engine.evaluate(symbol, tf, klines, k15)
-            if sig:
+            kbt = {t: list(self.cache.get((symbol, t), ())) for t in self.cfg.timeframes}
+            for sig in self.signal_engine.evaluate_all(symbol, tf, kbt):
                 sid = self.db.insert_signal(sig.to_db())
                 self.paper.open_from_signal(sid, sig)
-                log.info("SIGNAL #%d %s %s %s %s rr=%.2f", sid, sig.kind, symbol, tf, sig.direction, sig.rr)
-                self.db.log("info", "signal", f"#{sid} {sig.kind} {symbol} {tf} {sig.direction} rr={sig.rr}")
+                log.info("SIGNAL #%d %s %s %s %s rr=%.2f", sid, sig.kind, sig.symbol, sig.tf, sig.direction, sig.rr)
+                self.db.log("info", "signal", f"#{sid} {sig.symbol} {sig.tf} {sig.direction} rr={sig.rr}")
                 for sub in self.signal_subscribers:
                     try:
                         await sub(sid, sig)

@@ -61,8 +61,10 @@ function sigScore(s) {
   try { return JSON.parse(s.extra || '{}').score ?? ''; } catch (e) { return ''; }
 }
 async function loadSignals() {
-  const kind = $('f-kind').value;
-  const rows = await api('/api/signals?limit=100' + (kind ? '&kind=' + kind : ''));
+  const level = $('f-level').value;
+  let rows = await api('/api/signals?limit=200');
+  if (level) rows = rows.filter(s => s.tf === level);
+  rows = rows.slice(0, 100);
   signalCache = {};
   rows.forEach(s => signalCache[s.id] = s);
   $('t-signals').innerHTML = rows.map(s => `
