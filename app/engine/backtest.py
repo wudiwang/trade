@@ -4,6 +4,7 @@
 结算规则与 paper 相同：先看止损后看止盈（同根K双触按止损算，保守）。
 """
 import asyncio
+import bisect
 import logging
 import time
 
@@ -60,35 +61,54 @@ def build_btc_trend_lookup(btc15: list[dict], ema_period: int = 50):
     return lookup
 
 
-def walk_symbol(cfg, symbol: str, tf: str, series: list[dict], btc_lookup) -> list[dict]:
-    """逐根回放一条K线序列，返回带结算结果的信号列表。CPU密集，放线程跑。"""
+def walk_symbol_mtf(cfg, symbol: str, series_by_tf: dict, btc_lookup, tfs: list[str]) -> list[dict]:
+    """多级别联立回放(与实盘 evaluate_all 同一路径)：把各级别收盘事件合并成时间线，
+    逐事件用全部级别的当前窗口调用 evaluate_all(5m收盘→5m自身+15m结构; 15m收盘→1h结构)。
+    一个 SignalEngine 实例贯穿整条时间线(去重/一买二买链状态与实盘一致)。
+    所有信号统一在 5m 序列上结算 TP/SL(最细粒度,最贴近实盘)。CPU密集，放线程跑。"""
     eng = SignalEngine(cfg, _NullDB())
-    sigs: list[dict] = []
-    n = len(series)
-    for i in range(WARMUP, n):
-        window = series[max(0, i - WINDOW + 1): i + 1]
-        eng.btc_trend = btc_lookup(int(series[i]["open_time"]))
-        try:
-            sig = eng.evaluate(symbol, tf, window)
-        except Exception:
-            log.exception("evaluate failed %s %s @%d", symbol, tf, i)
-            continue
-        if not sig:
-            continue
-        d = sig.to_db()
-        d["bar_idx"] = i
-        d["created_at"] = int(series[i]["open_time"]) // 1000
-        sigs.append(d)
+    # 收盘事件 (close_time, -tf_sec, tf, idx)：同一时刻大级别先处理，保证次级触发能看到刚收的高级别K
+    events = []
+    for tf in tfs:
+        sec = TF_MS.get(tf, 900)
+        for idx, bar in enumerate(series_by_tf.get(tf, [])):
+            events.append((int(bar["open_time"]) + sec * 1000, -sec, tf, idx))
+    events.sort()
 
-    # 结算：从信号K之后逐根扫TP/SL
+    closed = {tf: 0 for tf in tfs}
+    sigs: list[dict] = []
+    for ct, _ns, tf, idx in events:
+        closed[tf] = idx + 1
+        if tf not in ("5m", "15m"):          # 只有5m/15m收盘会产出信号(见 evaluate_all)
+            continue
+        if closed[tf] <= WARMUP:
+            continue
+        kbt = {t: series_by_tf[t][max(0, closed[t] - WINDOW): closed[t]] for t in tfs}
+        eng.btc_trend = btc_lookup(ct)
+        try:
+            out = eng.evaluate_all(symbol, tf, kbt)
+        except Exception:
+            log.exception("evaluate_all failed %s %s @%d", symbol, tf, ct)
+            continue
+        for sig in out:
+            d = sig.to_db()
+            d["created_at"] = ct // 1000
+            d["close_time"] = ct
+            sigs.append(d)
+
+    # 结算：每个信号从其收盘时刻之后，在 5m 序列上逐根扫 TP/SL(同根双触按止损,保守)
+    fine = series_by_tf.get("5m", [])
+    opens = [int(b["open_time"]) for b in fine]
+    n5 = len(fine)
     for s in sigs:
         s["result"], s["pnl_r"], s["bars_held"] = "open", None, None
         entry, sl, tp = s["entry"], s["sl"], s["tp"]
         risk = abs(entry - sl)
         if risk <= 0:
             continue
-        for j in range(s["bar_idx"] + 1, n):
-            k = series[j]
+        start = bisect.bisect_left(opens, s["close_time"])   # 第一根开盘≥信号收盘的5m(即下一根)
+        for j in range(start, n5):
+            k = fine[j]
             lo, hi = float(k["low"]), float(k["high"])
             if s["direction"] == "long":
                 if lo <= sl:
@@ -101,7 +121,7 @@ def walk_symbol(cfg, symbol: str, tf: str, series: list[dict], btc_lookup) -> li
                 elif lo <= tp:
                     s["result"], s["pnl_r"] = "tp", (entry - tp) / risk
             if s["result"] != "open":
-                s["bars_held"] = j - s["bar_idx"]
+                s["bars_held"] = j - start
                 break
     return sigs
 
@@ -131,7 +151,7 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
     """全量回测。progress(done, total, msg) 可选回调。"""
     t0 = time.time()
     sem = asyncio.Semaphore(5)
-    total = len(symbols) * len(tfs)
+    total = len(symbols)
     done = 0
     all_sigs: list[dict] = []
 
@@ -142,27 +162,29 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
     else:
         btc_lookup = lambda t: 0
 
-    async def one(sym: str, tf: str):
+    async def one(sym: str):
         nonlocal done
+        series_by_tf: dict = {}
         async with sem:
-            try:
-                series = await fetch_series(rest, sym, tf, days)
-            except Exception as e:
-                log.warning("fetch %s %s failed: %s", sym, tf, e)
-                series = []
-        if len(series) > WARMUP + 5:
-            sigs = await asyncio.to_thread(walk_symbol, cfg, sym, tf, series, btc_lookup)
+            for tf in tfs:
+                try:
+                    series_by_tf[tf] = await fetch_series(rest, sym, tf, days)
+                except Exception as e:
+                    log.warning("fetch %s %s failed: %s", sym, tf, e)
+                    series_by_tf[tf] = []
+        if len(series_by_tf.get("5m", [])) > WARMUP + 5:
+            sigs = await asyncio.to_thread(walk_symbol_mtf, cfg, sym, series_by_tf, btc_lookup, tfs)
             all_sigs.extend(sigs)
         done += 1
-        if progress and (done % 10 == 0 or done == total):
-            progress(done, total, f"{sym} {tf}")
+        if progress and (done % 5 == 0 or done == total):
+            progress(done, total, sym)
 
-    await asyncio.gather(*(one(s, tf) for s in symbols for tf in tfs))
+    await asyncio.gather(*(one(s) for s in symbols))
     all_sigs.sort(key=lambda s: s["created_at"])
 
     snapshot = {k: cfg.get(k) for k in (
-        "spring.vol_mult", "spring.newlow_lookback", "spring.body_min",
-        "spring.fractal_window", "spring.buy2_window", "spring.tp_lookback",
+        "chan.bi_min_bars", "chan.stall_max_gap", "chan.fractal_vol_mult",
+        "chan.fractal_vol_ma", "chan.require_divergence", "chan.mtf_tol_pct",
         "spring.min_rr", "spring.btc_filter")}
     result = {
         "period_days": days, "tfs": tfs, "symbols": len(symbols),
