@@ -67,6 +67,25 @@ class SignalEngine:
         self._state: dict[tuple, dict] = {}
         # 失效/解除等文字通知（engine 转发到 TG）
         self.notices: list[str] = []
+        # 大盘观点(提阿非罗/手动)：direction=long/short/neutral
+        self.macro_view: dict = {"direction": "neutral", "note": "", "at": 0}
+
+    def load_macro(self, db) -> None:
+        s = db.get_settings()
+        self.macro_view = {
+            "direction": s.get("macro_view_direction", "neutral"),
+            "note": s.get("macro_view_note", ""),
+            "at": int(s.get("macro_view_at", 0) or 0),
+        }
+
+    def _macro_tag(self, direction: str) -> str:
+        """逆大盘则返回警告标签，否则空。"""
+        mv = (self.macro_view or {}).get("direction", "neutral")
+        if mv not in ("long", "short"):
+            return ""
+        if direction != mv:
+            return f" ⚠逆大盘(提阿非罗看{'多' if mv == 'long' else '空'})"
+        return f" ✓顺大盘"
 
     def _p(self, key: str, default=None):
         return self.cfg.get(key, default)
@@ -254,14 +273,17 @@ class SignalEngine:
         risk_usdt = equity * self._p("risk.risk_pct", 0.5) / 100.0
         qty = risk_usdt / risk if risk > 0 else 0.0
         self.funnel[f"signal_{sig_type}"] = self.funnel.get(f"signal_{sig_type}", 0) + 1
+        macro_tag = self._macro_tag(direction)
+        against = "⚠逆大盘" in macro_tag
         return Signal(
             symbol=symbol, tf=tf, direction=direction, kind="primary",
             entry=round(entry, 8), sl=round(sl, 8), tp=round(tp, 8), rr=round(rr, 2),
             vol_ratio=round(bd["detail"].get("vol_ratio", 0), 2),
             strength="strong" if sig_type == "buy1" else "normal",
             suggested_qty=round(qty, 8), risk_usdt=round(risk_usdt, 2),
-            reason=reason, created_at=int(time.time()),
-            extra={"type": sig_type, "btc_trend": self.btc_trend, **extra},
+            reason=reason + macro_tag, created_at=int(time.time()),
+            extra={"type": sig_type, "btc_trend": self.btc_trend,
+                   "macro": self.macro_view.get("direction"), "against_macro": against, **extra},
         )
 
     # ======================= 策略V1: 缠论(保留) =======================

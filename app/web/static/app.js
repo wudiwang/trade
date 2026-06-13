@@ -97,6 +97,24 @@ function openChartFromTrade(id) {
     extra: sig ? sig.extra : null, opened_at: t.opened_at, exit_price: t.exit_price});
 }
 
+// ---------- 大盘观点 ----------
+const MACRO = {long: {t: '看多 🟢', c: 'green'}, short: {t: '看空 🔴', c: 'red'}, neutral: {t: '中性 ⚪', c: 'muted'}};
+async function loadMacro() {
+  const m = await api('/api/macro');
+  const meta = MACRO[m.direction] || MACRO.neutral;
+  const badge = $('macro-badge');
+  badge.textContent = meta.t;
+  badge.className = 'pill ' + meta.c;
+  $('macro-note').textContent = m.note ? `「${m.note}」 ${m.at ? fmtT(m.at) : ''}` : '（未设置，可手动录入或等每日例程自动更新）';
+  $('macro-dir').value = m.direction;
+}
+async function saveMacro() {
+  const r = await api('/api/macro', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({direction: $('macro-dir').value, note: $('macro-input').value, source: 'manual'})});
+  if (r.ok) { toast('✅ 大盘观点已更新'); $('macro-input').value = ''; loadMacro(); }
+  else toast('❌ ' + (r.error || '失败'));
+}
+
 // ---------- 预演 Playbook ----------
 const PB_STATUS = {active: '⏳监控中', triggered: '🎬已触发', done: '✅完成', cancelled: '已取消'};
 const PB_TRIG = {price_reach: '到价', sweep_reclaim: '假突破回收'};
@@ -321,7 +339,7 @@ function connectWS() {
 }
 
 // ---------- 启动 ----------
-loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); connectWS();
+loadMacro(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); connectWS();
 setInterval(loadStatus, 15000);
 setInterval(loadTfStats, 60000);
 setInterval(loadPlaybooks, 30000);

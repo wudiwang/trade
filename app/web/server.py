@@ -185,6 +185,45 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         pb = PaperBroker(cfg, db)
         return {"rr5": pb.stats("rr5"), "rr25": pb.stats("rr25")}
 
+    # ---------- 大盘观点 (P2a，提阿非罗每日例程写入) ----------
+    def _macro_token() -> str:
+        t = db.get_settings().get("macro_token")
+        if not t:
+            t = secrets.token_urlsafe(24)
+            db.set_setting("macro_token", t)
+        return t
+
+    @app.get("/api/macro")
+    async def macro_get():
+        s = db.get_settings()
+        return {"direction": s.get("macro_view_direction", "neutral"),
+                "note": s.get("macro_view_note", ""),
+                "at": int(s.get("macro_view_at", 0) or 0)}
+
+    @app.post("/api/macro")
+    async def macro_set(request: Request):
+        # 鉴权：登录会话 或 ?token=（供每日云例程无人值守写入）
+        if not auth_user(request) and request.query_params.get("token") != _macro_token():
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        b = await request.json()
+        d = b.get("direction", "neutral")
+        if d not in ("long", "short", "neutral"):
+            return JSONResponse({"error": "direction 须为 long/short/neutral"}, status_code=400)
+        db.set_setting("macro_view_direction", d)
+        db.set_setting("macro_view_note", str(b.get("note", ""))[:500])
+        db.set_setting("macro_view_at", str(int(time.time())))
+        eng = APP_STATE.get("engine")
+        if eng:
+            eng.signal_engine.load_macro(db)
+        db.log("info", "macro", f"set {d} by {b.get('source', 'api')}: {b.get('note', '')[:60]}")
+        return {"ok": True}
+
+    @app.get("/api/macro_token")
+    async def macro_token_get(request: Request):
+        if not auth_user(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return {"token": _macro_token()}
+
     # ---------- 预演 Playbook ----------
     @app.get("/api/playbooks")
     async def playbooks_list(status: str = ""):

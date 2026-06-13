@@ -37,6 +37,7 @@ class Engine:
     # ---------- 生命周期 ----------
     async def start(self) -> None:
         self.started_at = int(time.time())
+        self.signal_engine.load_macro(self.db)
         await self.refresh_universe()
         await self.backfill_all()
         btc15 = self.cache.get(("BTCUSDT", "15m"))
@@ -232,5 +233,6 @@ class Engine:
             "last_eval_ms": round(self.last_eval_ms, 1),
             "mode": self.cfg.mode,
             "tracks": {t: self.paper.stats(t) for t in ("buy1", "buy2")},
+            "macro": self.signal_engine.macro_view,
             "funnel": dict(self.signal_engine.funnel),
         }
