@@ -186,6 +186,7 @@ async function openChart(symbol, tf, ref) {
   $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 蓝=买入 绿=止盈 红=止损' : '');
   const d = await api(`/api/klines?symbol=${symbol}&tf=${tf}&limit=300`);
   $('chart').innerHTML = '';
+  await new Promise(r => setTimeout(r, 60));  // 等弹窗布局完成，避免首开图表零尺寸空白
   klChart = LightweightCharts.createChart($('chart'), {
     layout: {background: {color: 'transparent'}, textColor: '#7a869c'},
     grid: {vertLines: {color: '#1d2433'}, horzLines: {color: '#1d2433'}},
