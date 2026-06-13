@@ -358,17 +358,17 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
 
     _bool = lambda v: str(v).lower() in ("1", "true", "yes")
     EDITABLE = {
-        # 策略V4: 破位 + 底分型（仅保留本策略参数）
-        "spring.vol_mult": float,          # 破位K量倍数(x均量)
-        "spring.newlow_lookback": int,     # 破位回看根数(创新低)
-        "spring.body_min": float,          # 破位K实体占比
-        "spring.fractal_window": int,      # 底分型窗口(根)
-        "spring.buy2_window": int,         # 二买跟踪根数
-        "spring.maink_range_atr": float,   # 主力K振幅(xATR)
+        # 策略 chan_bi: 笔 + 底分型(最强/标准) + 放量 + 背驰 + 停顿
+        "chan.bi_min_bars": int,           # 一笔至少N根合并K(去包含)
+        "chan.stall_max_gap": int,         # 分型后N根内出停顿K才确认
+        "chan.fractal_vol_mult": float,    # 底分型前2根放量倍数(x前10根均量)
+        "chan.fractal_vol_ma": int,        # 放量均量回看根数
+        "chan.require_divergence": _bool,  # 一买/一卖必须背驰
+        "chan.mtf_tol_pct": float,         # 多级别:停顿与高级别分型价位容差%
+        "spring.min_rr": float,            # 最低盈亏比门槛(低于不进场)
         "spring.tp_lookback": int,         # 止盈回看根数
-        "spring.min_rr": float,            # 最低盈亏比门槛
-        "spring.btc_filter": _bool,        # BTC大盘过滤
         "signal.sl_buffer_pct": float,     # 止损缓冲%
+        "spring.btc_filter": _bool,        # 回测BTC大盘过滤
         # 风控与通用
         "risk.account_equity": float, "risk.risk_pct": float,
         "risk.max_positions": int, "risk.leverage": int,

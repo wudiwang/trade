@@ -327,15 +327,16 @@ function closeModal() { $('modal').classList.remove('show'); if (klChart) { klCh
 // ---------- 设置 ----------
 const SETTING_LABELS = {
   'mode': '运行模式',
-  'spring.vol_mult': '破位量倍数', 'spring.newlow_lookback': '破位回看根数',
-  'spring.body_min': '破位K实体占比', 'spring.fractal_window': '底分型窗口(根)',
-  'spring.buy2_window': '二买跟踪(根)', 'spring.maink_range_atr': '主力K振幅xATR',
-  'spring.tp_lookback': '止盈回看根数', 'spring.min_rr': '最低盈亏比门槛',
-  'spring.btc_filter': 'BTC大盘过滤', 'signal.sl_buffer_pct': '止损缓冲%',
+  'chan.bi_min_bars': '一笔最少合并K', 'chan.stall_max_gap': '停顿窗口(根)',
+  'chan.fractal_vol_mult': '底分型放量倍数', 'chan.fractal_vol_ma': '放量均量回看(根)',
+  'chan.require_divergence': '一买必须背驰', 'chan.mtf_tol_pct': '多级别价位容差%',
+  'spring.min_rr': '最低盈亏比门槛', 'spring.tp_lookback': '止盈回看根数',
+  'signal.sl_buffer_pct': '止损缓冲%', 'spring.btc_filter': '回测BTC过滤',
   'risk.account_equity': '账户本金U', 'risk.risk_pct': '单笔风险%',
   'risk.max_positions': '最大持仓数', 'risk.leverage': '杠杆',
   'universe.min_quote_volume_24h': '最低24h成交额',
 };
+const BOOL_SETTINGS = ['chan.require_divergence', 'spring.btc_filter'];
 async function loadSettings() {
   const s = await api('/api/settings');
   $('settings').innerHTML = Object.entries(s).map(([k, v]) => {
@@ -343,7 +344,7 @@ async function loadSettings() {
     if (k === 'mode') return `<label>${label}<select data-k="${k}">
       <option value="paper" ${v === 'paper' ? 'selected' : ''}>paper 模拟</option>
       <option value="live" ${v === 'live' ? 'selected' : ''}>live 实盘</option></select></label>`;
-    if (k === 'spring.btc_filter') return `<label>${label}<select data-k="${k}">
+    if (BOOL_SETTINGS.includes(k)) return `<label>${label}<select data-k="${k}">
       <option value="true" ${v ? 'selected' : ''}>开</option>
       <option value="false" ${!v ? 'selected' : ''}>关</option></select></label>`;
     return `<label>${label}<input data-k="${k}" value="${v}"></label>`;
