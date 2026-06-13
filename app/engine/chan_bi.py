@@ -124,6 +124,72 @@ def quality_ok(klines: list, merged: list, fx, vol_ma: int = 10, vol_mult: float
     return True, grade
 
 
+# ======================= 背驰(力度衰竭) =======================
+
+def macd_hist(closes: list, fast: int = 12, slow: int = 26, signal: int = 9) -> list:
+    """MACD 柱(DIF-DEA)。返回与 closes 等长的列表。"""
+    from .chan import ema
+    ef, es = ema(closes, fast), ema(closes, slow)
+    dif = [a - b for a, b in zip(ef, es)]
+    dea = ema(dif, signal)
+    return [d - s for d, s in zip(dif, dea)]
+
+
+def _seg_area(hist: list, i: int, j: int, sign: int) -> float:
+    """[i,j] 区间内同号柱体面积绝对值之和。sign<0 取绿柱(负), sign>0 取红柱(正)。"""
+    lo, hi = (i, j) if i <= j else (j, i)
+    s = 0.0
+    for x in range(max(0, lo), min(len(hist), hi + 1)):
+        v = hist[x]
+        if sign < 0 and v < 0:
+            s += -v
+        elif sign > 0 and v > 0:
+            s += v
+    return s
+
+
+def divergence(klines: list, seq: list, direction: str,
+               macd_cfg=(12, 26, 9)):
+    """底背驰(long)/顶背驰(short)。比较"进入段a"与"离开段b"两段同向笔：
+      形态背驰：创新低(高)但 b 段价格幅度 < a 段;
+      MACD背驰：创新低(高)但 b 段柱体面积 < a 段。
+    两者任一成立即背驰。返回 (bool, tag)。seq 需≥4个交替分型(a段+反弹/中枢+b段)。"""
+    if len(seq) < 4:
+        return False, ""
+    closes = [float(k["close"]) for k in klines]
+    hist = macd_hist(closes, *macd_cfg)
+    if direction == "long":
+        b_bot, b_top, a_bot, a_top = seq[-1], seq[-2], seq[-3], seq[-4]
+        if not (b_bot.kind == "bottom" and b_top.kind == "top"
+                and a_bot.kind == "bottom" and a_top.kind == "top"):
+            return False, ""
+        if b_bot.extreme_price >= a_bot.extreme_price:      # 没创新低 → 不是底背驰场景
+            return False, ""
+        a_amp = a_top.extreme_price - a_bot.extreme_price
+        b_amp = b_top.extreme_price - b_bot.extreme_price
+        shape = 0 < b_amp < a_amp
+        a_area = _seg_area(hist, a_top.extreme_src_idx, a_bot.extreme_src_idx, -1)
+        b_area = _seg_area(hist, b_top.extreme_src_idx, b_bot.extreme_src_idx, -1)
+        macd = a_area > 0 and 0 <= b_area < a_area
+    else:
+        b_top, b_bot, a_top, a_bot = seq[-1], seq[-2], seq[-3], seq[-4]
+        if not (b_top.kind == "top" and b_bot.kind == "bottom"
+                and a_top.kind == "top" and a_bot.kind == "bottom"):
+            return False, ""
+        if b_top.extreme_price <= a_top.extreme_price:      # 没创新高 → 不是顶背驰场景
+            return False, ""
+        a_amp = a_top.extreme_price - a_bot.extreme_price
+        b_amp = b_top.extreme_price - b_bot.extreme_price
+        shape = 0 < b_amp < a_amp
+        a_area = _seg_area(hist, a_bot.extreme_src_idx, a_top.extreme_src_idx, 1)
+        b_area = _seg_area(hist, b_bot.extreme_src_idx, b_top.extreme_src_idx, 1)
+        macd = a_area > 0 and 0 <= b_area < a_area
+    if shape or macd:
+        tag = "+".join([t for t, ok in (("形态", shape), ("MACD", macd)) if ok])
+        return True, tag
+    return False, ""
+
+
 def stall_idx(klines: list, merged: list, fx, max_gap: int = 3):
     """停顿K：底分型→某根K收盘>右K最高价(顶分型→收盘<右K最低价)，且必须是最后一根K。
     返回停顿K原始下标或 None。"""
@@ -159,8 +225,8 @@ def structure_fractal(klines: list, min_merged: int = 5,
 
 def detect(klines: list, min_merged: int = 5, max_gap: int = 3,
            vol_ma: int = 10, vol_mult: float = 2.0, apply_quality: bool = True):
-    """返回 (direction, sig_type, fx, stall, grade) 或 None。
-    direction: long(底分型) / short(顶分型)；sig_type: buy1/buy2。
+    """返回 (direction, sig_type, fx, stall, grade, seq) 或 None。
+    direction: long(底分型) / short(顶分型)；sig_type: buy1/buy2；seq=笔分型序列(供背驰判定)。
     apply_quality=True 时强制 最强/标准 强度 + 前2根放量；False 仅用于多级别触发停顿(不卡分型质量)。"""
     if len(klines) < min_merged * 3:
         return None
@@ -195,4 +261,4 @@ def detect(klines: list, min_merged: int = 5, max_gap: int = 3,
         tops = [f for f in seq if f.kind == "top"]
         # 二卖：上一个顶存在 且 本顶更低(更低的高点)；类型名沿用 buy1/buy2，方向分多空
         sig_type = "buy2" if (len(tops) >= 2 and last_fx.extreme_price < tops[-2].extreme_price) else "buy1"
-    return direction, sig_type, last_fx, s, grade
+    return direction, sig_type, last_fx, s, grade, seq

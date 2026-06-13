@@ -18,6 +18,10 @@ chan:
   mtf_tol_pct: 0.6       # 多级别:次级停顿与高级别分型的价位容差%
   fractal_vol_ma: 10     # 量能规则:底分型前2根均量回看根数
   fractal_vol_mult: 2.0  # 量能规则:底分型前2根任意一根量≥N×均量(只认最强/标准分型)
+  require_divergence: true  # 一买/一卖必须背驰(离开段b比进入段a弱 或 MACD柱缩减,任一)
+  macd_fast: 12          # 背驰用 MACD 快线
+  macd_slow: 26          # 背驰用 MACD 慢线
+  macd_signal: 9         # 背驰用 MACD 信号线
 
 # ---- 策略V4: 放量破位 → 底分型收回破位K顶部 ----
 spring:

@@ -102,6 +102,17 @@ class SignalEngine:
     def _p(self, key: str, default=None):
         return self.cfg.get(key, default)
 
+    def _div_ok(self, klines, seq, direction):
+        """一买(底背驰)/一卖(顶背驰)力度衰竭过滤。require_divergence=False 时恒过。
+        返回 (是否背驰, tag)。"""
+        if not self._p("chan.require_divergence", True):
+            return True, ""
+        from .chan_bi import divergence
+        return divergence(klines, seq, direction,
+                          (self._p("chan.macd_fast", 12),
+                           self._p("chan.macd_slow", 26),
+                           self._p("chan.macd_signal", 9)))
+
     def _drop(self, stage: str):
         self.funnel[stage] = self.funnel.get(stage, 0) + 1
         return None
@@ -152,13 +163,15 @@ class SignalEngine:
                    apply_quality=False)                                        # 触发级只要停顿,不卡分型质量
         if not r:
             return None
-        direction, _t, fx_t, s, _g = r
+        direction, _t, fx_t, s, _g, _seq = r
         sres = structure_fractal(struct_klines, min_bars, v_ma, v_mult)        # 结构级笔末端分型(最强/标准+放量)
         if not sres:
             return None
         sfx, sgrade = sres
         if (direction == "long") != (sfx.kind == "bottom"):
             return None
+        from .chan_bi import build_bi
+        _, sseq = build_bi(struct_klines, min_bars)                            # 结构级笔序列(供背驰)
         tol = self._p("chan.mtf_tol_pct", 0.6) / 100.0
         if sfx.extreme_price <= 0 or abs(fx_t.extreme_price - sfx.extreme_price) / sfx.extreme_price > tol:
             return None   # 触发停顿要在结构分型的同一摆动低/高点附近
@@ -181,6 +194,12 @@ class SignalEngine:
             higher = (direction == "long" and sfx.extreme_price > lv) or \
                      (direction == "short" and sfx.extreme_price < lv)
             eff = "buy2" if higher else "buy1"
+        # 一买/一卖必须在结构级背驰
+        div_tag = ""
+        if eff == "buy1":
+            dok, div_tag = self._div_ok(struct_klines, sseq, direction)
+            if not dok:
+                return self._drop("no_divergence")
         self._bi_fired[fkey] = sfx.open_time
         if eff == "buy1":
             self._bi_chain[ck] = sfx.extreme_price
@@ -191,8 +210,10 @@ class SignalEngine:
         label = self._bi_label(eff, direction)
         side = "做多" if direction == "long" else "做空"
         fxn = "底分型" if direction == "long" else "顶分型"
+        bz = "底背驰" if direction == "long" else "顶背驰"
+        dsuf = f" [{bz}·{div_tag}]" if (eff == "buy1" and div_tag) else ""
         reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side})·{struct_tf}级: "
-                  f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn} + {trig_tf}停顿确认")
+                  f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn} + {trig_tf}停顿确认{dsuf}")
         return self._spring_make(
             symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}},
             struct_klines, extra={"fractal_price": sfx.extreme_price, "struct_tf": struct_tf,
@@ -218,7 +239,7 @@ class SignalEngine:
         r = detect(klines, min_bars, self._p("chan.stall_max_gap", 3),
                    self._p("chan.fractal_vol_ma", 10), self._p("chan.fractal_vol_mult", 2.0))
         if r:
-            direction, sig_type, fx, s, grade = r
+            direction, sig_type, fx, s, grade, seq = r
             ck = (symbol, tf, direction)
             if self._bi_fired.get(ck) != fx.open_time:
                 if not self._btc_ok(direction):
@@ -231,6 +252,12 @@ class SignalEngine:
                     if (direction == "long" and fx.extreme_price <= chain_lv) or \
                        (direction == "short" and fx.extreme_price >= chain_lv):
                         return self._drop("buy2_not_higher")
+                # 一买/一卖必须背驰(力度衰竭)；二买承接已背驰的一买，不再单独要求
+                div_tag = ""
+                if eff == "buy1":
+                    dok, div_tag = self._div_ok(klines, seq, direction)
+                    if not dok:
+                        return self._drop("no_divergence")
                 self._bi_fired[ck] = fx.open_time
                 if eff == "buy1":
                     self._bi_chain[ck] = fx.extreme_price   # 开/重置链
@@ -241,8 +268,10 @@ class SignalEngine:
                 leg = "下跌成笔" if direction == "long" else "上涨成笔"
                 fxn = "底分型" if direction == "long" else "顶分型"
                 from .chan_bi import GRADE_CN
+                bz = "底背驰" if direction == "long" else "顶背驰"
+                dsuf = f" [{bz}·{div_tag}]" if (eff == "buy1" and div_tag) else ""
                 reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side}): {leg} → "
-                          f"{GRADE_CN.get(grade, '')}{fxn} → 停顿K确认")
+                          f"{GRADE_CN.get(grade, '')}{fxn} → 停顿K确认{dsuf}")
                 return self._spring_make(
                     symbol, tf, direction, entry, sl, eff, {"detail": {"vol_ratio": 0.0}}, klines,
                     extra={"fractal_price": fx.extreme_price, "fractal_time": fx.open_time,

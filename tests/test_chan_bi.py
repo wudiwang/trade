@@ -7,7 +7,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import Config
 from app.engine.chan import merge_klines, find_fractals
 from app.engine.chan_bi import (build_bi, stall_idx, detect, vol_reclaim,
-                                 fractal_grade, vol_spike_before, quality_ok)
+                                 fractal_grade, vol_spike_before, quality_ok,
+                                 macd_hist, divergence)
 from app.engine.signals import SignalEngine
 
 
@@ -173,6 +174,41 @@ def test_volume_gate():
     ok2, g2 = quality_ok(full2, merged2, fx2, vol_ma=10, vol_mult=2.0)
     assert g2 == "strongest" and ok2 is True, (g2, ok2)
     print("  无放量→拦截; 左K 3x放量→通过")
+
+
+def _confirm_low(ks, start, steps=3, up=0.6):
+    """在末端低点后追加几根小幅回升K，把该低点确认成(末端)底分型。"""
+    p = start
+    for _ in range(steps):
+        nxt = p + up
+        ks.append(k(p, nxt + 0.05, p - 0.05, nxt, v=100, t=len(ks)))
+        p = nxt
+    return ks
+
+
+def test_divergence_long():
+    # 底背驰: a段(102→80,幅22) 反弹88 b段(88→76,幅12,创新低) → b比a短=背驰
+    ks = _confirm_low(zigzag([90, 102, 80, 88, 76], per_leg=7), 76)
+    _, seq = build_bi(ks, 5)
+    ok, tag = divergence(ks, seq, "long")
+    print(f"  底背驰 seq尾={[f.kind for f in seq][-4:]} -> {ok} [{tag}]")
+    assert seq[-1].kind == "bottom" and ok, (ok, tag, [(f.kind, round(f.extreme_price, 1)) for f in seq])
+
+
+def test_no_divergence_long():
+    # 加速下跌: b段(100→70,幅30) 远大于 a段(102→95,幅7) → 不背驰
+    ks = _confirm_low(zigzag([90, 102, 95, 100, 70], per_leg=7), 70)
+    _, seq = build_bi(ks, 5)
+    ok, tag = divergence(ks, seq, "long")
+    print(f"  加速下跌 seq尾={[f.kind for f in seq][-4:]} -> {ok} [{tag}]")
+    assert seq[-1].kind == "bottom" and not ok, (ok, tag)
+
+
+def test_macd_hist_len():
+    closes = [10 + (i % 5) * 0.3 for i in range(80)]
+    h = macd_hist(closes, 12, 26, 9)
+    assert len(h) == len(closes)
+    print(f"  macd_hist 长度对齐 {len(h)}")
 
 
 def main():
