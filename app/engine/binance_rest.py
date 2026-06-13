@@ -97,6 +97,16 @@ class BinanceRest:
             for k in raw
         ]
 
+    async def open_interest_hist(self, symbol: str, period: str = "15m",
+                                 limit: int = 12) -> list[float]:
+        """持仓量历史(免费)。返回 sumOpenInterest 序列(升序)。"""
+        try:
+            data = await self._get("/futures/data/openInterestHist",
+                                    {"symbol": symbol, "period": period, "limit": min(limit, 500)})
+            return [float(d["sumOpenInterest"]) for d in data]
+        except Exception:
+            return []
+
     async def funding_rates(self) -> dict[str, float]:
         """symbol -> 最新资金费率（小数，如 -0.0003 = -0.03%）。"""
         data = await self._get("/fapi/v1/premiumIndex")

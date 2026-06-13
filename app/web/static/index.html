@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>缠论交易系统</title>
-<link rel="stylesheet" href="/style.css?v=8">
+<link rel="stylesheet" href="/style.css?v=9">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -32,6 +32,14 @@
     </div>
   </div>
   <div class="cards" id="stat-cards"></div>
+
+  <div class="panel" style="padding:10px 16px" id="squeeze-panel">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <b>⚠ 逼空候选</b>
+      <span class="muted">OI骤增+费率极值+价格低位(PEPE式) · 每15分钟扫</span>
+      <span id="squeeze-chips" style="display:flex;gap:6px;flex-wrap:wrap;flex:1 1 200px"></span>
+    </div>
+  </div>
 
   <div class="panel" style="padding:10px 16px">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -146,6 +154,6 @@
   </div>
 </div>
 <div id="toast"></div>
-<script src="/app.js?v=8"></script>
+<script src="/app.js?v=9"></script>
 </body>
 </html>

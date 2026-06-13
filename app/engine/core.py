@@ -33,6 +33,7 @@ class Engine:
         self._tasks: list[asyncio.Task] = []
         self.started_at = 0
         self.last_eval_ms = 0.0
+        self.squeeze: dict[str, dict] = {}   # 逼空候选 symbol -> 明细
 
     # ---------- 生命周期 ----------
     async def start(self) -> None:
@@ -50,6 +51,7 @@ class Engine:
         self._tasks.append(asyncio.create_task(self._watchdog_loop()))
         self._tasks.append(asyncio.create_task(self._maintenance_loop()))
         self._tasks.append(asyncio.create_task(self._funding_loop()))
+        self._tasks.append(asyncio.create_task(self._squeeze_loop()))
         log.info("engine started: %d symbols, tfs=%s", len(self.symbols), self.cfg.timeframes)
         self.db.log("info", "engine", f"started with {len(self.symbols)} symbols")
 
@@ -113,6 +115,50 @@ class Engine:
             except Exception as e:
                 log.warning("funding refresh failed: %s", e)
             await asyncio.sleep(self.cfg.get("factors.refresh_funding_minutes", 5) * 60)
+
+    async def _squeeze_loop(self) -> None:
+        """逼空候选扫描：OI骤增+费率极值+价格低位。"""
+        await asyncio.sleep(30)
+        while True:
+            try:
+                await self._scan_squeeze()
+            except Exception:
+                log.exception("squeeze scan failed")
+            await asyncio.sleep(self.cfg.get("squeeze.refresh_minutes", 15) * 60)
+
+    async def _scan_squeeze(self) -> None:
+        from .squeeze import price_position, squeeze_score
+        sem = asyncio.Semaphore(6)
+        new_cands: list[dict] = []
+
+        async def one(sym: str):
+            async with sem:
+                oi = await self.rest.open_interest_hist(sym, "15m", 12)
+            if not oi:
+                return
+            kl = list(self.cache.get((sym, "1h"), ())) or list(self.cache.get((sym, "15m"), ()))
+            pos = price_position(kl) if kl else 0.5
+            is_cand, detail = squeeze_score(
+                oi, self.signal_engine.funding.get(sym), pos,
+                oi_surge=self.cfg.get("squeeze.oi_surge_pct", 30.0),
+                funding_extreme=self.cfg.get("squeeze.funding_extreme", 0.0005),
+                low_pos=self.cfg.get("squeeze.low_pos", 0.35))
+            if is_cand:
+                new = sym not in self.squeeze
+                self.squeeze[sym] = {"symbol": sym, "at": int(time.time()), **detail}
+                if new:
+                    new_cands.append(self.squeeze[sym])
+            else:
+                self.squeeze.pop(sym, None)
+
+        await asyncio.gather(*(one(s) for s in self.symbols))
+        for c in new_cands:
+            f = (c.get("funding") or 0) * 100
+            msg = (f"⚠<b>逼空候选</b> {c['symbol']}{'(强)' if c['strong'] else ''}: "
+                   f"OI {c['oi_change_pct']:+.0f}%骤增 · 费率{f:.3f}% · 价格位{int(c['pos']*100)}%")
+            self.db.log("info", "squeeze", c["symbol"])
+            for sub in self.notice_subscribers:
+                await sub(msg)
 
     async def _maintenance_loop(self) -> None:
         """每小时：修剪K线表防膨胀；把超过TTL未处理的信号标记为过期。"""
@@ -238,5 +284,6 @@ class Engine:
             "mode": self.cfg.mode,
             "tracks": {t: self.paper.stats(t) for t in ("buy1", "buy2")},
             "macro": self.signal_engine.macro_view,
+            "squeeze": sorted(self.squeeze.values(), key=lambda x: -x.get("oi_change_pct", 0)),
             "funnel": dict(self.signal_engine.funnel),
         }

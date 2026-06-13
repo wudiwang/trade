@@ -38,6 +38,13 @@ async function loadStatus() {
       <div class="sub">${t.closed}平 / ${t.open}持 · 胜率${t.win_rate}% · 期望${t.expectancy_r}R</div></div>`;
   }
   $('stat-cards').innerHTML = cards;
+  // 逼空候选
+  const sq = s.squeeze || [];
+  $('squeeze-chips').innerHTML = sq.length ? sq.map(c => `
+    <span class="pill ${c.strong ? 'gold' : ''}" style="cursor:pointer" onclick="openChart('${c.symbol}','15m')"
+      title="OI ${c.oi_change_pct}% · 费率${((c.funding||0)*100).toFixed(3)}% · 价格位${Math.round(c.pos*100)}%">
+      ${c.strong ? '🔥' : '⚠'} ${c.symbol} OI${c.oi_change_pct >= 0 ? '+' : ''}${c.oi_change_pct}%
+    </span>`).join('') : '<span class="muted">暂无（行情平静时正常）</span>';
 }
 
 // ---------- 信号 ----------

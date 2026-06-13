@@ -68,6 +68,13 @@ factors:
   mtf_resonance: { enabled: true }                           # +1 5m与15m共振
   btc_resonance: { enabled: true }                           # +1 BTC大盘共振
 
+# ---- 逼空检测(P5a) ----
+squeeze:
+  refresh_minutes: 15      # 每N分钟扫一次衍生数据
+  oi_surge_pct: 30.0       # 持仓量2-3h涨幅≥N% = 骤增
+  funding_extreme: 0.0005  # 资金费率绝对值≥(0.05%)算极值
+  low_pos: 0.35            # 价格处于近200根区间下35%以内 = 低位
+
 # ---- 仓位与风控 ----
 risk:
   account_equity: 1000         # 账户规模(USDT), paper模式的虚拟本金
