@@ -49,9 +49,13 @@ async function loadStatus() {
 
 // ---------- 信号 ----------
 const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', chan: '分型'};
-function typeLabel(type, dir) {
-  if (dir === 'short') return type === 'buy1' ? '✅一卖' : type === 'buy2' ? '🔁二卖' : (TYPE_TAG[type] || type);
-  return TYPE_TAG[type] || type;
+// 生命周期(方案A): try=试买/试卖, ok=一买/一卖(确认), fail=一买✗(失败)
+function typeLabel(type, dir, state) {
+  if (state === 'try') return dir === 'short' ? '试卖' : '试买';
+  const base = dir === 'short'
+    ? (type === 'buy1' ? '一卖' : type === 'buy2' ? '二卖' : (TYPE_TAG[type] || type))
+    : (type === 'buy1' ? '一买' : type === 'buy2' ? '二买' : (TYPE_TAG[type] || type));
+  return state === 'fail' ? base + '✗' : base;
 }
 let signalCache = {};
 function sigType(s) {
@@ -72,7 +76,7 @@ async function loadSignals() {
       <td>${s.id}</td><td>${fmtT(s.created_at)}</td>
       <td><b>${s.symbol}</b></td><td>${s.tf}</td>
       <td><span class="tag ${s.direction}">${s.direction === 'long' ? '多' : '空'}</span></td>
-      <td><span class="tag primary">${typeLabel(sigType(s), s.direction)} ${sigScore(s)}</span></td>
+      <td><span class="tag primary">${typeLabel(sigType(s), s.direction, s.state)} ${sigScore(s)}</span></td>
       <td>${fmtP(s.entry)}</td><td class="red">${fmtP(s.sl)}</td><td class="green">${fmtP(s.tp)}</td>
       <td><b>${s.rr}</b></td><td>${s.vol_ratio}x</td><td>${s.status}</td>
     </tr>`).join('');
@@ -92,7 +96,7 @@ async function loadTrades() {
   $('t-trades').innerHTML = rows.map(t => `
     <tr class="clickable" onclick="openChartFromTrade(${t.id})" title="点击查看当时K线形态与买卖点">
       <td>${t.id}</td><td><b>${t.symbol}</b></td><td>${t.tf}</td>
-      <td><span class="tag primary">${typeLabel(t.track, t.direction)}</span></td>
+      <td><span class="tag primary">${typeLabel(t.track, t.direction, t.sig_state)}</span></td>
       <td><span class="tag ${t.direction}">${t.direction === 'long' ? '多' : '空'}</span></td>
       <td>${fmtP(t.entry)}</td><td class="red">${fmtP(t.sl)}</td><td class="green">${fmtP(t.tp)}</td>
       <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : t.result === 'rev' ? '🔄反向平仓' : '🛑止损'}</td>
@@ -298,7 +302,7 @@ async function openChart(symbol, tf, ref) {
       time: s.created_at, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
       color: '#ffd700',                                   // 买入点统一黄色, 醒目区分入场位置
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
-      text: `${typeLabel(ex.type, s.direction)} #${s.id}`,
+      text: `${typeLabel(ex.type, s.direction, s.state)} #${s.id}`,
     });
     // 顶/底分型：箭头是停顿K入场位，这里把真正的分型那根K单独醒目标出来
     if (ex.fractal_price != null) {

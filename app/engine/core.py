@@ -269,6 +269,9 @@ class Engine:
         # 信号评估（多级别联立：一次收盘可能产出多个信号）
         try:
             kbt = {t: list(self.cache.get((symbol, t), ())) for t in self.cfg.timeframes}
+            # 更新"试"信号生命周期(试→成立/失败)
+            for sid, st in self.signal_engine.update_lifecycle(symbol, tf, kbt.get(tf, [])):
+                log.info("SIGNAL #%d -> %s", sid, st)
             for sig in self.signal_engine.evaluate_all(symbol, tf, kbt):
                 sid = self.db.insert_signal(sig.to_db())
                 # 反向信号平仓：一卖平掉同币同级别的多单(一买)，一买平掉空单

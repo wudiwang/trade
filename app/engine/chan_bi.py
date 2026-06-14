@@ -199,6 +199,27 @@ def divergence(klines: list, seq: list, direction: str,
     return False, ""
 
 
+def lifecycle_state(klines: list, fx_price: float, fx_time_ms: int,
+                    direction: str, min_merged: int = 5) -> str:
+    """信号生命周期判定，返回 'fail' / 'ok' / 'try'。
+    fail = 分型后价格打穿分型极值(底分型最低/顶分型最高)= 一买/一卖失败;
+    ok   = 分型之后走完一笔(出现反向分型，间隔≥min_merged-1合并K) = 底/顶成立;
+    否则 try(仍在尝试，未定)。先判失败(破极值优先)。"""
+    for k in klines:
+        if int(k["open_time"]) <= fx_time_ms:
+            continue
+        if direction == "long" and float(k["low"]) < fx_price:
+            return "fail"
+        if direction == "short" and float(k["high"]) > fx_price:
+            return "fail"
+    _, seq = build_bi(klines, min_merged)
+    want = "top" if direction == "long" else "bottom"
+    for f in seq:
+        if f.open_time > fx_time_ms and f.kind == want:
+            return "ok"
+    return "try"
+
+
 def stall_idx(klines: list, merged: list, fx, max_gap: int = 3):
     """停顿K：底分型→某根K收盘>右K最高价(顶分型→收盘<右K最低价)，且必须是最后一根K。
     返回停顿K原始下标或 None。"""

@@ -95,6 +95,9 @@ class DB:
             cols = [r[1] for r in c.execute("PRAGMA table_info(klines)")]
             if "taker_buy" not in cols:
                 c.execute("ALTER TABLE klines ADD COLUMN taker_buy REAL DEFAULT 0")
+            scols = [r[1] for r in c.execute("PRAGMA table_info(signals)")]
+            if "state" not in scols:   # 信号生命周期: try=尝试 / ok=成立(走完一笔) / fail=破分型失败
+                c.execute("ALTER TABLE signals ADD COLUMN state TEXT DEFAULT 'try'")
 
     def conn(self) -> sqlite3.Connection:
         c = getattr(self._local, "conn", None)

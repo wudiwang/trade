@@ -163,19 +163,20 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     @app.get("/api/trades")
     async def trades(track: str = "", result: str = "", tf: str = "", limit: int = 500):
         """track 空=全部策略；tf 空=全部级别；result: ''=全部, open=持仓中, closed=已结束。"""
-        sql = "SELECT * FROM paper_trades WHERE 1=1"
+        sql = ("SELECT pt.*, s.state AS sig_state FROM paper_trades pt "
+               "LEFT JOIN signals s ON s.id=pt.signal_id WHERE 1=1")
         args: list = []
         if track:
-            sql += " AND track=?"
+            sql += " AND pt.track=?"
             args.append(track)
         if tf:
-            sql += " AND tf=?"
+            sql += " AND pt.tf=?"
             args.append(tf)
         if result == "open":
-            sql += " AND result='open'"
+            sql += " AND pt.result='open'"
         elif result == "closed":
-            sql += " AND result IN ('tp','sl','rev')"
-        sql += " ORDER BY id DESC LIMIT ?"
+            sql += " AND pt.result IN ('tp','sl','rev')"
+        sql += " ORDER BY pt.id DESC LIMIT ?"
         args.append(min(limit, 2000))
         return [dict(r) for r in db.query(sql, args)]
 
@@ -355,7 +356,7 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     async def klines(symbol: str, tf: str = "15m", limit: int = 300):
         rows = db.get_klines(symbol, tf, min(limit, 500))
         sigs = db.query(
-            "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, extra FROM signals "
+            "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, state, extra FROM signals "
             "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
         return {"klines": [dict(r) for r in rows], "signals": [dict(r) for r in sigs]}
 

@@ -4,6 +4,7 @@
 之后更高低点的底分型 → 二买（主力K可选标注）。每个 (币种,级别) 一个状态机。
 保留 chan_v1（缠论分型+因子）可通过 strategy=chan_v1 切回。
 """
+import json
 import logging
 import time
 from dataclasses import dataclass, asdict
@@ -141,6 +142,36 @@ class SignalEngine:
             if s3:
                 out.append(s3)
         return out
+
+    def update_lifecycle(self, symbol: str, tf: str, klines: list) -> list:
+        """每根收盘更新该币该级别"试"信号的状态(试→成立/失败)。返回 [(id, 新状态)]。
+        成立=分型后走完一笔; 失败=打穿分型极值。一旦成/败即终态，不再回看。"""
+        if self._p("strategy", "chan_bi") != "chan_bi" or not klines:
+            return []
+        try:
+            rows = self.db.query(
+                "SELECT id, direction, extra FROM signals WHERE state='try' AND symbol=? AND tf=?",
+                (symbol, tf))
+        except Exception:
+            return []
+        if not rows:
+            return []
+        from .chan_bi import lifecycle_state
+        min_bars = self._p("chan.bi_min_bars", 5)
+        changed = []
+        for r in rows:
+            try:
+                ex = json.loads(r["extra"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            fp, ft = ex.get("fractal_price"), ex.get("fractal_time")
+            if fp is None or not ft:
+                continue
+            st = lifecycle_state(klines, float(fp), int(ft), r["direction"], min_bars)
+            if st != "try":
+                self.db.execute("UPDATE signals SET state=? WHERE id=?", (st, r["id"]))
+                changed.append((r["id"], st))
+        return changed
 
     def evaluate(self, symbol: str, tf: str, klines: list,
                  klines_15m: list | None = None) -> Signal | None:

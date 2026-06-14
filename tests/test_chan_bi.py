@@ -218,6 +218,25 @@ def test_strong_reversal():
     print("  强反转: 大实体+吞没+下影→过; 未吞没/小实体→拦")
 
 
+def test_lifecycle_state():
+    from app.engine.chan_bi import lifecycle_state
+    # 成立: 下到底(底分型) → 上涨成一笔(出顶分型, 用回调16确认顶)
+    ks_ok = zigzag([20, 12, 18, 16], per_leg=7)
+    _, seq = build_bi(ks_ok, 5)
+    bot = [f for f in seq if f.kind == "bottom"][0]
+    st_ok = lifecycle_state(ks_ok, bot.extreme_price, bot.open_time, "long", 5)
+    # 失败: 同一个底, 后面一路跌破底极值
+    ks_fail = list(ks_ok)
+    p = 16.0
+    for i in range(9):
+        p -= 2.0
+        ks_fail.append(k(p + 2, p + 2.1, p - 0.1, p, t=300 + i))
+    st_fail = lifecycle_state(ks_fail, bot.extreme_price, bot.open_time, "long", 5)
+    print(f"  底极值={bot.extreme_price:.2f} 成立={st_ok} 破底={st_fail}")
+    assert st_ok == "ok", st_ok
+    assert st_fail == "fail", st_fail
+
+
 def test_macd_hist_len():
     closes = [10 + (i % 5) * 0.3 for i in range(80)]
     h = macd_hist(closes, 12, 26, 9)
