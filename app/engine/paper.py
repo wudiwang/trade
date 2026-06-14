@@ -20,6 +20,10 @@ class PaperBroker:
         """s: signals.Signal。track = 信号类型（watch/buy1/buy2/spring/chan），
         每种入场点独立统计胜率，用于验证哪个买点最有效。"""
         tracks = [s.extra.get("type", "other") if isinstance(s.extra, dict) else "other"]
+        # 威科夫确认型: 不单独开仓(只记信号, 用于与缠论重叠标注), 单独交易胜率太低
+        if (isinstance(s.extra, dict) and s.extra.get("path") == "威科夫"
+                and self.cfg.get("wyckoff.confirm_only", True)):
+            return
         # paper 模式不设仓位上限：每个信号都开模拟单、都跟踪胜负，统计才完整(验证策略用)。
         # 仓位上限只在 live 实盘起作用(真钱风控)。
         live = self.cfg.mode == "live"

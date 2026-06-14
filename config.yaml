@@ -26,6 +26,7 @@ chan:
 # ---- 威科夫弹簧买点(Spring/UTAD) 独立路径 ----
 wyckoff:
   enabled: true
+  confirm_only: true     # 确认型: 威科夫不单独开仓(单独胜率18%亏), 仅与缠论重叠时给缠论信号标"双重加强"
   lookback: 20           # 前低/前高回看根数(确定支撑/阻力)
   reclaim_bars: 4        # 扫破后N根内收回才算弹簧
   pierce_tol_pct: 0.0    # 扫破容差%(0=只要破)
