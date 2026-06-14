@@ -161,17 +161,20 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         return [dict(r) for r in db.query(sql, args)]
 
     @app.get("/api/trades")
-    async def trades(track: str = "", result: str = "", limit: int = 500):
-        """track 空=全部策略；result: ''=全部, open=持仓中, closed=已结束。"""
+    async def trades(track: str = "", result: str = "", tf: str = "", limit: int = 500):
+        """track 空=全部策略；tf 空=全部级别；result: ''=全部, open=持仓中, closed=已结束。"""
         sql = "SELECT * FROM paper_trades WHERE 1=1"
         args: list = []
         if track:
             sql += " AND track=?"
             args.append(track)
+        if tf:
+            sql += " AND tf=?"
+            args.append(tf)
         if result == "open":
             sql += " AND result='open'"
         elif result == "closed":
-            sql += " AND result IN ('tp','sl')"
+            sql += " AND result IN ('tp','sl','rev')"
         sql += " ORDER BY id DESC LIMIT ?"
         args.append(min(limit, 2000))
         return [dict(r) for r in db.query(sql, args)]

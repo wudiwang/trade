@@ -85,7 +85,7 @@ function openChartFromSignal(id) {
 // ---------- 交易 ----------
 let tradeCache = {};
 async function loadTrades() {
-  const q = `?track=${$('f-track').value}&result=${$('f-result').value}`;
+  const q = `?track=${$('f-track').value}&result=${$('f-result').value}&tf=${$('f-tf-trade').value}`;
   const rows = await api('/api/trades' + q);
   tradeCache = {};
   rows.forEach(t => tradeCache[t.id] = t);
