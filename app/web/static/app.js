@@ -271,7 +271,7 @@ async function loadEquity() {
 let klChart;
 async function openChart(symbol, tf, ref) {
   $('modal').classList.add('show');
-  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 蓝=买入 绿=止盈 红=止损' : '');
+  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 蓝=买入 绿=止盈 红=止损 · 点线=顶/底分型(用于一↔二比较)' : '');
   const d = await api(`/api/klines?symbol=${symbol}&tf=${tf}&limit=300`);
   $('chart').innerHTML = '';
   await new Promise(r => setTimeout(r, 60));  // 等弹窗布局完成，避免首开图表零尺寸空白
@@ -289,7 +289,7 @@ async function openChart(symbol, tf, ref) {
   klChart.priceScale('vol').applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
   vs.setData(d.klines.map(k => ({time: k.open_time / 1000, value: k.volume, color: k.close >= k.open ? '#2ecc7144' : '#e74c3c44'})));
 
-  // 信号标记：买点箭头 + 破位K + 主力K(可选)
+  // 信号标记：买点箭头(=停顿K入场) + 顶/底分型(真正参与一↔二比较的极值) + 破位K + 主力K(可选)
   const markers = [];
   for (const s of d.signals.filter(x => x.status !== 'error')) {
     let ex = {};
@@ -300,6 +300,21 @@ async function openChart(symbol, tf, ref) {
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
       text: `${typeLabel(ex.type, s.direction)} #${s.id}`,
     });
+    // 顶/底分型：箭头浮在停顿K上方易误导高低，这里把真正比较的极值点单独标出来
+    if (ex.fractal_price != null && ex.fractal_time) {
+      const fxn = s.direction === 'long' ? '底' : '顶';
+      markers.push({
+        time: Math.floor(ex.fractal_time / 1000),
+        position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
+        color: '#f39c12', shape: 'circle', text: `${fxn}#${s.id}`,
+      });
+      // 水平点线落在 extreme_price 上：一卖与二卖的线同框，可直接比高低
+      cs.createPriceLine({
+        price: ex.fractal_price, color: '#f39c12', lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true,
+        title: `${typeLabel(ex.type, s.direction)}${fxn} #${s.id}`,
+      });
+    }
     if (ex.breakdown && ex.breakdown.time) {
       markers.push({time: Math.floor(ex.breakdown.time / 1000), position: 'aboveBar',
         color: '#f1c40f', shape: 'circle', text: '破位K'});
