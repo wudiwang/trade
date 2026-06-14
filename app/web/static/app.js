@@ -324,8 +324,8 @@ async function openChart(symbol, tf, ref) {
       const isWy = ex.path === '威科夫';
       let tag;
       if (isWy) {
-        const climax = (ex.spring_grade || '').startsWith('放量');
-        tag = (climax ? '爆量' : '扫破') + (s.direction === 'long' ? '低' : '高');
+        const vx = s.vol_ratio != null ? ` ${s.vol_ratio}x` : '';
+        tag = `💥爆量K${vx}`;          // 威科夫: 橙圈/橙线落在那根爆量扫破K上
       } else {
         tag = s.direction === 'long' ? '底分型' : '顶分型';
       }

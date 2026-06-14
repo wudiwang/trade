@@ -359,7 +359,7 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     async def klines(symbol: str, tf: str = "15m", limit: int = 300):
         rows = db.get_klines(symbol, tf, min(limit, 500))
         sigs = db.query(
-            "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, state, extra FROM signals "
+            "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, state, vol_ratio, extra FROM signals "
             "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
         return {"klines": [dict(r) for r in rows], "signals": [dict(r) for r in sigs]}
 

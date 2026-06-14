@@ -26,7 +26,7 @@ chan:
 # ---- 威科夫弹簧买点(Spring/UTAD) 独立路径 ----
 wyckoff:
   enabled: true
-  confirm_only: true     # 确认型: 威科夫不单独开仓(只做提示/重叠中性标记), 不作开仓依据
+  confirm_only: false    # false=威科夫独立开仓(回测7/14天期望稳定+0.23); true=仅提示不开仓
   require_divergence: false  # (已去掉背驰收紧)
   dryup_only: false      # (已去掉"只缩量"收紧)
   vol_mult: 3.0          # 扫破前低那根下跌K量能 ≥ 前20根均量×3 才算(放量假突破)
