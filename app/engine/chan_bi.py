@@ -224,9 +224,9 @@ def wyckoff_spring(klines: list, lookback: int = 20, reclaim_bars: int = 4,
                    climax_mult: float = 2.0, dryup_ratio: float = 1.0,
                    min_bounce_pct: float = 1.5, wick_min: float = 0.4):
     """威科夫弹簧(多)/上冲回落UTAD(空)。在最新K上判定。
-    多: 近 reclaim_bars 根扫破"前低"(其前 lookback 根的最低)并收回, 且
-       ① 前低形成后价格曾反弹离开它≥min_bounce_pct%(确保是回探支撑, 非下跌途中)
-       ② 扫破K有下影(买盘拒绝)。返回 (dir, 扫破极值, 前低, 扫破idx, grade, vol_ratio) 或 None。"""
+    多: 近 reclaim_bars 根有一根"爆量阴线"扫破前低, 价格再收回到该爆量K的【启动位置=开盘价】以上;
+       且前低形成后价格曾反弹离开它≥min_bounce_pct%(回探支撑,非下跌途中)。空头镜像(爆量阳线扫前高)。
+    返回 (dir, 扫破极值=止损参考, 爆量K启动位置=入场, 扫破idx, grade, vol_ratio) 或 None。"""
     n = len(klines)
     if n < lookback + reclaim_bars + 2:
         return None
@@ -242,28 +242,30 @@ def wyckoff_spring(klines: list, lookback: int = 20, reclaim_bars: int = 4,
     recent = klines[j0: i + 1]
     rl = [float(k["low"]) for k in recent]
     rh = [float(k["high"]) for k in recent]
-    # 多头弹簧
+    # 多头弹簧: 爆量阴线扫破前低 → 收回到该爆量K启动位置(开盘)以上
     prior_low = min(lows)
     lo_pos = lows.index(prior_low)
     spring_low = min(rl)
     sidx = j0 + rl.index(spring_low)
+    so, sc = float(klines[sidx]["open"]), float(klines[sidx]["close"])
     bounced_up = highs[lo_pos + 1:] and max(highs[lo_pos + 1:]) >= prior_low * (1 + min_bounce_pct / 100.0)
-    if (spring_low < prior_low * (1 - pierce_tol_pct / 100.0) and c_now > prior_low
-            and bounced_up and _wick_ok(klines[sidx], "long", wick_min)):
+    if (spring_low < prior_low * (1 - pierce_tol_pct / 100.0)
+            and sc < so and c_now > so and bounced_up):       # 爆量阴线 + 收回到其开盘上方
         vr = _vol_ratio_at(klines, sidx, vol_ma)
         grade = "缩量弹簧" if vr < dryup_ratio else ("放量弹簧" if vr >= climax_mult else "中性弹簧")
-        return "long", spring_low, prior_low, sidx, grade, round(vr, 2)
-    # 空头 UTAD
+        return "long", spring_low, so, sidx, grade, round(vr, 2)
+    # 空头 UTAD: 爆量阳线扫破前高 → 回落到该爆量K启动位置(开盘)以下
     prior_high = max(highs)
     hi_pos = highs.index(prior_high)
     spring_high = max(rh)
     hidx = j0 + rh.index(spring_high)
+    ho, hc = float(klines[hidx]["open"]), float(klines[hidx]["close"])
     dropped = lows[hi_pos + 1:] and min(lows[hi_pos + 1:]) <= prior_high * (1 - min_bounce_pct / 100.0)
-    if (spring_high > prior_high * (1 + pierce_tol_pct / 100.0) and c_now < prior_high
-            and dropped and _wick_ok(klines[hidx], "short", wick_min)):
+    if (spring_high > prior_high * (1 + pierce_tol_pct / 100.0)
+            and hc > ho and c_now < ho and dropped):          # 爆量阳线 + 回落到其开盘下方
         vr = _vol_ratio_at(klines, hidx, vol_ma)
         grade = "缩量上冲" if vr < dryup_ratio else ("放量上冲" if vr >= climax_mult else "中性上冲")
-        return "short", spring_high, prior_high, hidx, grade, round(vr, 2)
+        return "short", spring_high, ho, hidx, grade, round(vr, 2)
     return None
 
 

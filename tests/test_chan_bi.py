@@ -225,15 +225,17 @@ def test_wyckoff_spring():
     for i in range(30):
         lo = 12.0 + (i % 3) * 0.5
         ks.append(k(13, 13.2, lo, 12.8, v=100, t=i))
-    # 弹簧K: 扫破12到10, 收回到13(>12), 放量4x
-    ks.append(k(12.5, 13.1, 10.0, 13.0, v=400, t=30))
+    # 爆量阴线: 开12.5 扫破到10 收11(阴线), 放量4x
+    ks.append(k(12.5, 12.6, 10.0, 11.0, v=400, t=30))
+    # 收回到爆量K启动位置(开盘12.5)以上: 收12.7
+    ks.append(k(11.0, 12.8, 10.9, 12.7, v=100, t=31))
     r = wyckoff_spring(ks, lookback=20, reclaim_bars=4, vol_ma=20, climax_mult=2.0)
     assert r is not None, "应识别到弹簧"
-    direction, spring_ext, prior, sidx, grade, vr = r
-    print(f"  弹簧 dir={direction} 扫破极值={spring_ext} 前低={prior} grade={grade} 量={vr}x")
-    assert direction == "long" and spring_ext == 10.0 and grade == "放量弹簧"
-    # 反例: 没破前低 → 不是弹簧
-    ks2 = ks[:30] + [k(12.5, 13.1, 12.3, 12.9, v=100, t=30)]
+    direction, spring_ext, start_pos, sidx, grade, vr = r
+    print(f"  弹簧 dir={direction} 扫破极值={spring_ext} 启动位={start_pos} grade={grade} 量={vr}x")
+    assert direction == "long" and spring_ext == 10.0 and start_pos == 12.5
+    # 反例: 收盘还没回到爆量K开盘(12.5)上方 → 不触发
+    ks2 = ks[:31] + [k(11.0, 12.3, 10.9, 12.2, v=100, t=31)]
     assert wyckoff_spring(ks2, 20, 4) is None
 
 

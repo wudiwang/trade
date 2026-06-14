@@ -207,12 +207,12 @@ class SignalEngine:
         self._bi_fired[fkey] = anchor
         cool[ckey] = now_ot
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
-        entry = float(klines[-1]["close"])                    # 激进: 收回即进
+        entry = prior_level                                   # 入场=爆量K启动位置(开盘价)
         sl = spring_ext * (1 - buf) if direction == "long" else spring_ext * (1 + buf)
         label = "威科夫买点" if direction == "long" else "威科夫卖点"
         side = "做多" if direction == "long" else "做空"
         sweep = "前低" if direction == "long" else "前高"
-        reason = f"🌀{label}({side}): {grade}·扫{sweep}{prior_level:.6g}收回 [量{vr}x]"
+        reason = f"🌀{label}({side}): {grade}·爆量扫{sweep}→回到启动位{prior_level:.6g} [量{vr}x]"
         return self._spring_make(
             symbol, tf, direction, entry, sl, "buy1",
             {"detail": {"vol_ratio": vr}}, klines,
