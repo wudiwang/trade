@@ -208,41 +208,62 @@ def _vol_ratio_at(klines: list, idx: int, ma: int = 20) -> float:
     return v / avg if avg > 0 else 1.0
 
 
+def _wick_ok(k, direction: str, wick_min: float) -> bool:
+    """扫破K要有反向影线(拒绝)。多: 下影≥振幅×wick_min; 空: 上影。"""
+    o, c, h, l = float(k["open"]), float(k["close"]), float(k["high"]), float(k["low"])
+    rng = h - l
+    if rng <= 0:
+        return False
+    if direction == "long":
+        return (min(o, c) - l) >= wick_min * rng
+    return (h - max(o, c)) >= wick_min * rng
+
+
 def wyckoff_spring(klines: list, lookback: int = 20, reclaim_bars: int = 4,
                    pierce_tol_pct: float = 0.0, vol_ma: int = 20,
-                   climax_mult: float = 2.0, dryup_ratio: float = 1.0):
+                   climax_mult: float = 2.0, dryup_ratio: float = 1.0,
+                   min_bounce_pct: float = 1.5, wick_min: float = 0.4):
     """威科夫弹簧(多)/上冲回落UTAD(空)。在最新K上判定。
-    多: 近 reclaim_bars 根里有K跌破"前低"(其前 lookback 根的最低), 且当前收盘收回前低之上。
-    返回 (direction, spring_extreme, prior_level, spring_idx, grade, vol_ratio) 或 None。
-    grade: 缩量弹簧/中性弹簧/放量弹簧(空头: 缩量上冲/中性上冲/放量上冲)。"""
+    多: 近 reclaim_bars 根扫破"前低"(其前 lookback 根的最低)并收回, 且
+       ① 前低形成后价格曾反弹离开它≥min_bounce_pct%(确保是回探支撑, 非下跌途中)
+       ② 扫破K有下影(买盘拒绝)。返回 (dir, 扫破极值, 前低, 扫破idx, grade, vol_ratio) 或 None。"""
     n = len(klines)
     if n < lookback + reclaim_bars + 2:
         return None
     i = n - 1
     c_now = float(klines[i]["close"])
-    base = klines[max(0, i - reclaim_bars - lookback + 1): i - reclaim_bars + 1]
+    b0 = max(0, i - reclaim_bars - lookback + 1)
+    base = klines[b0: i - reclaim_bars + 1]
     if len(base) < max(5, lookback // 2):
         return None
-    prior_low = min(float(k["low"]) for k in base)
-    prior_high = max(float(k["high"]) for k in base)
+    lows = [float(k["low"]) for k in base]
+    highs = [float(k["high"]) for k in base]
     j0 = i - reclaim_bars + 1
     recent = klines[j0: i + 1]
     rl = [float(k["low"]) for k in recent]
     rh = [float(k["high"]) for k in recent]
-    # 多头弹簧: 扫破前低 + 收回前低之上
+    # 多头弹簧
+    prior_low = min(lows)
+    lo_pos = lows.index(prior_low)
     spring_low = min(rl)
-    if spring_low < prior_low * (1 - pierce_tol_pct / 100.0) and c_now > prior_low:
-        sidx = j0 + rl.index(spring_low)
+    sidx = j0 + rl.index(spring_low)
+    bounced_up = highs[lo_pos + 1:] and max(highs[lo_pos + 1:]) >= prior_low * (1 + min_bounce_pct / 100.0)
+    if (spring_low < prior_low * (1 - pierce_tol_pct / 100.0) and c_now > prior_low
+            and bounced_up and _wick_ok(klines[sidx], "long", wick_min)):
         vr = _vol_ratio_at(klines, sidx, vol_ma)
         grade = "缩量弹簧" if vr < dryup_ratio else ("放量弹簧" if vr >= climax_mult else "中性弹簧")
         return "long", spring_low, prior_low, sidx, grade, round(vr, 2)
-    # 空头 UTAD: 扫破前高 + 收回前高之下
+    # 空头 UTAD
+    prior_high = max(highs)
+    hi_pos = highs.index(prior_high)
     spring_high = max(rh)
-    if spring_high > prior_high * (1 + pierce_tol_pct / 100.0) and c_now < prior_high:
-        sidx = j0 + rh.index(spring_high)
-        vr = _vol_ratio_at(klines, sidx, vol_ma)
+    hidx = j0 + rh.index(spring_high)
+    dropped = lows[hi_pos + 1:] and min(lows[hi_pos + 1:]) <= prior_high * (1 - min_bounce_pct / 100.0)
+    if (spring_high > prior_high * (1 + pierce_tol_pct / 100.0) and c_now < prior_high
+            and dropped and _wick_ok(klines[hidx], "short", wick_min)):
+        vr = _vol_ratio_at(klines, hidx, vol_ma)
         grade = "缩量上冲" if vr < dryup_ratio else ("放量上冲" if vr >= climax_mult else "中性上冲")
-        return "short", spring_high, prior_high, sidx, grade, round(vr, 2)
+        return "short", spring_high, prior_high, hidx, grade, round(vr, 2)
     return None
 
 

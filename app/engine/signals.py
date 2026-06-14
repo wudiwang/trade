@@ -163,10 +163,20 @@ class SignalEngine:
                            self._p("wyckoff.pierce_tol_pct", 0.0),
                            self._p("wyckoff.vol_ma", 20),
                            self._p("wyckoff.climax_mult", 2.0),
-                           self._p("wyckoff.dryup_ratio", 1.0))
+                           self._p("wyckoff.dryup_ratio", 1.0),
+                           self._p("wyckoff.min_bounce_pct", 1.5),
+                           self._p("wyckoff.wick_min", 0.4))
         if not r:
             return None
         direction, spring_ext, prior_level, sidx, grade, vr = r
+        # 冷却: 同币同级别同向 N 根内只出一次, 防洪水
+        cool = self.__dict__.setdefault("_wy_cool", {})
+        ckey = (symbol, tf, direction)
+        bar_ms = TF_MS.get(tf, 300) * 1000
+        now_ot = int(klines[-1]["open_time"])
+        last = cool.get(ckey)
+        if last is not None and now_ot - last < self._p("wyckoff.cooldown_bars", 10) * bar_ms:
+            return None
         # 前期必须成笔(避免主跌段半山腰乱抓)
         min_bars = self._p("chan.bi_min_bars", 5)
         _, seq = build_bi(klines, min_bars)
@@ -181,6 +191,7 @@ class SignalEngine:
         if not self._btc_ok(direction):
             return self._drop("btc_filter")
         self._bi_fired[fkey] = anchor
+        cool[ckey] = now_ot
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
         entry = float(klines[-1]["close"])                    # 激进: 收回即进
         sl = spring_ext * (1 - buf) if direction == "long" else spring_ext * (1 + buf)
