@@ -12,9 +12,7 @@ timeframes: ["5m", "15m", "1h"]   # 5m自身;15m结构用5m停顿触发;1h结构
 # ---- 缠论笔策略 ----
 chan:
   bi_min_bars: 5         # 一笔至少N根合并K(去包含后)
-  stall_max_gap: 3       # 底/顶分型后N根内出现停顿K才确认(A路)
-  vol_mult: 3.0          # B路:放量下跌K量≥N×均量
-  vol_lookback: 8        # B路:近N根内找放量下跌K
+  stall_max_gap: 3       # 底/顶分型后N根内出现停顿K才确认
   mtf_tol_pct: 0.6       # 多级别:次级停顿与高级别分型的价位容差%
   fractal_vol_ma: 10     # 量能规则:底分型前2根均量回看根数
   fractal_vol_mult: 2.0  # 量能规则:底分型前2根任意一根量≥N×均量(只认最强/标准分型)

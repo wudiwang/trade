@@ -7,29 +7,6 @@
 做空镜像：上涨成笔 → 顶分型 → 停顿K(收盘<顶分型右K最低价)。
 """
 from .chan import merge_klines, find_fractals
-from .spring import vol_avg
-
-
-def vol_reclaim(klines: list, i: int, vol_mult: float = 3.0,
-                lookback: int = 8, avg_period: int = 20):
-    """放量收回一买(B路)：近lookback根内有一根放量(≥vol_mult×均量)下跌K，
-    当前K(i)收盘收回到那根K开盘价之上 → 做多。做空镜像(放量阳线被收回)。
-    不再要求跌破平台/前低，只看放量+收回。返回 (direction, 放量K下标) 或 None。"""
-    c = float(klines[i]["close"])
-    lo = max(avg_period, i - lookback)
-    for j in range(i - 1, lo - 1, -1):
-        k = klines[j]
-        o, cl, v = float(k["open"]), float(k["close"]), float(k["volume"])
-        if v <= 0 or float(k["high"]) <= float(k["low"]):
-            continue
-        avg = vol_avg(klines, j, avg_period)
-        if avg <= 0 or v < vol_mult * avg:
-            continue
-        if cl < o and c > o:      # 放量阴线 + 当前收回其开盘上方
-            return "long", j
-        if cl > o and c < o:      # 放量阳线 + 当前收回其开盘下方
-            return "short", j
-    return None
 
 
 def build_bi(klines: list, min_merged: int = 5):
