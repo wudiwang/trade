@@ -322,8 +322,13 @@ async function openChart(symbol, tf, ref) {
     // 橙点/橙线：缠论=底/顶分型那根K; 威科夫=爆量K扫破极值(止损位)。两者标签区分,避免混淆
     if (ex.fractal_price != null) {
       const isWy = ex.path === '威科夫';
-      const tag = isWy ? (s.direction === 'long' ? '爆量低' : '爆量高')
-                       : (s.direction === 'long' ? '底分型' : '顶分型');
+      let tag;
+      if (isWy) {
+        const climax = (ex.spring_grade || '').startsWith('放量');
+        tag = (climax ? '爆量' : '扫破') + (s.direction === 'long' ? '低' : '高');
+      } else {
+        tag = s.direction === 'long' ? '底分型' : '顶分型';
+      }
       if (ex.fractal_time) {
         markers.push({
           time: Math.floor(ex.fractal_time / 1000),
