@@ -27,8 +27,9 @@ chan:
 wyckoff:
   enabled: true
   confirm_only: true     # 确认型: 威科夫不单独开仓(只做提示/重叠中性标记), 不作开仓依据
-  require_divergence: true  # 加回背驰(力度确认), 提高质量
-  dryup_only: true       # 只做缩量弹簧(威科夫理论最强); 放量/中性弹簧需等回测(Test未建,暂不出)
+  require_divergence: false  # (已去掉背驰收紧)
+  dryup_only: false      # (已去掉"只缩量"收紧)
+  vol_mult: 3.0          # 扫破前低那根下跌K量能 ≥ 前20根均量×3 才算(放量假突破)
   lookback: 20           # 前低/前高回看根数(确定支撑/阻力)
   reclaim_bars: 4        # 扫破后N根内收回才算弹簧
   pierce_tol_pct: 0.0    # 扫破容差%(0=只要破)
@@ -36,7 +37,7 @@ wyckoff:
   climax_mult: 2.0       # 放量弹簧门槛(扫破K量≥N×均量)
   dryup_ratio: 1.0       # 缩量弹簧门槛(扫破K量<N×均量=供给枯竭,最强)
   min_bounce_pct: 1.5    # 前低形成后须反弹离开≥N%(确保回探支撑,非下跌途中)
-  wick_min: 0.4          # 扫破K反向影线≥振幅×N(探低/冲高被拒)
+  wick_min: 0.0          # 扫破K反向影线门槛(0=关:放量下跌阴线常收低位无下影,与放量假突破冲突)
   cooldown_bars: 10      # 同币同级别同向N根内只出一次弹簧(防洪水)
   overlap_bars: 3        # 双信号重叠时间窗(根):缠论买点+威科夫买点同位共振
 

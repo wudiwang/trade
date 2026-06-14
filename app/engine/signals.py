@@ -169,8 +169,11 @@ class SignalEngine:
         if not r:
             return None
         direction, spring_ext, prior_level, sidx, grade, vr = r
-        # 只做缩量弹簧(理论最强); 放量/中性弹簧需等回测Test(未建), 暂不出
-        if self._p("wyckoff.dryup_only", True) and not grade.startswith("缩量"):
+        # 扫破前低那根下跌K必须放量 ≥ vol_mult × 前20根均量(放量假突破)
+        if vr < self._p("wyckoff.vol_mult", 3.0):
+            return None
+        # (可选)只做缩量弹簧
+        if self._p("wyckoff.dryup_only", False) and not grade.startswith("缩量"):
             return None
         # 冷却: 同币同级别同向 N 根内只出一次, 防洪水
         cool = self.__dict__.setdefault("_wy_cool", {})
