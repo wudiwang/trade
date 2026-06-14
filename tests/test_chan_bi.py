@@ -225,6 +225,42 @@ def test_macd_hist_len():
     print(f"  macd_hist 长度对齐 {len(h)}")
 
 
+class _ShimDB:
+    """内存版 paper_trades，用于测反向平仓。"""
+    def __init__(self):
+        import sqlite3
+        self.c = sqlite3.connect(":memory:"); self.c.row_factory = sqlite3.Row
+        self.c.execute("""CREATE TABLE paper_trades (id INTEGER PRIMARY KEY AUTOINCREMENT,
+            signal_id INT, symbol TEXT, tf TEXT, direction TEXT, track TEXT,
+            entry REAL, sl REAL, tp REAL, qty REAL, opened_at INT,
+            closed_at INT, exit_price REAL, pnl REAL, pnl_r REAL, result TEXT DEFAULT 'open')""")
+        self.c.execute("CREATE TABLE equity_curve (ts INT, track TEXT, equity REAL, PRIMARY KEY(ts,track))")
+    def query(self, sql, params=()): return [dict(r) for r in self.c.execute(sql, params)]
+    def execute(self, sql, params=()): self.c.execute(sql, params); self.c.commit()
+    def one(self, sql, params=()):
+        r = self.c.execute(sql, params).fetchone(); return dict(r) if r else {}
+    def log(self, *a, **k): pass
+
+
+def test_close_opposite():
+    from app.engine.paper import PaperBroker
+    db = _ShimDB(); pb = PaperBroker(make_cfg(), db)
+    db.execute("INSERT INTO paper_trades (symbol,tf,direction,track,entry,sl,tp,qty,opened_at,result)"
+               " VALUES ('AAA','5m','long','buy1',100,95,120,1.0,0,'open')")
+    # 一卖(short)信号 → 平多单, 价110 → 盈利10
+    closed = pb.close_opposite("AAA", "5m", "short", 110)
+    assert len(closed) == 1 and closed[0]["result"] == "rev", closed
+    assert abs(db.one("SELECT pnl FROM paper_trades WHERE id=1")["pnl"] - 10.0) < 1e-6
+    # 再开空单; 同向(short)信号不应平空
+    db.execute("INSERT INTO paper_trades (symbol,tf,direction,track,entry,sl,tp,qty,opened_at,result)"
+               " VALUES ('AAA','5m','short','buy1',110,115,90,1.0,0,'open')")
+    assert pb.close_opposite("AAA", "5m", "short", 105) == []
+    # 一买(long)信号 → 平空单, 价100 → 空盈利10
+    c3 = pb.close_opposite("AAA", "5m", "long", 100)
+    assert len(c3) == 1 and abs(c3[0]["pnl"] - 10.0) < 1e-6, c3
+    print("  反向平仓: 一卖平多/一买平空, 同向不平, pnl正确")
+
+
 def main():
     fns = [v for n, v in globals().items() if n.startswith("test_") and callable(v)]
     for fn in fns:

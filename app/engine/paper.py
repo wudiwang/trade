@@ -38,6 +38,28 @@ class PaperBroker:
                  s.suggested_qty, int(time.time())),
             )
 
+    def close_opposite(self, symbol: str, tf: str, direction: str, price: float) -> list[dict]:
+        """反向信号平仓：新信号方向为 direction 时，按市价(price)平掉同币同级别的反向持仓。
+        即 持多(一买)遇一卖→平多；持空(一卖)遇一买→平空。result='rev'。返回平掉的单子。"""
+        opp = "short" if direction == "long" else "long"
+        rows = self.db.query(
+            "SELECT * FROM paper_trades WHERE result='open' AND symbol=? AND tf=? AND direction=?",
+            (symbol, tf, opp),
+        )
+        closed = []
+        for r in rows:
+            sign = 1 if r["direction"] == "long" else -1
+            pnl = sign * (price - r["entry"]) * r["qty"]
+            sl_dist = abs(r["entry"] - r["sl"])
+            pnl_r = (sign * (price - r["entry"]) / sl_dist) if sl_dist > 0 else 0.0
+            self.db.execute(
+                "UPDATE paper_trades SET result='rev', exit_price=?, pnl=?, pnl_r=?, closed_at=? WHERE id=?",
+                (price, round(pnl, 4), round(pnl_r, 3), int(time.time()), r["id"]),
+            )
+            self._update_equity(r["track"])
+            closed.append({**dict(r), "result": "rev", "pnl": pnl, "pnl_r": pnl_r})
+        return closed
+
     def on_closed_bar(self, symbol: str, tf: str, bar: tuple) -> list[dict]:
         """bar=(open_time,o,h,l,c,v,qv,closed)。检查该币种未平仓单的TP/SL。
         同一根K同时触及TP和SL时按SL算（保守）。返回平掉的单子列表。"""
@@ -76,7 +98,7 @@ class PaperBroker:
     def _update_equity(self, track: str) -> None:
         base = self.cfg.get("risk.account_equity", 1000)
         s = self.db.one(
-            "SELECT COALESCE(SUM(pnl),0) p FROM paper_trades WHERE track=? AND result IN ('tp','sl')",
+            "SELECT COALESCE(SUM(pnl),0) p FROM paper_trades WHERE track=? AND result IN ('tp','sl','rev')",
             (track,),
         )
         self.db.execute(
@@ -86,11 +108,11 @@ class PaperBroker:
 
     def stats(self, track: str) -> dict:
         rows = self.db.query(
-            "SELECT result, pnl, pnl_r FROM paper_trades WHERE track=? AND result IN ('tp','sl')",
+            "SELECT result, pnl, pnl_r FROM paper_trades WHERE track=? AND result IN ('tp','sl','rev')",
             (track,),
         )
         n = len(rows)
-        wins = sum(1 for r in rows if r["result"] == "tp")
+        wins = sum(1 for r in rows if (r["pnl_r"] or 0) > 0)   # tp/盈利反向平仓都算赢
         total_pnl = sum(r["pnl"] or 0 for r in rows)
         total_r = sum(r["pnl_r"] or 0 for r in rows)
         open_cnt = self.db.one(

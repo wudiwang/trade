@@ -271,6 +271,10 @@ class Engine:
             kbt = {t: list(self.cache.get((symbol, t), ())) for t in self.cfg.timeframes}
             for sig in self.signal_engine.evaluate_all(symbol, tf, kbt):
                 sid = self.db.insert_signal(sig.to_db())
+                # 反向信号平仓：一卖平掉同币同级别的多单(一买)，一买平掉空单
+                for rev in self.paper.close_opposite(sig.symbol, sig.tf, sig.direction, sig.entry):
+                    for sub in self.trade_close_subscribers:
+                        await sub(rev)
                 self.paper.open_from_signal(sid, sig)
                 log.info("SIGNAL #%d %s %s %s %s rr=%.2f", sid, sig.kind, sig.symbol, sig.tf, sig.direction, sig.rr)
                 self.db.log("info", "signal", f"#{sid} {sig.symbol} {sig.tf} {sig.direction} rr={sig.rr}")

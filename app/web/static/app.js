@@ -95,7 +95,7 @@ async function loadTrades() {
       <td><span class="tag primary">${typeLabel(t.track, t.direction)}</span></td>
       <td><span class="tag ${t.direction}">${t.direction === 'long' ? '多' : '空'}</span></td>
       <td>${fmtP(t.entry)}</td><td class="red">${fmtP(t.sl)}</td><td class="green">${fmtP(t.tp)}</td>
-      <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : '🛑止损'}</td>
+      <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : t.result === 'rev' ? '🔄反向平仓' : '🛑止损'}</td>
       <td class="${(t.pnl ?? 0) > 0 ? 'green' : (t.pnl ?? 0) < 0 ? 'red' : ''}">${t.pnl == null ? '–' : t.pnl.toFixed(2)}</td>
       <td>${t.pnl_r == null ? '–' : t.pnl_r.toFixed(2)}</td>
       <td>${fmtT(t.opened_at)}</td>
