@@ -8,7 +8,8 @@ from app.config import Config
 from app.engine.chan import merge_klines, find_fractals
 from app.engine.chan_bi import (build_bi, stall_idx, detect,
                                  fractal_grade, vol_spike_before, quality_ok,
-                                 macd_hist, divergence)
+                                 macd_hist, divergence, strong_reversal)
+from app.engine.chan import merge_klines, find_fractals as _ff
 from app.engine.signals import SignalEngine
 
 
@@ -190,6 +191,31 @@ def test_no_divergence_long():
     ok, tag = divergence(ks, seq, "long")
     print(f"  加速下跌 seq尾={[f.kind for f in seq][-4:]} -> {ok} [{tag}]")
     assert seq[-1].kind == "bottom" and not ok, (ok, tag)
+
+
+def _bottom_pattern(r_open=9.5, r_high=10.5, r_low=9.45, r_close=10.4):
+    """构造一个底分型(左下跌K / 中最低带下影 / 右反转K), 返回 (ks, merged, fx)。"""
+    pad = [k(11, 11.15, 10.9, 11.0, t=0)]
+    L = k(10.0, 10.1, 9.5, 9.6, t=1)        # 左:下跌K, 高10.1
+    M = k(9.6, 9.7, 9.0, 9.5, t=2)          # 中:最低9.0, 下影=min(9.6,9.5)-9.0=0.5
+    R = k(r_open, r_high, r_low, r_close, t=3)
+    ks = pad + [L, M, R]
+    merged = merge_klines(ks)
+    fx = [f for f in _ff(ks, merged) if f.kind == "bottom"][-1]
+    return ks, merged, fx
+
+
+def test_strong_reversal():
+    # 通过: 右K大实体(0.9/1.05=0.86) + 收10.4>左高10.1 + 中K有下影
+    ks, m, fx = _bottom_pattern()
+    assert strong_reversal(ks, m, fx, 0.6) is True
+    # 失败-未吞没: 右K收9.8 < 左高10.1
+    ks2, m2, fx2 = _bottom_pattern(r_high=9.95, r_close=9.8)
+    assert strong_reversal(ks2, m2, fx2, 0.6) is False
+    # 失败-实体小: 收10.15>左高(吞没过) 但实体0.15/振幅1.2=0.125 < 0.6
+    ks3, m3, fx3 = _bottom_pattern(r_open=10.0, r_high=10.6, r_low=9.4, r_close=10.15)
+    assert strong_reversal(ks3, m3, fx3, 0.6) is False
+    print("  强反转: 大实体+吞没+下影→过; 未吞没/小实体→拦")
 
 
 def test_macd_hist_len():

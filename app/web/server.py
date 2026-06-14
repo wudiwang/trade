@@ -364,6 +364,8 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "chan.fractal_vol_mult": float,    # 底分型前2根放量倍数(x前10根均量)
         "chan.fractal_vol_ma": int,        # 放量均量回看根数
         "chan.require_divergence": _bool,  # 一买/一卖必须背驰
+        "chan.strong_reversal_15m": _bool, # 仅15m:只认强反转形态
+        "chan.reversal_body_ratio": float, # 强反转:右K实体≥振幅×该比例
         "chan.mtf_tol_pct": float,         # 多级别:停顿与高级别分型价位容差%
         "spring.min_rr": float,            # 最低盈亏比门槛(低于不进场)
         "spring.tp_lookback": int,         # 止盈回看根数

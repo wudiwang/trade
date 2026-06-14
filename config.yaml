@@ -20,6 +20,8 @@ chan:
   macd_fast: 12          # 背驰用 MACD 快线
   macd_slow: 26          # 背驰用 MACD 慢线
   macd_signal: 9         # 背驰用 MACD 信号线
+  strong_reversal_15m: true   # 仅15m:只认强反转形态(右K大实体+完全吞没左K+中K带影线)
+  reversal_body_ratio: 0.6    # 强反转:右K实体≥自身振幅×该比例
 
 # ---- 策略V4: 放量破位 → 底分型收回破位K顶部 ----
 spring:

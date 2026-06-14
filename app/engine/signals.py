@@ -171,7 +171,14 @@ class SignalEngine:
         if (direction == "long") != (sfx.kind == "bottom"):
             return None
         from .chan_bi import build_bi
-        _, sseq = build_bi(struct_klines, min_bars)                            # 结构级笔序列(供背驰)
+        merged_s, sseq = build_bi(struct_klines, min_bars)                     # 结构级合并K+笔序列
+        # 15m 增量条件:只认强反转形态(右K大实体+完全吞没左K+中K带影线)
+        rev_tag = ""
+        if struct_tf == "15m" and self._p("chan.strong_reversal_15m", True):
+            from .chan_bi import strong_reversal
+            if not strong_reversal(struct_klines, merged_s, sfx, self._p("chan.reversal_body_ratio", 0.6)):
+                return self._drop("weak_reversal_15m")
+            rev_tag = "·强反转"
         tol = self._p("chan.mtf_tol_pct", 0.6) / 100.0
         if sfx.extreme_price <= 0 or abs(fx_t.extreme_price - sfx.extreme_price) / sfx.extreme_price > tol:
             return None   # 触发停顿要在结构分型的同一摆动低/高点附近
@@ -213,7 +220,7 @@ class SignalEngine:
         bz = "底背驰" if direction == "long" else "顶背驰"
         dsuf = f" [{bz}·{div_tag}]" if (eff == "buy1" and div_tag) else ""
         reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side})·{struct_tf}级: "
-                  f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn} + {trig_tf}停顿确认{dsuf}")
+                  f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn}{rev_tag} + {trig_tf}停顿确认{dsuf}")
         return self._spring_make(
             symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": svr}},
             struct_klines, extra={"fractal_price": sfx.extreme_price, "struct_tf": struct_tf,

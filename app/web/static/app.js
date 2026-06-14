@@ -345,13 +345,14 @@ const SETTING_LABELS = {
   'chan.bi_min_bars': '一笔最少合并K', 'chan.stall_max_gap': '停顿窗口(根)',
   'chan.fractal_vol_mult': '底分型放量倍数', 'chan.fractal_vol_ma': '放量均量回看(根)',
   'chan.require_divergence': '一买必须背驰', 'chan.mtf_tol_pct': '多级别价位容差%',
+  'chan.strong_reversal_15m': '15m只认强反转', 'chan.reversal_body_ratio': '强反转右K实体占比',
   'spring.min_rr': '最低盈亏比门槛', 'spring.tp_lookback': '止盈回看根数',
   'signal.sl_buffer_pct': '止损缓冲%', 'spring.btc_filter': '回测BTC过滤',
   'risk.account_equity': '账户本金U', 'risk.risk_pct': '单笔风险%',
   'risk.max_positions': '最大持仓数', 'risk.leverage': '杠杆',
   'universe.min_quote_volume_24h': '最低24h成交额',
 };
-const BOOL_SETTINGS = ['chan.require_divergence', 'spring.btc_filter'];
+const BOOL_SETTINGS = ['chan.require_divergence', 'chan.strong_reversal_15m', 'spring.btc_filter'];
 async function loadSettings() {
   const s = await api('/api/settings');
   $('settings').innerHTML = Object.entries(s).map(([k, v]) => {

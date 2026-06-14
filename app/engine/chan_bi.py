@@ -97,6 +97,31 @@ def vol_spike_before(klines: list, merged: list, fx, ma: int = 10, mult: float =
     return front_vol_ratio(klines, merged, fx, ma) >= mult
 
 
+def strong_reversal(klines: list, merged: list, fx, body_ratio: float = 0.6) -> bool:
+    """15m 增量条件(强反转形态)。底分型(左L 中M 右R)三条同时满足：
+      ① 右K实体 ≥ 自身振幅 × body_ratio(大实体反转K)
+      ② 右K收盘 > 左K最高价(完全吞掉第一根下跌K)
+      ③ 中K(最低那根)有下影线(低点被买盘拒绝)
+    顶分型镜像(右K实体大 / 右K收盘<左K最低 / 中K有上影线)。"""
+    mid = fx.mid_merged_idx
+    if mid < 1 or mid + 1 >= len(merged):
+        return False
+    L, M, R = merged[mid - 1], merged[mid], merged[mid + 1]
+    Mo, Mc = _merged_oc(klines, M)
+    Ro, Rc = _merged_oc(klines, R)
+    rng = R.high - R.low
+    if rng <= 0:
+        return False
+    body_ok = abs(Rc - Ro) >= body_ratio * rng                 # ① 右K大实体
+    if fx.kind == "bottom":
+        engulf = Rc > L.high                                   # ② 右K收盘 > 左K最高
+        wick = (min(Mo, Mc) - M.low) > 0                       # ③ 中K有下影线
+    else:
+        engulf = Rc < L.low                                    # ② 右K收盘 < 左K最低
+        wick = (M.high - max(Mo, Mc)) > 0                      # ③ 中K有上影线
+    return body_ok and engulf and wick
+
+
 def quality_ok(klines: list, merged: list, fx, vol_ma: int = 10, vol_mult: float = 2.0):
     """返回 (是否通过, 强度grade, 放量倍数)。通过 = 最强/标准 且 前2根放量达标。"""
     grade = fractal_grade(klines, merged, fx)
