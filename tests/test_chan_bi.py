@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import Config
 from app.engine.chan import merge_klines, find_fractals
-from app.engine.chan_bi import (build_bi, stall_idx, detect, vol_reclaim,
+from app.engine.chan_bi import (build_bi, stall_idx, detect,
                                  fractal_grade, vol_spike_before, quality_ok,
                                  macd_hist, divergence)
 from app.engine.signals import SignalEngine
@@ -71,18 +71,6 @@ def test_build_bi():
     kinds = [f.kind for f in seq]
     assert "bottom" in kinds and "top" in kinds, kinds
     print(f"  seq kinds: {kinds}")
-
-
-def test_vol_reclaim():
-    # 放量阴线在 idx5，之后价格收回其开盘上方
-    ks = []
-    for i in range(25):
-        ks.append(k(10, 10.1, 9.9, 10, v=100, t=i))
-    ks.append(k(10, 10.05, 8.5, 8.6, v=500, t=25))     # 放量阴线 开10
-    ks.append(k(8.6, 10.3, 8.5, 10.2, v=120, t=26))    # 收回到10之上
-    r = vol_reclaim(ks, 26, vol_mult=3.0, lookback=8)
-    assert r == ("long", 25), r
-    print(f"  vol_reclaim → {r}")
 
 
 def test_stall_and_buy1_bi():

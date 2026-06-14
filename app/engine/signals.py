@@ -222,7 +222,7 @@ class SignalEngine:
     # ======================= 策略: 缠论笔 + 停顿K =======================
 
     def _eval_chan_bi(self, symbol: str, tf: str, klines: list) -> "Signal | None":
-        from .chan_bi import detect, vol_reclaim
+        from .chan_bi import detect
         min_bars = self._p("chan.bi_min_bars", 5)
         if len(klines) < min_bars * 3 + 10:
             return None
@@ -278,37 +278,7 @@ class SignalEngine:
                            "grade": grade, "path": "笔"},
                     reason=reason)
 
-        # B路：前期下跌成笔 + 放量(≥3x)下跌K被收回 = 一买（去掉破平台限制，比A早一步入场）
-        rv = vol_reclaim(klines, i, self._p("chan.vol_mult", 3.0),
-                         self._p("chan.vol_lookback", 8))
-        if rv:
-            direction, j = rv
-            # 前期必须成笔：最后一笔是下跌笔(做多,seq末端为底) / 上涨笔(做空,末端为顶)
-            from .chan_bi import build_bi
-            _, seq = build_bi(klines, min_bars)
-            ok_bi = seq and ((direction == "long" and seq[-1].kind == "bottom")
-                             or (direction == "short" and seq[-1].kind == "top"))
-            if not ok_bi:
-                return None
-            vk = klines[j]
-            anchor = int(vk["open_time"])
-            if self._bi_fired.get((symbol, tf, direction)) == anchor:
-                return None
-            if not self._btc_ok(direction):
-                return self._drop("btc_filter")
-            self._bi_fired[(symbol, tf, direction)] = anchor
-            entry = float(vk["open"])  # 收回到放量K的顶部(开盘)
-            vr = round(float(vk["volume"]) / max(vol_avg(klines, j, 20), 1e-9), 1)
-            vlow, vhigh = float(vk["low"]), float(vk["high"])
-            sl = vlow * (1 - buf) if direction == "long" else vhigh * (1 + buf)
-            self._bi_chain[(symbol, tf, direction)] = vlow if direction == "long" else vhigh  # 放量收回也是一买,开链
-            side = "做多" if direction == "long" else "做空"
-            label = self._bi_label("buy1", direction)
-            reason = f"✅{label}({side}): 下跌成笔 + 放量{vr}x{'阴线' if direction == 'long' else '阳线'}被收回"
-            return self._spring_make(
-                symbol, tf, direction, entry, sl, "buy1",
-                {"detail": {"vol_ratio": vr}}, klines,
-                extra={"vol_k_time": anchor, "path": "放量收回"}, reason=reason)
+        # B路(放量收回)已移除：所有一买必须是 最强/标准底分型 + 前2根放量 + 背驰 + 停顿K(A路)
         return None
 
     # ======================= 策略V4: 破位+底分型 =======================
