@@ -271,7 +271,7 @@ async function loadEquity() {
 let klChart;
 async function openChart(symbol, tf, ref) {
   $('modal').classList.add('show');
-  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 蓝=买入 绿=止盈 红=止损 · 点线=顶/底分型(用于一↔二比较)' : '');
+  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 🟡黄箭头=买点 蓝线=买入 绿=止盈 红=止损 · 点线=顶/底分型(用于一↔二比较)' : '');
   const d = await api(`/api/klines?symbol=${symbol}&tf=${tf}&limit=300`);
   $('chart').innerHTML = '';
   await new Promise(r => setTimeout(r, 60));  // 等弹窗布局完成，避免首开图表零尺寸空白
@@ -296,7 +296,7 @@ async function openChart(symbol, tf, ref) {
     try { ex = JSON.parse(s.extra || '{}'); } catch (e) {}
     markers.push({
       time: s.created_at, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
-      color: s.direction === 'long' ? '#2ecc71' : '#e74c3c',
+      color: '#ffd700',                                   // 买入点统一黄色, 醒目区分入场位置
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
       text: `${typeLabel(ex.type, s.direction)} #${s.id}`,
     });
