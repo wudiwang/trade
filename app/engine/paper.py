@@ -91,6 +91,9 @@ class PaperBroker:
                 "UPDATE paper_trades SET result=?, exit_price=?, pnl=?, pnl_r=?, closed_at=? WHERE id=?",
                 (res, exit_price, round(pnl, 4), round(pnl_r, 3), int(time.time()), r["id"]),
             )
+            # 止损=打穿分型极值=买卖点失败, 直接把信号标记为失败一买/一卖
+            if res == "sl" and r["signal_id"]:
+                self.db.execute("UPDATE signals SET state='fail' WHERE id=? AND state!='ok'", (r["signal_id"],))
             self._update_equity(r["track"])
             closed.append({**dict(r), "result": res, "pnl": pnl, "pnl_r": pnl_r})
         return closed

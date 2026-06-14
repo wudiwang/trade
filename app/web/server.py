@@ -161,8 +161,8 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         return [dict(r) for r in db.query(sql, args)]
 
     @app.get("/api/trades")
-    async def trades(track: str = "", result: str = "", tf: str = "", limit: int = 500):
-        """track 空=全部策略；tf 空=全部级别；result: ''=全部, open=持仓中, closed=已结束。"""
+    async def trades(track: str = "", result: str = "", tf: str = "", state: str = "", limit: int = 500):
+        """track 空=全部策略；tf 空=全部级别；state: 生命周期 try/ok/fail；result: open/closed。"""
         sql = ("SELECT pt.*, s.state AS sig_state FROM paper_trades pt "
                "LEFT JOIN signals s ON s.id=pt.signal_id WHERE 1=1")
         args: list = []
@@ -172,6 +172,9 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         if tf:
             sql += " AND pt.tf=?"
             args.append(tf)
+        if state in ("try", "ok", "fail"):
+            sql += " AND s.state=?"
+            args.append(state)
         if result == "open":
             sql += " AND pt.result='open'"
         elif result == "closed":

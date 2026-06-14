@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>缠论交易系统</title>
-<link rel="stylesheet" href="/style.css?v=19">
+<link rel="stylesheet" href="/style.css?v=20">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -128,6 +128,12 @@
           <option value="buy1">✅ 一买</option>
           <option value="buy2">🔁 二买</option>
         </select>
+        <select id="f-state-trade" onchange="loadTrades()">
+          <option value="">全部生命周期</option>
+          <option value="try">试(尝试中)</option>
+          <option value="ok">成(成立)</option>
+          <option value="fail">败(失败)</option>
+        </select>
         <select id="f-result" onchange="loadTrades()">
           <option value="">全部状态</option>
           <option value="open">持仓中</option>
@@ -161,6 +167,6 @@
   </div>
 </div>
 <div id="toast"></div>
-<script src="/app.js?v=19"></script>
+<script src="/app.js?v=20"></script>
 </body>
 </html>

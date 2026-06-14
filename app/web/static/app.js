@@ -57,6 +57,10 @@ function typeLabel(type, dir, state) {
     : (type === 'buy1' ? '一买' : type === 'buy2' ? '二买' : (TYPE_TAG[type] || type));
   return state === 'fail' ? base + '✗' : base;
 }
+// 试=灰(未定) 成=金(成立) 败=红(失败), 给买卖点tag上色做区别标记
+function stateClass(state) {
+  return state === 'fail' ? 'short' : state === 'ok' ? 'primary' : 'secondary';
+}
 let signalCache = {};
 function sigType(s) {
   try { return JSON.parse(s.extra || '{}').type || ''; } catch (e) { return ''; }
@@ -76,7 +80,7 @@ async function loadSignals() {
       <td>${s.id}</td><td>${fmtT(s.created_at)}</td>
       <td><b>${s.symbol}</b></td><td>${s.tf}</td>
       <td><span class="tag ${s.direction}">${s.direction === 'long' ? '多' : '空'}</span></td>
-      <td><span class="tag primary">${typeLabel(sigType(s), s.direction, s.state)} ${sigScore(s)}</span></td>
+      <td><span class="tag ${stateClass(s.state)}">${typeLabel(sigType(s), s.direction, s.state)} ${sigScore(s)}</span></td>
       <td>${fmtP(s.entry)}</td><td class="red">${fmtP(s.sl)}</td><td class="green">${fmtP(s.tp)}</td>
       <td><b>${s.rr}</b></td><td>${s.vol_ratio}x</td><td>${s.status}</td>
     </tr>`).join('');
@@ -89,14 +93,14 @@ function openChartFromSignal(id) {
 // ---------- 交易 ----------
 let tradeCache = {};
 async function loadTrades() {
-  const q = `?track=${$('f-track').value}&result=${$('f-result').value}&tf=${$('f-tf-trade').value}`;
+  const q = `?track=${$('f-track').value}&result=${$('f-result').value}&tf=${$('f-tf-trade').value}&state=${$('f-state-trade').value}`;
   const rows = await api('/api/trades' + q);
   tradeCache = {};
   rows.forEach(t => tradeCache[t.id] = t);
   $('t-trades').innerHTML = rows.map(t => `
     <tr class="clickable" onclick="openChartFromTrade(${t.id})" title="点击查看当时K线形态与买卖点">
       <td>${t.id}</td><td><b>${t.symbol}</b></td><td>${t.tf}</td>
-      <td><span class="tag primary">${typeLabel(t.track, t.direction, t.sig_state)}</span></td>
+      <td><span class="tag ${stateClass(t.sig_state)}">${typeLabel(t.track, t.direction, t.sig_state)}</span></td>
       <td><span class="tag ${t.direction}">${t.direction === 'long' ? '多' : '空'}</span></td>
       <td>${fmtP(t.entry)}</td><td class="red">${fmtP(t.sl)}</td><td class="green">${fmtP(t.tp)}</td>
       <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : t.result === 'rev' ? '🔄反向平仓' : '🛑止损'}</td>
