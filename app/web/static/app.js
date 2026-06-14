@@ -290,7 +290,7 @@ async function loadEquity() {
 let klChart;
 async function openChart(symbol, tf, ref) {
   $('modal').classList.add('show');
-  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 🟡黄箭头=入场 · 🟠橙圈/橙线=底/顶分型那根K · 蓝=买入 绿=止盈 红=止损' : '');
+  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 🟡黄箭头=入场 · 🟠橙圈/橙线=缠论底/顶分型(威科夫=爆量扫破位) · 蓝=买入 绿=止盈 红=止损' : '');
   const d = await api(`/api/klines?symbol=${symbol}&tf=${tf}&limit=300`);
   $('chart').innerHTML = '';
   await new Promise(r => setTimeout(r, 60));  // 等弹窗布局完成，避免首开图表零尺寸空白
@@ -319,22 +319,22 @@ async function openChart(symbol, tf, ref) {
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
       text: `${dispType(ex.type, s.direction, s.state, s.extra)} #${s.id}`,
     });
-    // 顶/底分型：箭头是停顿K入场位，这里把真正的分型那根K单独醒目标出来
+    // 橙点/橙线：缠论=底/顶分型那根K; 威科夫=爆量K扫破极值(止损位)。两者标签区分,避免混淆
     if (ex.fractal_price != null) {
-      const fxn = s.direction === 'long' ? '底' : '顶';
-      // 有分型K时间→在那根K上打橙色圆点+文字“底分型#id”，一眼定位是哪根
+      const isWy = ex.path === '威科夫';
+      const tag = isWy ? (s.direction === 'long' ? '爆量低' : '爆量高')
+                       : (s.direction === 'long' ? '底分型' : '顶分型');
       if (ex.fractal_time) {
         markers.push({
           time: Math.floor(ex.fractal_time / 1000),
           position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
-          color: '#f39c12', shape: 'circle', text: `${fxn}分型#${s.id}`,
+          color: '#f39c12', shape: 'circle', text: `${tag}#${s.id}`,
         });
       }
-      // 分型极值价的水平点线（老信号没存时间，至少能看到分型价位；一↔二可同框比高低）
       cs.createPriceLine({
         price: ex.fractal_price, color: '#f39c12', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true,
-        title: `${fxn}分型 #${s.id}`,
+        title: `${tag} #${s.id}`,
       });
     }
     if (ex.breakdown && ex.breakdown.time) {
