@@ -272,6 +272,7 @@ class Engine:
             # 更新"试"信号生命周期(试→成立/失败)
             for sid, st in self.signal_engine.update_lifecycle(symbol, tf, kbt.get(tf, [])):
                 log.info("SIGNAL #%d -> %s", sid, st)
+            new_sigs = []
             for sig in self.signal_engine.evaluate_all(symbol, tf, kbt):
                 sid = self.db.insert_signal(sig.to_db())
                 # 反向信号平仓：一卖平掉同币同级别的多单(一买)，一买平掉空单
@@ -279,6 +280,7 @@ class Engine:
                     for sub in self.trade_close_subscribers:
                         await sub(rev)
                 self.paper.open_from_signal(sid, sig)
+                new_sigs.append((sid, sig))
                 log.info("SIGNAL #%d %s %s %s %s rr=%.2f", sid, sig.kind, sig.symbol, sig.tf, sig.direction, sig.rr)
                 self.db.log("info", "signal", f"#{sid} {sig.symbol} {sig.tf} {sig.direction} rr={sig.rr}")
                 for sub in self.signal_subscribers:
@@ -286,9 +288,62 @@ class Engine:
                         await sub(sid, sig)
                     except Exception:
                         log.exception("signal subscriber failed")
+            await self._check_dual(symbol, new_sigs)
         except Exception:
             log.exception("evaluate failed %s %s", symbol, tf)
         self.last_eval_ms = (time.perf_counter() - t0) * 1000
+
+    async def _check_dual(self, symbol: str, new_sigs: list) -> None:
+        """双信号重叠: 同币同级别同方向, 缠论买点与威科夫买点在 overlap_bars 根内同时出现
+        → 双重加强, 标记 dual 并额外提醒(模拟仓此时已进场)。"""
+        if not new_sigs:
+            return
+        import json as _json
+        from .signals import TF_MS
+        win_bars = self.cfg.get("wyckoff.overlap_bars", 3)
+        for sid, sig in new_sigs:
+            is_wy = isinstance(sig.extra, dict) and sig.extra.get("path") == "威科夫"
+            win = win_bars * TF_MS.get(sig.tf, 300)
+            try:
+                other = self.db.one(
+                    "SELECT id, extra FROM signals WHERE symbol=? AND tf=? AND direction=? AND id<>? "
+                    "AND created_at >= ? ORDER BY id DESC LIMIT 1",
+                    (symbol, sig.tf, sig.direction, sid, sig.created_at - win))
+            except Exception:
+                continue
+            if not other:
+                continue
+            try:
+                oex = _json.loads(other["extra"] or "{}")
+            except (ValueError, TypeError):
+                oex = {}
+            if is_wy == (oex.get("path") == "威科夫"):
+                continue   # 同路径, 不算重叠
+            for x in (sid, other["id"]):
+                self._set_dual(x)
+            side = "做多" if sig.direction == "long" else "做空"
+            msg = (f"🔔双信号重叠 {symbol} {sig.tf} {side}: 缠论买点 + 威科夫买点 同位共振(双重加强), "
+                   f"模拟仓已进场, 重点关注后续走势!")
+            for sub in self.notice_subscribers:
+                try:
+                    await sub(msg)
+                except Exception:
+                    log.exception("dual notice failed")
+
+    def _set_dual(self, sid: int) -> None:
+        import json as _json
+        row = self.db.one("SELECT extra FROM signals WHERE id=?", (sid,))
+        if not row:
+            return
+        try:
+            ex = _json.loads(row["extra"] or "{}")
+        except (ValueError, TypeError):
+            ex = {}
+        if ex.get("dual"):
+            return
+        ex["dual"] = 1
+        self.db.execute("UPDATE signals SET extra=? WHERE id=?",
+                        (_json.dumps(ex, ensure_ascii=False), sid))
 
     # ---------- 状态 ----------
     def status(self) -> dict:

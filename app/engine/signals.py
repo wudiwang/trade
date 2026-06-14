@@ -130,6 +130,10 @@ class SignalEngine:
             return [s] if s else []
         out = []
         own = kbt.get(tf, [])
+        # 威科夫弹簧/UTAD: 每个收盘级别自身, 独立路径(与缠论买点互不影响)
+        sw = self._eval_wyckoff(symbol, tf, own)
+        if sw:
+            out.append(sw)
         if tf == "5m":
             s = self._eval_chan_bi(symbol, "5m", own)        # 5m 自身(底分型+5m停顿)
             if s:
@@ -142,6 +146,53 @@ class SignalEngine:
             if s3:
                 out.append(s3)
         return out
+
+    # ======================= 策略: 威科夫弹簧买点 =======================
+
+    def _eval_wyckoff(self, symbol: str, tf: str, klines: list) -> "Signal | None":
+        """威科夫买点(Spring)/卖点(UTAD): 扫前低/前高假突破 → 收回。激进档(收回即进),
+        不强制背驰; 仍要求前期成笔。独立出信号。"""
+        from .chan_bi import wyckoff_spring, build_bi
+        if not self._p("wyckoff.enabled", True):
+            return None
+        lookback = self._p("wyckoff.lookback", 20)
+        if len(klines) < lookback + 12:
+            return None
+        r = wyckoff_spring(klines, lookback,
+                           self._p("wyckoff.reclaim_bars", 4),
+                           self._p("wyckoff.pierce_tol_pct", 0.0),
+                           self._p("wyckoff.vol_ma", 20),
+                           self._p("wyckoff.climax_mult", 2.0),
+                           self._p("wyckoff.dryup_ratio", 1.0))
+        if not r:
+            return None
+        direction, spring_ext, prior_level, sidx, grade, vr = r
+        # 前期必须成笔(避免主跌段半山腰乱抓)
+        min_bars = self._p("chan.bi_min_bars", 5)
+        _, seq = build_bi(klines, min_bars)
+        ok_bi = seq and ((direction == "long" and seq[-1].kind == "bottom")
+                         or (direction == "short" and seq[-1].kind == "top"))
+        if not ok_bi:
+            return None
+        anchor = int(klines[sidx]["open_time"])
+        fkey = ("wyckoff", symbol, tf, direction)
+        if self._bi_fired.get(fkey) == anchor:
+            return None
+        if not self._btc_ok(direction):
+            return self._drop("btc_filter")
+        self._bi_fired[fkey] = anchor
+        buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
+        entry = float(klines[-1]["close"])                    # 激进: 收回即进
+        sl = spring_ext * (1 - buf) if direction == "long" else spring_ext * (1 + buf)
+        label = "威科夫买点" if direction == "long" else "威科夫卖点"
+        side = "做多" if direction == "long" else "做空"
+        sweep = "前低" if direction == "long" else "前高"
+        reason = f"🌀{label}({side}): {grade}·扫{sweep}{prior_level:.6g}收回 [量{vr}x]"
+        return self._spring_make(
+            symbol, tf, direction, entry, sl, "buy1",
+            {"detail": {"vol_ratio": vr}}, klines,
+            extra={"fractal_price": spring_ext, "fractal_time": anchor,
+                   "path": "威科夫", "spring_grade": grade}, reason=reason)
 
     def update_lifecycle(self, symbol: str, tf: str, klines: list) -> list:
         """每根收盘更新该币该级别"试"信号的状态(试→成立/失败)。返回 [(id, 新状态)]。
@@ -171,6 +222,9 @@ class SignalEngine:
             if st != "try":
                 self.db.execute("UPDATE signals SET state=? WHERE id=?", (st, r["id"]))
                 changed.append((r["id"], st))
+                # 一买/一卖失败 → 清掉对应链, 后面只能出新的试买/试卖(不再接二买/二卖)
+                if st == "fail":
+                    self._bi_chain.pop((symbol, tf, r["direction"]), None)
         return changed
 
     def evaluate(self, symbol: str, tf: str, klines: list,

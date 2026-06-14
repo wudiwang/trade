@@ -23,6 +23,17 @@ chan:
   strong_reversal_15m: true   # 仅15m:只认强反转形态(右K大实体+完全吞没左K+中K带影线)
   reversal_body_ratio: 0.6    # 强反转:右K实体≥自身振幅×该比例
 
+# ---- 威科夫弹簧买点(Spring/UTAD) 独立路径 ----
+wyckoff:
+  enabled: true
+  lookback: 20           # 前低/前高回看根数(确定支撑/阻力)
+  reclaim_bars: 4        # 扫破后N根内收回才算弹簧
+  pierce_tol_pct: 0.0    # 扫破容差%(0=只要破)
+  vol_ma: 20             # 扫破K量能参照均线
+  climax_mult: 2.0       # 放量弹簧门槛(扫破K量≥N×均量)
+  dryup_ratio: 1.0       # 缩量弹簧门槛(扫破K量<N×均量=供给枯竭,最强)
+  overlap_bars: 3        # 双信号重叠时间窗(根):缠论买点+威科夫买点同位共振
+
 # ---- 策略V4: 放量破位 → 底分型收回破位K顶部 ----
 spring:
   vol_mult: 4.0            # 破位K量 >= N×前20根均量

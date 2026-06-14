@@ -218,6 +218,25 @@ def test_strong_reversal():
     print("  强反转: 大实体+吞没+下影→过; 未吞没/小实体→拦")
 
 
+def test_wyckoff_spring():
+    from app.engine.chan_bi import wyckoff_spring
+    # 前低区: 30根在 12~13 之间, 前低=12
+    ks = []
+    for i in range(30):
+        lo = 12.0 + (i % 3) * 0.5
+        ks.append(k(13, 13.2, lo, 12.8, v=100, t=i))
+    # 弹簧K: 扫破12到10, 收回到13(>12), 放量4x
+    ks.append(k(12.5, 13.1, 10.0, 13.0, v=400, t=30))
+    r = wyckoff_spring(ks, lookback=20, reclaim_bars=4, vol_ma=20, climax_mult=2.0)
+    assert r is not None, "应识别到弹簧"
+    direction, spring_ext, prior, sidx, grade, vr = r
+    print(f"  弹簧 dir={direction} 扫破极值={spring_ext} 前低={prior} grade={grade} 量={vr}x")
+    assert direction == "long" and spring_ext == 10.0 and grade == "放量弹簧"
+    # 反例: 没破前低 → 不是弹簧
+    ks2 = ks[:30] + [k(12.5, 13.1, 12.3, 12.9, v=100, t=30)]
+    assert wyckoff_spring(ks2, 20, 4) is None
+
+
 def test_lifecycle_state():
     from app.engine.chan_bi import lifecycle_state
     # 成立: 下到底(底分型) → 上涨成一笔(出顶分型, 用回调16确认顶)

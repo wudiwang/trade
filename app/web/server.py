@@ -163,7 +163,7 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     @app.get("/api/trades")
     async def trades(track: str = "", result: str = "", tf: str = "", state: str = "", limit: int = 500):
         """track 空=全部策略；tf 空=全部级别；state: 生命周期 try/ok/fail；result: open/closed。"""
-        sql = ("SELECT pt.*, s.state AS sig_state FROM paper_trades pt "
+        sql = ("SELECT pt.*, s.state AS sig_state, s.extra AS sig_extra FROM paper_trades pt "
                "LEFT JOIN signals s ON s.id=pt.signal_id WHERE 1=1")
         args: list = []
         if track:

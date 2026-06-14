@@ -199,6 +199,53 @@ def divergence(klines: list, seq: list, direction: str,
     return False, ""
 
 
+def _vol_ratio_at(klines: list, idx: int, ma: int = 20) -> float:
+    """第 idx 根量 / 其前 ma 根均量。"""
+    if idx < ma:
+        return 1.0
+    avg = sum(float(klines[j]["volume"]) for j in range(idx - ma, idx)) / ma
+    v = float(klines[idx]["volume"])
+    return v / avg if avg > 0 else 1.0
+
+
+def wyckoff_spring(klines: list, lookback: int = 20, reclaim_bars: int = 4,
+                   pierce_tol_pct: float = 0.0, vol_ma: int = 20,
+                   climax_mult: float = 2.0, dryup_ratio: float = 1.0):
+    """威科夫弹簧(多)/上冲回落UTAD(空)。在最新K上判定。
+    多: 近 reclaim_bars 根里有K跌破"前低"(其前 lookback 根的最低), 且当前收盘收回前低之上。
+    返回 (direction, spring_extreme, prior_level, spring_idx, grade, vol_ratio) 或 None。
+    grade: 缩量弹簧/中性弹簧/放量弹簧(空头: 缩量上冲/中性上冲/放量上冲)。"""
+    n = len(klines)
+    if n < lookback + reclaim_bars + 2:
+        return None
+    i = n - 1
+    c_now = float(klines[i]["close"])
+    base = klines[max(0, i - reclaim_bars - lookback + 1): i - reclaim_bars + 1]
+    if len(base) < max(5, lookback // 2):
+        return None
+    prior_low = min(float(k["low"]) for k in base)
+    prior_high = max(float(k["high"]) for k in base)
+    j0 = i - reclaim_bars + 1
+    recent = klines[j0: i + 1]
+    rl = [float(k["low"]) for k in recent]
+    rh = [float(k["high"]) for k in recent]
+    # 多头弹簧: 扫破前低 + 收回前低之上
+    spring_low = min(rl)
+    if spring_low < prior_low * (1 - pierce_tol_pct / 100.0) and c_now > prior_low:
+        sidx = j0 + rl.index(spring_low)
+        vr = _vol_ratio_at(klines, sidx, vol_ma)
+        grade = "缩量弹簧" if vr < dryup_ratio else ("放量弹簧" if vr >= climax_mult else "中性弹簧")
+        return "long", spring_low, prior_low, sidx, grade, round(vr, 2)
+    # 空头 UTAD: 扫破前高 + 收回前高之下
+    spring_high = max(rh)
+    if spring_high > prior_high * (1 + pierce_tol_pct / 100.0) and c_now < prior_high:
+        sidx = j0 + rh.index(spring_high)
+        vr = _vol_ratio_at(klines, sidx, vol_ma)
+        grade = "缩量上冲" if vr < dryup_ratio else ("放量上冲" if vr >= climax_mult else "中性上冲")
+        return "short", spring_high, prior_high, sidx, grade, round(vr, 2)
+    return None
+
+
 def lifecycle_state(klines: list, fx_price: float, fx_time_ms: int,
                     direction: str, min_merged: int = 5) -> str:
     """信号生命周期判定，返回 'fail' / 'ok' / 'try'。
