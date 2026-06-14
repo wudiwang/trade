@@ -75,7 +75,7 @@ class SignalEngine:
         # 缠论笔策略：每个分型只发一次
         self._bi_fired: dict[tuple, int] = {}
         # 一买→二买链：(symbol,tf,dir)->一买的极值价。无链不发二买；跌破即清链
-        self._bi_chain: dict[tuple, float] = {}
+        self._bi_chain: dict[tuple, tuple] = {}   # (symbol,tf,dir) -> (一买/一卖极值价, 分型open_time)
 
     @staticmethod
     def _bi_label(sig_type: str, direction: str) -> str:
@@ -299,12 +299,17 @@ class SignalEngine:
             return None
         if not self._btc_ok(direction):
             return self._drop("btc_filter")
-        # 链失效 + 一买/二买
-        c_now = float(trig_klines[-1]["close"])
-        lv = self._bi_chain.get(ck)
-        if lv is not None and ((direction == "long" and c_now < lv) or (direction == "short" and c_now > lv)):
-            del self._bi_chain[ck]
-            lv = None
+        # 链失效(加固): 一卖的顶分型在其形成后被任意K突破 / 一买的底分型被跌破 → 一买一卖失败, 清链, 后面只出新试买卖
+        ch = self._bi_chain.get(ck)
+        lv = None
+        if ch is not None:
+            lv, lv_t = ch
+            broke = (any(float(k["high"]) > lv for k in struct_klines if int(k["open_time"]) > lv_t)
+                     if direction == "short" else
+                     any(float(k["low"]) < lv for k in struct_klines if int(k["open_time"]) > lv_t))
+            if broke:
+                del self._bi_chain[ck]
+                lv = None
         if lv is None:
             eff = "buy1"
         else:
@@ -319,7 +324,7 @@ class SignalEngine:
                 return self._drop("no_divergence")
         self._bi_fired[fkey] = sfx.open_time
         if eff == "buy1":
-            self._bi_chain[ck] = sfx.extreme_price
+            self._bi_chain[ck] = (sfx.extreme_price, sfx.open_time)
 
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
         entry = float(trig_klines[s]["close"])                                # 入场=触发级停顿K收盘
@@ -347,10 +352,16 @@ class SignalEngine:
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
         i = len(klines) - 1
         c_now = float(klines[i]["close"])
-        # 链失效：收盘跌破一买低点(long)/升破一卖高点(short) → 清链，二买重新需要一买
+        # 链失效(加固): 一买底分型在其形成后被任意K跌破 / 一卖顶分型被升破 → 失败清链, 二买重新需要一买
         for d in ("long", "short"):
-            lv = self._bi_chain.get((symbol, tf, d))
-            if lv is not None and ((d == "long" and c_now < lv) or (d == "short" and c_now > lv)):
+            ch = self._bi_chain.get((symbol, tf, d))
+            if ch is None:
+                continue
+            lv, lv_t = ch
+            broke = (any(float(k["low"]) < lv for k in klines if int(k["open_time"]) > lv_t)
+                     if d == "long" else
+                     any(float(k["high"]) > lv for k in klines if int(k["open_time"]) > lv_t))
+            if broke:
                 del self._bi_chain[(symbol, tf, d)]
 
         # A路：笔 → 底/顶分型(最强/标准+前2根放量) → 停顿K
@@ -362,7 +373,8 @@ class SignalEngine:
             if self._bi_fired.get(ck) != fx.open_time:
                 if not self._btc_ok(direction):
                     return self._drop("btc_filter")
-                chain_lv = self._bi_chain.get(ck)
+                chain_entry = self._bi_chain.get(ck)
+                chain_lv = chain_entry[0] if chain_entry else None
                 # 二买必须先有一买；没有一买链时，这一信号就是一买(开链)
                 eff = sig_type if (sig_type == "buy1" or chain_lv is not None) else "buy1"
                 # 真二买还要比一买极值更高的低点(long)/更低的高点(short)
@@ -378,7 +390,7 @@ class SignalEngine:
                         return self._drop("no_divergence")
                 self._bi_fired[ck] = fx.open_time
                 if eff == "buy1":
-                    self._bi_chain[ck] = fx.extreme_price   # 开/重置链
+                    self._bi_chain[ck] = (fx.extreme_price, fx.open_time)   # 开/重置链(价位,时间)
                 entry = float(klines[s]["close"])
                 sl = fx.extreme_price * (1 - buf) if direction == "long" else fx.extreme_price * (1 + buf)
                 label = self._bi_label(eff, direction)

@@ -124,10 +124,9 @@ def test_buy2_needs_buy1_chain():
     eng = SignalEngine(make_cfg(), FakeDB())
     # 没有一买链时，链为空 → 二买判定会被降级/拦截(逻辑在_eval_chan_bi)
     assert eng._bi_chain == {}
-    # 模拟开链
-    eng._bi_chain[("X", "5m", "long")] = 10.0
-    # 收盘跌破10 → 下一次评估应清链(此处直接验证状态变量存在)
-    assert eng._bi_chain[("X", "5m", "long")] == 10.0
+    # 模拟开链((极值价, 分型时间))
+    eng._bi_chain[("X", "5m", "long")] = (10.0, 0)
+    assert eng._bi_chain[("X", "5m", "long")][0] == 10.0
     print("  一买→二买链状态变量就位")
 
 
