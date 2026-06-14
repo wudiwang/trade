@@ -169,6 +169,9 @@ class SignalEngine:
         if not r:
             return None
         direction, spring_ext, prior_level, sidx, grade, vr = r
+        # 只做缩量弹簧(理论最强); 放量/中性弹簧需等回测Test(未建), 暂不出
+        if self._p("wyckoff.dryup_only", True) and not grade.startswith("缩量"):
+            return None
         # 冷却: 同币同级别同向 N 根内只出一次, 防洪水
         cool = self.__dict__.setdefault("_wy_cool", {})
         ckey = (symbol, tf, direction)
@@ -184,6 +187,14 @@ class SignalEngine:
                          or (direction == "short" and seq[-1].kind == "top"))
         if not ok_bi:
             return None
+        # 背驰(力度衰竭)确认, 提高质量
+        if self._p("wyckoff.require_divergence", True):
+            from .chan_bi import divergence
+            dok, _dt = divergence(klines, seq, direction,
+                                  (self._p("chan.macd_fast", 12), self._p("chan.macd_slow", 26),
+                                   self._p("chan.macd_signal", 9)))
+            if not dok:
+                return None
         anchor = int(klines[sidx]["open_time"])
         fkey = ("wyckoff", symbol, tf, direction)
         if self._bi_fired.get(fkey) == anchor:
