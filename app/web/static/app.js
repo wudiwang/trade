@@ -271,7 +271,7 @@ async function loadEquity() {
 let klChart;
 async function openChart(symbol, tf, ref) {
   $('modal').classList.add('show');
-  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 🟡黄箭头=买点 蓝线=买入 绿=止盈 红=止损 · 点线=顶/底分型(用于一↔二比较)' : '');
+  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 🟡黄箭头=入场 · 🟠橙圈/橙线=底/顶分型那根K · 蓝=买入 绿=止盈 红=止损' : '');
   const d = await api(`/api/klines?symbol=${symbol}&tf=${tf}&limit=300`);
   $('chart').innerHTML = '';
   await new Promise(r => setTimeout(r, 60));  // 等弹窗布局完成，避免首开图表零尺寸空白
@@ -300,19 +300,22 @@ async function openChart(symbol, tf, ref) {
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
       text: `${typeLabel(ex.type, s.direction)} #${s.id}`,
     });
-    // 顶/底分型：箭头浮在停顿K上方易误导高低，这里把真正比较的极值点单独标出来
-    if (ex.fractal_price != null && ex.fractal_time) {
+    // 顶/底分型：箭头是停顿K入场位，这里把真正的分型那根K单独醒目标出来
+    if (ex.fractal_price != null) {
       const fxn = s.direction === 'long' ? '底' : '顶';
-      markers.push({
-        time: Math.floor(ex.fractal_time / 1000),
-        position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
-        color: '#f39c12', shape: 'circle', text: `${fxn}#${s.id}`,
-      });
-      // 水平点线落在 extreme_price 上：一卖与二卖的线同框，可直接比高低
+      // 有分型K时间→在那根K上打橙色圆点+文字“底分型#id”，一眼定位是哪根
+      if (ex.fractal_time) {
+        markers.push({
+          time: Math.floor(ex.fractal_time / 1000),
+          position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
+          color: '#f39c12', shape: 'circle', text: `${fxn}分型#${s.id}`,
+        });
+      }
+      // 分型极值价的水平点线（老信号没存时间，至少能看到分型价位；一↔二可同框比高低）
       cs.createPriceLine({
         price: ex.fractal_price, color: '#f39c12', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true,
-        title: `${typeLabel(ex.type, s.direction)}${fxn} #${s.id}`,
+        title: `${fxn}分型 #${s.id}`,
       });
     }
     if (ex.breakdown && ex.breakdown.time) {

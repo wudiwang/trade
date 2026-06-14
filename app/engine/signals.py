@@ -223,8 +223,9 @@ class SignalEngine:
                   f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn}{rev_tag} + {trig_tf}停顿确认{dsuf}")
         return self._spring_make(
             symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": svr}},
-            struct_klines, extra={"fractal_price": sfx.extreme_price, "struct_tf": struct_tf,
-                                  "trig_tf": trig_tf, "grade": sgrade, "path": "多级别"}, reason=reason)
+            struct_klines, extra={"fractal_price": sfx.extreme_price, "fractal_time": sfx.open_time,
+                                  "struct_tf": struct_tf, "trig_tf": trig_tf, "grade": sgrade,
+                                  "path": "多级别"}, reason=reason)
 
     # ======================= 策略: 缠论笔 + 停顿K =======================
 
