@@ -238,6 +238,21 @@ def test_wyckoff_spring():
     assert wyckoff_spring(ks2, 20, 4) is None
 
 
+def test_trend_reversal():
+    from app.engine.chan_bi import trend_reversal
+    # 顶1=70 底1=64 顶2=68(更低高点), 之后收盘跌破64 → 看跌反转
+    ks = zigzag([60, 70, 64, 68], per_leg=7)
+    p = 68.0
+    for i in range(6):
+        p -= 1.0
+        ks.append(k(p + 1, p + 1.05, p - 0.05, p, t=200 + i))
+    r = trend_reversal(ks, 5)
+    print("  趋势反转:", r)
+    assert r and r[0] == "short", r
+    # 未破前低 → 不触发
+    assert trend_reversal(zigzag([60, 70, 64, 68], per_leg=7), 5) is None
+
+
 def test_trend_state():
     from app.engine.chan_bi import trend_state
     up = [k(60 + i * 0.5, 60 + i * 0.5 + 0.1, 60 + i * 0.5 - 0.1, 60 + i * 0.5, t=i) for i in range(40)]

@@ -147,6 +147,10 @@ class SignalEngine:
         sw = self._eval_wyckoff(symbol, tf, own)
         if sw:
             out.append(sw)
+        # 趋势反转提示(只提示不开仓)
+        sr = self._eval_trend_reversal(symbol, tf, own)
+        if sr:
+            out.append(sr)
         if tf == "5m":
             s = self._eval_chan_bi(symbol, "5m", own)        # 5m 自身(底分型+5m停顿)
             if s:
@@ -159,6 +163,35 @@ class SignalEngine:
             if s3:
                 out.append(s3)
         return out
+
+    # ======================= 提示: 趋势反转(MSB, 不开仓) =======================
+
+    def _eval_trend_reversal(self, symbol: str, tf: str, klines: list) -> "Signal | None":
+        """趋势反转提示: 更低高点+收盘破前低(看跌)/更高低点+收盘破前高(看涨)。只提示不开仓不推买入。"""
+        if not self._p("chan.trend_reversal_alert", True):
+            return None
+        from .chan_bi import trend_reversal
+        min_bars = self._p("chan.bi_min_bars", 5)
+        if len(klines) < min_bars * 3 + 5:
+            return None
+        r = trend_reversal(klines, min_bars)
+        if not r:
+            return None
+        direction, ref, ref_time = r
+        fkey = ("rev", symbol, tf, direction, ref_time)
+        if self._bi_fired.get(fkey):
+            return None
+        self._bi_fired[fkey] = ref_time
+        c = float(klines[-1]["close"])
+        side = "看跌" if direction == "short" else "看涨"
+        why = "更低高点+收盘破前低" if direction == "short" else "更高低点+收盘破前高"
+        return Signal(
+            symbol=symbol, tf=tf, direction=direction, kind="alert",
+            entry=round(c, 8), sl=round(ref, 8), tp=round(c, 8), rr=0,
+            vol_ratio=0, strength="normal", suggested_qty=0, risk_usdt=0,
+            reason=f"🔄趋势反转({side}): {why}", created_at=int(time.time()),
+            extra={"path": "趋势反转", "ref_price": ref, "fractal_time": ref_time, "rev_dir": direction},
+        )
 
     # ======================= 策略: 威科夫弹簧买点 =======================
 
@@ -254,6 +287,17 @@ class SignalEngine:
             try:
                 ex = json.loads(r["extra"] or "{}")
             except (ValueError, TypeError):
+                continue
+            # 趋势反转: 只判 试→败(后续创新高/新低=反转失败), 不走成笔逻辑
+            if ex.get("path") == "趋势反转":
+                ref, ft, rd = ex.get("ref_price"), ex.get("fractal_time"), ex.get("rev_dir")
+                if ref is None or not ft:
+                    continue
+                broke = any((float(k["high"]) > ref if rd == "short" else float(k["low"]) < ref)
+                            for k in klines if int(k["open_time"]) > ft)
+                if broke:
+                    self.db.execute("UPDATE signals SET state='fail' WHERE id=?", (r["id"],))
+                    changed.append((r["id"], "fail"))
                 continue
             fp, ft = ex.get("fractal_price"), ex.get("fractal_time")
             if fp is None or not ft:

@@ -269,6 +269,26 @@ def wyckoff_spring(klines: list, lookback: int = 20, reclaim_bars: int = 4,
     return None
 
 
+def trend_reversal(klines: list, min_merged: int = 5):
+    """趋势反转(结构破位 MSB)。在最新K判定:
+    看跌: 顶2 < 顶1(更低的高点) 且 当前收盘 < 底1(收盘跌破前低);
+    看涨镜像: 底2 > 底1(更高的低点) 且 当前收盘 > 顶1(收盘升破前高)。
+    返回 (direction, ref_extreme, ref_time) 或 None。
+    direction: short=看跌反转 / long=看涨反转; ref=失败判定参照(顶1/底1)。"""
+    _, seq = build_bi(klines, min_merged)
+    if len(seq) < 3:
+        return None
+    c = float(klines[-1]["close"])
+    a, b, d = seq[-3], seq[-2], seq[-1]
+    if a.kind == "top" and b.kind == "bottom" and d.kind == "top":
+        if d.extreme_price < a.extreme_price and c < b.extreme_price:   # 更低高点 + 收盘破前低
+            return "short", a.extreme_price, a.open_time
+    if a.kind == "bottom" and b.kind == "top" and d.kind == "bottom":
+        if d.extreme_price > a.extreme_price and c > b.extreme_price:   # 更高低点 + 收盘破前高
+            return "long", a.extreme_price, a.open_time
+    return None
+
+
 def trend_state(klines: list, ma_period: int = 20, lookback: int = 10, slope_pct: float = 0.3) -> str:
     """趋势判定 'up'/'down'/'range'：MA(ma_period)近lookback根斜率 > slope_pct% 且收盘在MA上 → up;
     镜像 → down; 否则 range(震荡)。用于顺势过滤:上升趋势禁做空、下降趋势禁做多。"""

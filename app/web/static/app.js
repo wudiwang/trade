@@ -65,6 +65,10 @@ function stateClass(state) {
 function dispType(type, dir, state, extraStr) {
   let ex = {}; try { ex = JSON.parse(extraStr || '{}'); } catch (e) {}
   const dual = ex.dual ? ' ⭐双' : '';
+  if (ex.path === '趋势反转') {
+    const s = state === 'fail' ? '败' : state === 'ok' ? '成' : '试';
+    return `🔄趋势反转(${s})`;
+  }
   if (ex.path === '威科夫') {
     const base = dir === 'short' ? '威科夫卖' : '威科夫买';
     if (state === 'try') return (dir === 'short' ? '试·威科夫卖' : '试·威科夫买') + dual;
