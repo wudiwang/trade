@@ -461,7 +461,7 @@ async function loadPositions() {
 }
 
 // ---------- BTC K线(可切级别) ----------
-let btcChart, btcSeries, _btcTf = '1h';
+let btcChart, btcSeries, btcVol, _btcTf = '1h';
 function switchBtcTf(tf) {
   _btcTf = tf;
   document.querySelectorAll('#btc-tf-switch .tfbtn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
@@ -482,8 +482,11 @@ async function loadBtcChart() {
     });
     btcSeries = btcChart.addCandlestickSeries({upColor: '#2ecc71', downColor: '#e74c3c',
       borderVisible: false, wickUpColor: '#2ecc71', wickDownColor: '#e74c3c'});
+    btcVol = btcChart.addHistogramSeries({priceFormat: {type: 'volume'}, priceScaleId: 'vol'});
+    btcChart.priceScale('vol').applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
   }
   btcSeries.setData(d.klines.map(k => ({time: k.open_time / 1000, open: k.open, high: k.high, low: k.low, close: k.close})));
+  btcVol.setData(d.klines.map(k => ({time: k.open_time / 1000, value: k.volume, color: k.close >= k.open ? '#2ecc7144' : '#e74c3c44'})));
   $('btc-note').textContent = '最新 ' + fmtP(d.klines[d.klines.length - 1].close);
   btcChart.timeScale().fitContent();
 }
