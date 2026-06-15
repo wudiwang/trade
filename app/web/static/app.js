@@ -401,6 +401,8 @@ function closeModal() { $('modal').classList.remove('show'); _chartCtx = null; i
 // ---------- 设置 ----------
 const SETTING_LABELS = {
   'mode': '运行模式', 'trade_direction': '交易方向',
+  'live.auto_trade': '自动下单(免确认)', 'live.fixed_notional_u': '单笔名义额U',
+  'live.max_positions': '实盘最大持仓', 'live.max_loss_pct': '亏损熔断%',
   'chan.bi_min_bars': '一笔最少合并K', 'chan.stall_max_gap': '停顿窗口(根)',
   'chan.fractal_vol_mult': '底分型放量倍数', 'chan.fractal_vol_ma': '放量均量回看(根)',
   'chan.require_divergence': '一买必须背驰', 'chan.mtf_tol_pct': '多级别价位容差%',
@@ -411,7 +413,25 @@ const SETTING_LABELS = {
   'risk.max_positions': '最大持仓数', 'risk.leverage': '杠杆',
   'universe.min_quote_volume_24h': '最低24h成交额',
 };
-const BOOL_SETTINGS = ['chan.require_divergence', 'chan.strong_reversal_15m', 'spring.btc_filter'];
+const BOOL_SETTINGS = ['chan.require_divergence', 'chan.strong_reversal_15m', 'spring.btc_filter', 'live.auto_trade'];
+// 顶部一键自动交易开关
+async function loadAutoSwitch() {
+  const s = await api('/api/settings'), btn = $('auto-switch');
+  if (!btn) return;
+  const on = !!s['live.auto_trade'], live = s.mode === 'live';
+  btn.textContent = '自动交易: ' + (on ? '🟢开' : '🔴关') + (live ? '' : '(非live)');
+  btn.style.background = on ? 'var(--green)' : 'var(--panel2)';
+  btn.style.color = on ? '#fff' : 'var(--text)';
+  btn.dataset.on = on ? '1' : '0';
+}
+async function toggleAuto() {
+  const btn = $('auto-switch'), turnOn = btn.dataset.on !== '1';
+  if (turnOn && !confirm('确认开启【自动下单】? 信号将免Telegram确认直接真实下单(受熔断/持仓/单笔名义额限制)。')) return;
+  const r = await api('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({'live.auto_trade': turnOn ? 'true' : 'false'})});
+  toast(r.ok ? ('✅ 自动交易已' + (turnOn ? '开启' : '关闭')) : '❌ ' + (r.error || '失败'));
+  loadAutoSwitch();
+}
 async function loadSettings() {
   const s = await api('/api/settings');
   $('settings').innerHTML = Object.entries(s).map(([k, v]) => {
@@ -515,8 +535,9 @@ async function loadBtcChart() {
 }
 
 // ---------- 启动 ----------
-loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); loadPositions(); loadLiveStats(); loadBtcChart(); connectWS();
+loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); loadPositions(); loadLiveStats(); loadAutoSwitch(); loadBtcChart(); connectWS();
 setInterval(loadStatus, 15000);
+setInterval(loadAutoSwitch, 20000);
 setInterval(loadPositions, 15000);
 setInterval(loadLiveStats, 30000);
 setInterval(loadBtcChart, 60000);

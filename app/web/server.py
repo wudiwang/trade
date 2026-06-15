@@ -448,6 +448,10 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "risk.max_positions": int, "risk.leverage": int,
         "universe.min_quote_volume_24h": float,
         "trade_direction": str,            # both/long/short: 只交易某方向
+        "live.auto_trade": _bool,          # 自动下单(免TG二次确认)
+        "live.fixed_notional_u": float,    # 单笔固定名义额U
+        "live.max_positions": int,         # 实盘最大持仓
+        "live.max_loss_pct": float,        # 亏损熔断%
         "mode": str,
     }
 

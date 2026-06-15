@@ -29,6 +29,7 @@ async def amain() -> None:
 
     engine = Engine(cfg, db)
     trader = LiveTrader(cfg, db, engine.rest)
+    engine.trader = trader            # 让引擎可在 auto_trade 开启时直接下单
     bot = TgBot(cfg, db, trader)
     engine.signal_subscribers.append(bot.on_signal)
     engine.trade_close_subscribers.append(bot.on_trade_close)

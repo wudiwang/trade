@@ -26,7 +26,12 @@ class LiveTrader:
         if not meta:
             return {"ok": False, "message": f"{symbol} 元数据缺失"}
 
-        qty = round_step(float(sig_row["suggested_qty"]), meta["step_size"] or 0)
+        fixed = float(self.cfg.get("live.fixed_notional_u", 0) or 0)
+        entry_px = float(sig_row["entry"]) or 0
+        if fixed > 0 and entry_px > 0:
+            qty = round_step(fixed / entry_px, meta["step_size"] or 0)   # 固定名义额: 张数=名义/价
+        else:
+            qty = round_step(float(sig_row["suggested_qty"]), meta["step_size"] or 0)
         if qty <= 0:
             return {"ok": False, "message": "数量过小，按精度取整后为0"}
         tick = meta["tick_size"] or 0
