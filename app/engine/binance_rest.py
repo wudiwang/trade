@@ -147,5 +147,8 @@ class BinanceRest:
     async def account_info(self) -> Any:
         return await self._signed("GET", "/fapi/v2/account", {})
 
+    async def position_risk(self) -> Any:
+        return await self._signed("GET", "/fapi/v2/positionRisk", {})
+
     async def set_leverage(self, symbol: str, leverage: int) -> Any:
         return await self._signed("POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": leverage})

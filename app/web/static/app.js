@@ -80,9 +80,10 @@ function sigScore(s) {
   try { return JSON.parse(s.extra || '{}').score ?? ''; } catch (e) { return ''; }
 }
 async function loadSignals() {
-  const level = $('f-level').value;
+  const level = $('f-level').value, dir = $('f-dir').value;
   let rows = await api('/api/signals?limit=200');
   if (level) rows = rows.filter(s => s.tf === level);
+  if (dir) rows = rows.filter(s => s.direction === dir);
   rows = rows.slice(0, 100);
   signalCache = {};
   rows.forEach(s => signalCache[s.id] = s);
@@ -442,8 +443,46 @@ function connectWS() {
   ws.onclose = () => setTimeout(connectWS, 5000);
 }
 
+// ---------- 实盘持仓 ----------
+async function loadPositions() {
+  const d = await api('/api/positions');
+  const note = $('pos-note'), tb = $('t-positions');
+  if (!d.live) { note.textContent = 'paper 模式(未实盘)'; tb.innerHTML = '<tr><td colspan="8" class="muted">切到 live 模式后显示真实持仓</td></tr>'; return; }
+  if (d.error) { note.textContent = '读取失败: ' + d.error; tb.innerHTML = ''; return; }
+  const ps = d.positions || [];
+  note.textContent = `${ps.length} 个持仓`;
+  tb.innerHTML = ps.map(p => `<tr>
+    <td><b>${p.symbol}</b></td>
+    <td><span class="tag ${p.direction}">${p.direction === 'long' ? '多' : '空'}</span></td>
+    <td>${p.amt}</td><td>${fmtP(p.entry)}</td><td>${fmtP(p.mark)}</td>
+    <td class="${p.pnl > 0 ? 'green' : p.pnl < 0 ? 'red' : ''}">${p.pnl >= 0 ? '+' : ''}${p.pnl}</td>
+    <td>${p.leverage}x</td><td>${p.strategy || '?'}${p.tf ? ' ' + p.tf : ''}</td>
+  </tr>`).join('') || '<tr><td colspan="8" class="muted">当前无持仓</td></tr>';
+}
+
+// ---------- BTC 1小时K线 ----------
+let btcChart, btcSeries;
+async function loadBtcChart() {
+  const d = await api('/api/klines?symbol=BTCUSDT&tf=1h&limit=200');
+  if (!d.klines || !d.klines.length) { $('btc-note').textContent = '无数据'; return; }
+  if (!btcChart) {
+    btcChart = LightweightCharts.createChart($('btc-chart'), {
+      layout: {background: {color: 'transparent'}, textColor: '#7a869c'},
+      grid: {vertLines: {color: '#1d2433'}, horzLines: {color: '#1d2433'}},
+      timeScale: {timeVisible: true}, autoSize: true,
+    });
+    btcSeries = btcChart.addCandlestickSeries({upColor: '#2ecc71', downColor: '#e74c3c',
+      borderVisible: false, wickUpColor: '#2ecc71', wickDownColor: '#e74c3c'});
+  }
+  btcSeries.setData(d.klines.map(k => ({time: k.open_time / 1000, open: k.open, high: k.high, low: k.low, close: k.close})));
+  $('btc-note').textContent = '最新 ' + fmtP(d.klines[d.klines.length - 1].close);
+  btcChart.timeScale().fitContent();
+}
+
 // ---------- 启动 ----------
-loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); connectWS();
+loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); loadPositions(); loadBtcChart(); connectWS();
 setInterval(loadStatus, 15000);
+setInterval(loadPositions, 15000);
+setInterval(loadBtcChart, 60000);
 setInterval(loadTfStats, 60000);
 setInterval(loadPlaybooks, 30000);

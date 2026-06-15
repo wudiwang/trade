@@ -372,6 +372,39 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
             "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
         return {"klines": kl, "signals": [dict(r) for r in sigs]}
 
+    @app.get("/api/positions")
+    async def positions():
+        """实盘真实持仓(live模式)+ 关联开仓策略。paper模式返回空。"""
+        eng = APP_STATE.get("engine")
+        if not eng or cfg.mode != "live":
+            return {"live": False, "positions": []}
+        try:
+            raw = await eng.rest.position_risk()
+        except Exception as e:
+            return {"live": True, "error": str(e)[:200], "positions": []}
+        out = []
+        for p in raw:
+            amt = float(p.get("positionAmt") or 0)
+            if amt == 0:
+                continue
+            sym = p["symbol"]
+            sig = db.one("SELECT tf, extra FROM signals WHERE symbol=? AND status='confirmed' "
+                         "ORDER BY id DESC LIMIT 1", (sym,))
+            strat, tf = "?", ""
+            if sig:
+                tf = sig["tf"]
+                try:
+                    strat = (json.loads(sig["extra"] or "{}")).get("path", "?")
+                except (ValueError, TypeError):
+                    pass
+            out.append({
+                "symbol": sym, "direction": "long" if amt > 0 else "short", "amt": abs(amt),
+                "entry": float(p.get("entryPrice") or 0), "mark": float(p.get("markPrice") or 0),
+                "pnl": round(float(p.get("unRealizedProfit") or 0), 4),
+                "leverage": p.get("leverage"), "strategy": strat, "tf": tf,
+            })
+        return {"live": True, "positions": out}
+
     _bool = lambda v: str(v).lower() in ("1", "true", "yes")
     EDITABLE = {
         # 策略 chan_bi: 笔 + 底分型(最强/标准) + 放量 + 背驰 + 停顿

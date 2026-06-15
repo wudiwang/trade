@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>缠论交易系统</title>
-<link rel="stylesheet" href="/style.css?v=25">
+<link rel="stylesheet" href="/style.css?v=26">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -33,6 +33,19 @@
   </div>
   <div class="cards" id="stat-cards"></div>
 
+  <div class="panel" id="pos-panel">
+    <h2>💰 实盘持仓 <span class="muted" style="font-weight:400" id="pos-note">paper 模式 / 无持仓</span></h2>
+    <table>
+      <thead><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>浮盈(U)</th><th>杠杆</th><th>策略</th></tr></thead>
+      <tbody id="t-positions"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>₿ BTC 1小时K线 <span class="tools"><span class="muted" id="btc-note"></span></span></h2>
+    <div id="btc-chart" style="height:260px"></div>
+  </div>
+
   <div class="panel" style="padding:10px 16px" id="squeeze-panel">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <b>⚠ 逼空候选</b>
@@ -59,6 +72,11 @@
           <option value="5m">5m</option>
           <option value="15m">15m</option>
           <option value="1h">1h</option>
+        </select>
+        <select id="f-dir" onchange="loadSignals()">
+          <option value="">全部方向</option>
+          <option value="long">做多</option>
+          <option value="short">做空</option>
         </select>
       </span>
     </h2>
@@ -168,6 +186,6 @@
   </div>
 </div>
 <div id="toast"></div>
-<script src="/app.js?v=25"></script>
+<script src="/app.js?v=26"></script>
 </body>
 </html>
