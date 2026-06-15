@@ -401,7 +401,7 @@ function closeModal() { $('modal').classList.remove('show'); _chartCtx = null; i
 // ---------- 设置 ----------
 const SETTING_LABELS = {
   'mode': '运行模式', 'trade_direction': '交易方向',
-  'live.auto_trade': '自动下单(免确认)', 'live.fixed_notional_u': '单笔名义额U',
+  'live.auto_trade': '自动下单(免确认)', 'live.fixed_margin_u': '单笔保证金U(×杠杆)', 'live.fixed_notional_u': '单笔名义额U',
   'live.max_positions': '实盘最大持仓', 'live.max_loss_pct': '亏损熔断%',
   'chan.bi_min_bars': '一笔最少合并K', 'chan.stall_max_gap': '停顿窗口(根)',
   'chan.fractal_vol_mult': '底分型放量倍数', 'chan.fractal_vol_ma': '放量均量回看(根)',
