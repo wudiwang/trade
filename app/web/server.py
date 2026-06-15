@@ -378,11 +378,20 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         eng = APP_STATE.get("engine")
         if not eng or cfg.mode != "live":
             return {"live": False}
-        start = int((time.time() - days * 86400) * 1000)
+        # 只统计本系统下过的单(orders表的币种+首单时间), 排除账户自带的历史/手动交易
+        orow = db.query("SELECT symbol, MIN(created_at) mn FROM orders GROUP BY symbol")
+        zero = {"live": True, "trades": 0, "wins": 0, "win_rate": 0, "realized": 0,
+                "commission": 0, "funding": 0, "net": 0, "avg": 0, "note": "本系统尚无实盘成交"}
+        if not orow:
+            return zero
+        bot_syms = {r["symbol"] for r in orow}
+        first_ts = min(r["mn"] for r in orow)
+        start = max(int((time.time() - days * 86400) * 1000), first_ts * 1000)
         try:
             inc = await eng.rest.income(start, 1000)
         except Exception as e:
             return {"live": True, "error": str(e)[:200]}
+        inc = [x for x in inc if x.get("symbol") in bot_syms]   # 只算本系统交易过的币
         pnls = [float(x["income"]) for x in inc if x.get("incomeType") == "REALIZED_PNL"]
         comm = sum(float(x["income"]) for x in inc if x.get("incomeType") == "COMMISSION")
         fund = sum(float(x["income"]) for x in inc if x.get("incomeType") == "FUNDING_FEE")

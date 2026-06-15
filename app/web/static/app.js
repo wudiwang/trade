@@ -497,6 +497,7 @@ async function loadLiveStats() {
   const d = await api('/api/live_stats?days=30');
   if (!d.live) { el.textContent = '💰 实盘数据: 切到 live 模式后显示真实盈亏/手续费'; return; }
   if (d.error) { el.textContent = '💰 实盘数据读取失败: ' + d.error; return; }
+  if (d.note || !d.trades) { el.innerHTML = `💰 <b>实盘</b>: ${d.note || '本系统尚无实盘成交'}(只统计本系统下的单)`; return; }
   const cls = v => v > 0 ? 'green' : v < 0 ? 'red' : '';
   el.innerHTML = `💰 <b>实盘</b>(近${d.days}天): 净盈亏 <span class="${cls(d.net)}">${d.net >= 0 ? '+' : ''}${d.net}U</span>`
     + ` · ${d.trades}单 胜率${d.win_rate}% 均${d.avg >= 0 ? '+' : ''}${d.avg}U`
