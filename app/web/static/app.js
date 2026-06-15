@@ -460,10 +460,19 @@ async function loadPositions() {
   </tr>`).join('') || '<tr><td colspan="8" class="muted">当前无持仓</td></tr>';
 }
 
-// ---------- BTC 1小时K线 ----------
-let btcChart, btcSeries;
+// ---------- BTC K线(可切级别) ----------
+let btcChart, btcSeries, _btcTf = '1h';
+function switchBtcTf(tf) {
+  _btcTf = tf;
+  document.querySelectorAll('#btc-tf-switch .tfbtn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
+  loadBtcChart();
+}
 async function loadBtcChart() {
-  const d = await api('/api/klines?symbol=BTCUSDT&tf=1h&limit=200');
+  if (!$('btc-tf-switch').innerHTML) {
+    $('btc-tf-switch').innerHTML = CHART_TFS.map(t =>
+      `<button class="tfbtn${t === _btcTf ? ' on' : ''}" data-tf="${t}" onclick="switchBtcTf('${t}')">${t}</button>`).join('');
+  }
+  const d = await api(`/api/klines?symbol=BTCUSDT&tf=${_btcTf}&limit=200`);
   if (!d.klines || !d.klines.length) { $('btc-note').textContent = '无数据'; return; }
   if (!btcChart) {
     btcChart = LightweightCharts.createChart($('btc-chart'), {
