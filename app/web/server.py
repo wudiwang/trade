@@ -355,13 +355,22 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         return [dict(r) for r in db.query(
             "SELECT ts, equity FROM equity_curve WHERE track=? ORDER BY ts", (track,))]
 
+    _TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60}
+
     @app.get("/api/klines")
     async def klines(symbol: str, tf: str = "15m", limit: int = 300):
-        rows = db.get_klines(symbol, tf, min(limit, 500))
-        sigs = db.query(
+        lim = min(limit, 500)
+        if tf in cfg.timeframes:                      # 已存储的级别直接取
+            kl = [dict(r) for r in db.get_klines(symbol, tf, lim)]
+        else:                                         # 未存储(如30m)→ 从5m聚合
+            from app.engine.chan import aggregate
+            mult = max(2, _TF_MIN.get(tf, 30) // 5)
+            base = [dict(r) for r in db.get_klines(symbol, "5m", min(lim * mult, 1500))]
+            kl = aggregate(base, mult)[-lim:]
+        sigs = db.query(                              # 仅该级别自身的信号(30m无信号→价格线仍由前端ref画)
             "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, state, vol_ratio, extra FROM signals "
             "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
-        return {"klines": [dict(r) for r in rows], "signals": [dict(r) for r in sigs]}
+        return {"klines": kl, "signals": [dict(r) for r in sigs]}
 
     _bool = lambda v: str(v).lower() in ("1", "true", "yes")
     EDITABLE = {

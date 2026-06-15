@@ -286,13 +286,28 @@ async function loadEquity() {
   eqChart.timeScale().fitContent();
 }
 
-// ---------- K线弹窗（标注：买入/止盈/止损线 + 信号类型 + 触发K）----------
+// ---------- K线弹窗（标注：买入/止盈/止损线 + 信号类型 + 触发K，可切换级别）----------
 let klChart;
+let _chartCtx = null;                 // {symbol, ref, tf}
+const CHART_TFS = ['5m', '15m', '30m', '1h'];
 async function openChart(symbol, tf, ref) {
   $('modal').classList.add('show');
+  _chartCtx = {symbol, ref, tf};
+  $('tf-switch').innerHTML = CHART_TFS.map(t =>
+    `<button class="tfbtn${t === tf ? ' on' : ''}" data-tf="${t}" onclick="switchTf('${t}')">${t}</button>`).join('');
+  await renderChart(symbol, tf, ref);
+}
+function switchTf(tf) {
+  if (!_chartCtx) return;
+  _chartCtx.tf = tf;
+  document.querySelectorAll('#tf-switch .tfbtn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
+  renderChart(_chartCtx.symbol, tf, _chartCtx.ref);
+}
+async function renderChart(symbol, tf, ref) {
   $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 🟡黄箭头=入场 · 🟠橙圈/橙线=缠论底/顶分型(威科夫=爆量扫破位) · 蓝=买入 绿=止盈 红=止损' : '');
   const d = await api(`/api/klines?symbol=${symbol}&tf=${tf}&limit=300`);
   $('chart').innerHTML = '';
+  if (klChart) { klChart.remove(); klChart = null; }
   await new Promise(r => setTimeout(r, 60));  // 等弹窗布局完成，避免首开图表零尺寸空白
   klChart = LightweightCharts.createChart($('chart'), {
     layout: {background: {color: 'transparent'}, textColor: '#7a869c'},
@@ -308,13 +323,21 @@ async function openChart(symbol, tf, ref) {
   klChart.priceScale('vol').applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
   vs.setData(d.klines.map(k => ({time: k.open_time / 1000, value: k.volume, color: k.close >= k.open ? '#2ecc7144' : '#e74c3c44'})));
 
+  // 标记时间对齐到当前级别的K(切级别后仍能落在对应那根K上); 落在范围外则跳过
+  const barTimes = d.klines.map(k => Math.floor(k.open_time / 1000));
+  const snap = t => {
+    let lo = 0, hi = barTimes.length - 1, res = null;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (barTimes[m] <= t) { res = barTimes[m]; lo = m + 1; } else hi = m - 1; }
+    return res;
+  };
   // 信号标记：买点箭头(=停顿K入场) + 顶/底分型(真正参与一↔二比较的极值) + 破位K + 主力K(可选)
   const markers = [];
   for (const s of d.signals.filter(x => x.status !== 'error')) {
     let ex = {};
     try { ex = JSON.parse(s.extra || '{}'); } catch (e) {}
-    markers.push({
-      time: s.created_at, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
+    const et = snap(s.created_at);
+    if (et != null) markers.push({
+      time: et, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
       color: '#ffd700',                                   // 买入点统一黄色, 醒目区分入场位置
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
       text: `${dispType(ex.type, s.direction, s.state, s.extra)} #${s.id}`,
@@ -329,9 +352,10 @@ async function openChart(symbol, tf, ref) {
       } else {
         tag = s.direction === 'long' ? '底分型' : '顶分型';
       }
-      if (ex.fractal_time) {
+      const ft = ex.fractal_time ? snap(Math.floor(ex.fractal_time / 1000)) : null;
+      if (ft != null) {
         markers.push({
-          time: Math.floor(ex.fractal_time / 1000),
+          time: ft,
           position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
           color: '#f39c12', shape: 'circle', text: `${tag}#${s.id}`,
         });
@@ -343,14 +367,15 @@ async function openChart(symbol, tf, ref) {
       });
     }
     if (ex.breakdown && ex.breakdown.time) {
-      markers.push({time: Math.floor(ex.breakdown.time / 1000), position: 'aboveBar',
-        color: '#f1c40f', shape: 'circle', text: '破位K'});
+      const bt = snap(Math.floor(ex.breakdown.time / 1000));
+      if (bt != null) markers.push({time: bt, position: 'aboveBar', color: '#f1c40f', shape: 'circle', text: '破位K'});
     }
     if (ex.main_k && ex.main_k.time) {
-      markers.push({time: Math.floor(ex.main_k.time / 1000), position: 'aboveBar',
-        color: '#9b59b6', shape: 'square', text: '🚩主力K'});
+      const mt = snap(Math.floor(ex.main_k.time / 1000));
+      if (mt != null) markers.push({time: mt, position: 'aboveBar', color: '#9b59b6', shape: 'square', text: '🚩主力K'});
     }
   }
+  // 同一根K上多个标记按时间稳定排序; 去掉重复时间冲突由库自行堆叠
   cs.setMarkers(markers.sort((a, b) => a.time - b.time));
 
   // 买入/止盈/止损 价格线
@@ -364,7 +389,7 @@ async function openChart(symbol, tf, ref) {
   }
   klChart.timeScale().fitContent();
 }
-function closeModal() { $('modal').classList.remove('show'); if (klChart) { klChart.remove(); klChart = null; } }
+function closeModal() { $('modal').classList.remove('show'); _chartCtx = null; if (klChart) { klChart.remove(); klChart = null; } }
 
 // ---------- 设置 ----------
 const SETTING_LABELS = {
