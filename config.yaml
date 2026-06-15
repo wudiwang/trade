@@ -6,6 +6,7 @@
 # ============================================================
 
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
+trade_direction: both  # both=多空都做 / long=只做多 / short=只做空(只对该方向信号开仓/推送)
 strategy: chan_bi      # chan_bi=缠论笔+停顿K(当前) / spring_v4=破位+底分型 / chan_v1=旧
 timeframes: ["5m", "15m", "1h"]   # 5m自身;15m结构用5m停顿触发;1h结构用15m停顿触发
 

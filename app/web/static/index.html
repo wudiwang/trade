@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>缠论交易系统</title>
-<link rel="stylesheet" href="/style.css?v=30">
+<link rel="stylesheet" href="/style.css?v=31">
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -35,6 +35,7 @@
 
   <div class="panel" id="pos-panel">
     <h2>💰 实盘持仓 <span class="muted" style="font-weight:400" id="pos-note">paper 模式 / 无持仓</span></h2>
+    <div id="live-stats" class="muted" style="margin-bottom:8px">实盘数据(切 live 后显示)</div>
     <table>
       <thead><tr><th>币种</th><th>方向</th><th>数量</th><th>开仓价</th><th>标记价</th><th>浮盈(U)</th><th>杠杆</th><th>策略</th></tr></thead>
       <tbody id="t-positions"></tbody>
@@ -191,6 +192,6 @@
   </div>
 </div>
 <div id="toast"></div>
-<script src="/app.js?v=30"></script>
+<script src="/app.js?v=31"></script>
 </body>
 </html>

@@ -19,7 +19,7 @@ function toast(msg) {
 async function logout() { await fetch('/api/logout', {method: 'POST'}); location.href = '/login.html'; }
 
 // ---------- 状态与统计 ----------
-const TRACK_NAMES = {buy1: '✅ 一买', buy2: '🔁 二买'};
+const TRACK_NAMES = {buy1: '🧪模拟·一买', buy2: '🧪模拟·二买'};
 async function loadStatus() {
   const s = await api('/api/status');
   if (s.error) { $('stat-cards').innerHTML = '<div class="card"><h3>引擎</h3><div class="big red">未运行</div></div>'; return; }
@@ -400,7 +400,7 @@ function closeModal() { $('modal').classList.remove('show'); _chartCtx = null; i
 
 // ---------- 设置 ----------
 const SETTING_LABELS = {
-  'mode': '运行模式',
+  'mode': '运行模式', 'trade_direction': '交易方向',
   'chan.bi_min_bars': '一笔最少合并K', 'chan.stall_max_gap': '停顿窗口(根)',
   'chan.fractal_vol_mult': '底分型放量倍数', 'chan.fractal_vol_ma': '放量均量回看(根)',
   'chan.require_divergence': '一买必须背驰', 'chan.mtf_tol_pct': '多级别价位容差%',
@@ -419,6 +419,10 @@ async function loadSettings() {
     if (k === 'mode') return `<label>${label}<select data-k="${k}">
       <option value="paper" ${v === 'paper' ? 'selected' : ''}>paper 模拟</option>
       <option value="live" ${v === 'live' ? 'selected' : ''}>live 实盘</option></select></label>`;
+    if (k === 'trade_direction') return `<label>${label}<select data-k="${k}">
+      <option value="both" ${v === 'both' ? 'selected' : ''}>全部(多空)</option>
+      <option value="long" ${v === 'long' ? 'selected' : ''}>只做多</option>
+      <option value="short" ${v === 'short' ? 'selected' : ''}>只做空</option></select></label>`;
     if (BOOL_SETTINGS.includes(k)) return `<label>${label}<select data-k="${k}">
       <option value="true" ${v ? 'selected' : ''}>开</option>
       <option value="false" ${!v ? 'selected' : ''}>关</option></select></label>`;
@@ -466,6 +470,19 @@ async function loadPositions() {
   </tr>`).join('') || '<tr><td colspan="8" class="muted">当前无持仓</td></tr>';
 }
 
+// ---------- 实盘数据(真实盈亏/胜率/手续费, 与模拟盘区分) ----------
+async function loadLiveStats() {
+  const el = $('live-stats');
+  if (!el) return;
+  const d = await api('/api/live_stats?days=30');
+  if (!d.live) { el.textContent = '💰 实盘数据: 切到 live 模式后显示真实盈亏/手续费'; return; }
+  if (d.error) { el.textContent = '💰 实盘数据读取失败: ' + d.error; return; }
+  const cls = v => v > 0 ? 'green' : v < 0 ? 'red' : '';
+  el.innerHTML = `💰 <b>实盘</b>(近${d.days}天): 净盈亏 <span class="${cls(d.net)}">${d.net >= 0 ? '+' : ''}${d.net}U</span>`
+    + ` · ${d.trades}单 胜率${d.win_rate}% 均${d.avg >= 0 ? '+' : ''}${d.avg}U`
+    + ` · 已实现${d.realized} · <span class="red">手续费${d.commission}</span> · 资金费${d.funding}`;
+}
+
 // ---------- BTC K线(可切级别) ----------
 let btcChart, btcSeries, btcVol, _btcTf = '1h';
 function switchBtcTf(tf) {
@@ -498,9 +515,10 @@ async function loadBtcChart() {
 }
 
 // ---------- 启动 ----------
-loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); loadPositions(); loadBtcChart(); connectWS();
+loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); loadPositions(); loadLiveStats(); loadBtcChart(); connectWS();
 setInterval(loadStatus, 15000);
 setInterval(loadPositions, 15000);
+setInterval(loadLiveStats, 30000);
 setInterval(loadBtcChart, 60000);
 setInterval(loadTfStats, 60000);
 setInterval(loadPlaybooks, 30000);

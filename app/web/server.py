@@ -372,6 +372,29 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
             "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
         return {"klines": kl, "signals": [dict(r) for r in sigs]}
 
+    @app.get("/api/live_stats")
+    async def live_stats(days: int = 30):
+        """实盘真实盈亏/胜率/手续费(取币安收益流水)。paper模式返回 live=False。"""
+        eng = APP_STATE.get("engine")
+        if not eng or cfg.mode != "live":
+            return {"live": False}
+        start = int((time.time() - days * 86400) * 1000)
+        try:
+            inc = await eng.rest.income(start, 1000)
+        except Exception as e:
+            return {"live": True, "error": str(e)[:200]}
+        pnls = [float(x["income"]) for x in inc if x.get("incomeType") == "REALIZED_PNL"]
+        comm = sum(float(x["income"]) for x in inc if x.get("incomeType") == "COMMISSION")
+        fund = sum(float(x["income"]) for x in inc if x.get("incomeType") == "FUNDING_FEE")
+        realized = sum(pnls)
+        n = len(pnls)
+        wins = sum(1 for p in pnls if p > 0)
+        return {"live": True, "days": days, "trades": n, "wins": wins,
+                "win_rate": round(wins / n * 100, 1) if n else 0,
+                "realized": round(realized, 4), "commission": round(comm, 4), "funding": round(fund, 4),
+                "net": round(realized + comm + fund, 4),
+                "avg": round((realized + comm + fund) / n, 4) if n else 0}
+
     @app.get("/api/positions")
     async def positions():
         """实盘真实持仓(live模式)+ 关联开仓策略。paper模式返回空。"""
@@ -424,6 +447,7 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "risk.account_equity": float, "risk.risk_pct": float,
         "risk.max_positions": int, "risk.leverage": int,
         "universe.min_quote_volume_24h": float,
+        "trade_direction": str,            # both/long/short: 只交易某方向
         "mode": str,
     }
 
@@ -440,6 +464,8 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
                 continue
             if k == "mode" and v not in ("paper", "live"):
                 return JSONResponse({"error": "mode 必须是 paper 或 live"}, status_code=400)
+            if k == "trade_direction" and v not in ("both", "long", "short"):
+                return JSONResponse({"error": "trade_direction 必须是 both/long/short"}, status_code=400)
             try:
                 tv = EDITABLE[k](v)
             except (ValueError, TypeError):

@@ -273,21 +273,26 @@ class Engine:
             for sid, st in self.signal_engine.update_lifecycle(symbol, tf, kbt.get(tf, [])):
                 log.info("SIGNAL #%d -> %s", sid, st)
             new_sigs = []
+            td = self.cfg.get("trade_direction", "both")   # both/long/short: 只交易某方向
             for sig in self.signal_engine.evaluate_all(symbol, tf, kbt):
                 sid = self.db.insert_signal(sig.to_db())
-                # 反向信号平仓：一卖平掉同币同级别的多单(一买)，一买平掉空单
-                for rev in self.paper.close_opposite(sig.symbol, sig.tf, sig.direction, sig.entry):
-                    for sub in self.trade_close_subscribers:
-                        await sub(rev)
-                self.paper.open_from_signal(sid, sig)
+                # 方向闸: alert只提示不交易; 选了单向则只交易该方向(其余只入库展示)
+                tradable = sig.kind != "alert" and (td == "both" or sig.direction == td)
+                if tradable:
+                    # 反向信号平仓：一卖平掉同币同级别的多单(一买)，一买平掉空单
+                    for rev in self.paper.close_opposite(sig.symbol, sig.tf, sig.direction, sig.entry):
+                        for sub in self.trade_close_subscribers:
+                            await sub(rev)
+                    self.paper.open_from_signal(sid, sig)
                 new_sigs.append((sid, sig))
-                log.info("SIGNAL #%d %s %s %s %s rr=%.2f", sid, sig.kind, sig.symbol, sig.tf, sig.direction, sig.rr)
+                log.info("SIGNAL #%d %s %s %s %s rr=%.2f trade=%s", sid, sig.kind, sig.symbol, sig.tf, sig.direction, sig.rr, tradable)
                 self.db.log("info", "signal", f"#{sid} {sig.symbol} {sig.tf} {sig.direction} rr={sig.rr}")
-                for sub in self.signal_subscribers:
-                    try:
-                        await sub(sid, sig)
-                    except Exception:
-                        log.exception("signal subscriber failed")
+                if tradable:
+                    for sub in self.signal_subscribers:
+                        try:
+                            await sub(sid, sig)
+                        except Exception:
+                            log.exception("signal subscriber failed")
             await self._check_dual(symbol, new_sigs)
         except Exception:
             log.exception("evaluate failed %s %s", symbol, tf)
