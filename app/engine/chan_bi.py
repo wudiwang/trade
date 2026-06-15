@@ -289,6 +289,26 @@ def trend_reversal(klines: list, min_merged: int = 5):
     return None
 
 
+def head_shoulders_top(klines: list, min_merged: int = 5, shoulder_tol_pct: float = 8.0):
+    """头肩顶: 笔序列末端 左肩-谷-头-谷-右肩(三顶,头最高,两肩相近且低于头),
+    颈线=两谷较低者,当前收盘跌破颈线 → 触发。返回 (neckline, head_price, head_time) 或 None。"""
+    _, seq = build_bi(klines, min_merged)
+    if len(seq) < 5:
+        return None
+    ls, t1, h, t2, rs = seq[-5:]
+    if not (ls.kind == "top" and t1.kind == "bottom" and h.kind == "top"
+            and t2.kind == "bottom" and rs.kind == "top"):
+        return None
+    if not (h.extreme_price > ls.extreme_price and h.extreme_price > rs.extreme_price):
+        return None
+    if abs(ls.extreme_price - rs.extreme_price) / h.extreme_price > shoulder_tol_pct / 100.0:
+        return None                                  # 两肩高度需相近
+    neckline = min(t1.extreme_price, t2.extreme_price)
+    if float(klines[-1]["close"]) < neckline:        # 收盘跌破颈线
+        return neckline, h.extreme_price, h.open_time
+    return None
+
+
 def trend_state(klines: list, ma_period: int = 20, lookback: int = 10, slope_pct: float = 0.3) -> str:
     """趋势判定 'up'/'down'/'range'：MA(ma_period)近lookback根斜率 > slope_pct% 且收盘在MA上 → up;
     镜像 → down; 否则 range(震荡)。用于顺势过滤:上升趋势禁做空、下降趋势禁做多。"""

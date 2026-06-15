@@ -20,8 +20,8 @@ class PaperBroker:
         """s: signals.Signal。track = 信号类型（watch/buy1/buy2/spring/chan），
         每种入场点独立统计胜率，用于验证哪个买点最有效。"""
         tracks = [s.extra.get("type", "other") if isinstance(s.extra, dict) else "other"]
-        # 趋势反转: 纯提示信号, 不开仓
-        if isinstance(s.extra, dict) and s.extra.get("path") == "趋势反转":
+        # 提示型信号(趋势反转/头肩顶等 kind=alert): 不开仓
+        if getattr(s, "kind", "") == "alert":
             return
         # 威科夫确认型: 不单独开仓(只记信号, 用于与缠论重叠标注), 单独交易胜率太低
         if (isinstance(s.extra, dict) and s.extra.get("path") == "威科夫"

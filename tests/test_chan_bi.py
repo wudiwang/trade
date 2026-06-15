@@ -253,6 +253,20 @@ def test_trend_reversal():
     assert trend_reversal(zigzag([60, 70, 64, 68], per_leg=7), 5) is None
 
 
+def test_head_shoulders():
+    from app.engine.chan_bi import head_shoulders_top
+    # 左肩68-谷64-头72-谷64-右肩68, 之后收盘跌破颈线64
+    ks = zigzag([60, 68, 64, 72, 64, 68], per_leg=7)
+    p = 68.0
+    for i in range(6):
+        p -= 1.0
+        ks.append(k(p + 1, p + 1.05, p - 0.05, p, t=300 + i))
+    r = head_shoulders_top(ks, 5)
+    print("  头肩顶:", r)
+    assert r and r[1] > 70, r          # 头≈72
+    assert head_shoulders_top(zigzag([60, 68, 64, 72, 64, 68], per_leg=7), 5) is None  # 未破颈线
+
+
 def test_trend_state():
     from app.engine.chan_bi import trend_state
     up = [k(60 + i * 0.5, 60 + i * 0.5 + 0.1, 60 + i * 0.5 - 0.1, 60 + i * 0.5, t=i) for i in range(40)]

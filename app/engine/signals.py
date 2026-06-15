@@ -151,6 +151,10 @@ class SignalEngine:
         sr = self._eval_trend_reversal(symbol, tf, own)
         if sr:
             out.append(sr)
+        # 头肩顶提示(只提示不开仓)
+        hs = self._eval_head_shoulders(symbol, tf, own)
+        if hs:
+            out.append(hs)
         if tf == "5m":
             s = self._eval_chan_bi(symbol, "5m", own)        # 5m 自身(底分型+5m停顿)
             if s:
@@ -191,6 +195,32 @@ class SignalEngine:
             vol_ratio=0, strength="normal", suggested_qty=0, risk_usdt=0,
             reason=f"🔄趋势反转({side}): {why}", created_at=int(time.time()),
             extra={"path": "趋势反转", "ref_price": ref, "fractal_time": ref_time, "rev_dir": direction},
+        )
+
+    def _eval_head_shoulders(self, symbol: str, tf: str, klines: list) -> "Signal | None":
+        """头肩顶提示(看跌结构): 左肩-头-右肩 + 跌破颈线。只提示不开仓不推买入。"""
+        if not self._p("chan.hs_top_alert", True):
+            return None
+        from .chan_bi import head_shoulders_top
+        min_bars = self._p("chan.bi_min_bars", 5)
+        if len(klines) < min_bars * 5 + 5:
+            return None
+        r = head_shoulders_top(klines, min_bars, self._p("chan.hs_shoulder_tol_pct", 8.0))
+        if not r:
+            return None
+        neckline, head, head_time = r
+        fkey = ("hs", symbol, tf, head_time)
+        if self._bi_fired.get(fkey):
+            return None
+        self._bi_fired[fkey] = head_time
+        c = float(klines[-1]["close"])
+        return Signal(
+            symbol=symbol, tf=tf, direction="short", kind="alert",
+            entry=round(c, 8), sl=round(head, 8), tp=round(neckline, 8), rr=0,
+            vol_ratio=0, strength="normal", suggested_qty=0, risk_usdt=0,
+            reason=f"🚩头肩顶: 左肩-头-右肩, 收盘跌破颈线{neckline:.6g}", created_at=int(time.time()),
+            extra={"path": "头肩顶", "ref_price": head, "fractal_time": head_time, "rev_dir": "short",
+                   "neckline": neckline},
         )
 
     # ======================= 策略: 威科夫弹簧买点 =======================
@@ -288,8 +318,8 @@ class SignalEngine:
                 ex = json.loads(r["extra"] or "{}")
             except (ValueError, TypeError):
                 continue
-            # 趋势反转: 只判 试→败(后续创新高/新低=反转失败), 不走成笔逻辑
-            if ex.get("path") == "趋势反转":
+            # 趋势反转/头肩顶: 只判 试→败(后续突破ref=形态失败), 不走成笔逻辑
+            if ex.get("path") in ("趋势反转", "头肩顶"):
                 ref, ft, rd = ex.get("ref_price"), ex.get("fractal_time"), ex.get("rev_dir")
                 if ref is None or not ft:
                     continue

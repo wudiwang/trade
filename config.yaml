@@ -23,6 +23,8 @@ chan:
   strong_reversal_15m: false  # 仅15m强反转(过严,7天40币只过3次,已关→15m回到与5m同样标准闸)
   reversal_body_ratio: 0.6    # 强反转:右K实体≥自身振幅×该比例
   trend_reversal_alert: true  # ④趋势反转提示(更低高点+破前低/更高低点+破前高), 只提示不开仓
+  hs_top_alert: true     # 头肩顶提示(左肩-头-右肩+跌破颈线), 只提示不开仓
+  hs_shoulder_tol_pct: 8.0    # 头肩顶两肩高度容差%
   trend_filter: true     # ⑤顺势过滤: 上升趋势禁做空、下降趋势禁做多(震荡放行)
   trend_ma: 20           # 趋势判定均线周期
   trend_lookback: 10     # 均线斜率回看根数
