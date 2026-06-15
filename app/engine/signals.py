@@ -118,6 +118,19 @@ class SignalEngine:
         self.funnel[stage] = self.funnel.get(stage, 0) + 1
         return None
 
+    def _trend_ok(self, klines, direction) -> bool:
+        """顺势过滤: 上升趋势禁做空、下降趋势禁做多。震荡(range)放行。返回 True=放行。"""
+        if not self._p("chan.trend_filter", True):
+            return True
+        from .chan_bi import trend_state
+        st = trend_state(klines, self._p("chan.trend_ma", 20),
+                         self._p("chan.trend_lookback", 10), self._p("chan.trend_slope_pct", 0.3))
+        if direction == "short" and st == "up":
+            return False
+        if direction == "long" and st == "down":
+            return False
+        return True
+
     # ======================= 路由 =======================
 
     # 多级别联立：高级别结构 + 次级别停顿触发
@@ -204,6 +217,8 @@ class SignalEngine:
             return None
         if not self._btc_ok(direction):
             return self._drop("btc_filter")
+        if not self._trend_ok(klines, direction):       # ⑤顺势过滤: 上升禁空/下降禁多
+            return self._drop("trend_filter")
         self._bi_fired[fkey] = anchor
         cool[ckey] = now_ot
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
@@ -299,6 +314,8 @@ class SignalEngine:
             return None
         if not self._btc_ok(direction):
             return self._drop("btc_filter")
+        if not self._trend_ok(struct_klines, direction):    # ⑤顺势过滤(结构级)
+            return self._drop("trend_filter")
         # 链失效(加固): 一卖的顶分型在其形成后被任意K突破 / 一买的底分型被跌破 → 一买一卖失败, 清链, 后面只出新试买卖
         ch = self._bi_chain.get(ck)
         lv = None
@@ -373,6 +390,8 @@ class SignalEngine:
             if self._bi_fired.get(ck) != fx.open_time:
                 if not self._btc_ok(direction):
                     return self._drop("btc_filter")
+                if not self._trend_ok(klines, direction):    # ⑤顺势过滤
+                    return self._drop("trend_filter")
                 chain_entry = self._bi_chain.get(ck)
                 chain_lv = chain_entry[0] if chain_entry else None
                 # 二买必须先有一买；没有一买链时，这一信号就是一买(开链)

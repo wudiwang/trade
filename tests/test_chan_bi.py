@@ -238,6 +238,17 @@ def test_wyckoff_spring():
     assert wyckoff_spring(ks2, 20, 4) is None
 
 
+def test_trend_state():
+    from app.engine.chan_bi import trend_state
+    up = [k(60 + i * 0.5, 60 + i * 0.5 + 0.1, 60 + i * 0.5 - 0.1, 60 + i * 0.5, t=i) for i in range(40)]
+    dn = [k(60 - i * 0.5, 60 - i * 0.5 + 0.1, 60 - i * 0.5 - 0.1, 60 - i * 0.5, t=i) for i in range(40)]
+    flat = [k(60, 60.1, 59.9, 60, t=i) for i in range(40)]
+    print(f"  up→{trend_state(up)} down→{trend_state(dn)} flat→{trend_state(flat)}")
+    assert trend_state(up) == "up"
+    assert trend_state(dn) == "down"
+    assert trend_state(flat) == "range"
+
+
 def test_lifecycle_state():
     from app.engine.chan_bi import lifecycle_state
     # 成立: 下到底(底分型) → 上涨成一笔(出顶分型, 用回调16确认顶)

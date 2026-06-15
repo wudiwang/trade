@@ -269,6 +269,26 @@ def wyckoff_spring(klines: list, lookback: int = 20, reclaim_bars: int = 4,
     return None
 
 
+def trend_state(klines: list, ma_period: int = 20, lookback: int = 10, slope_pct: float = 0.3) -> str:
+    """趋势判定 'up'/'down'/'range'：MA(ma_period)近lookback根斜率 > slope_pct% 且收盘在MA上 → up;
+    镜像 → down; 否则 range(震荡)。用于顺势过滤:上升趋势禁做空、下降趋势禁做多。"""
+    n = len(klines)
+    if n < ma_period + lookback + 1:
+        return "range"
+    closes = [float(k["close"]) for k in klines]
+    ma_now = sum(closes[n - ma_period:]) / ma_period
+    ma_prev = sum(closes[n - ma_period - lookback: n - lookback]) / ma_period
+    if ma_prev <= 0:
+        return "range"
+    slope = (ma_now - ma_prev) / ma_prev * 100.0
+    cur = closes[-1]
+    if cur > ma_now and slope > slope_pct:
+        return "up"
+    if cur < ma_now and slope < -slope_pct:
+        return "down"
+    return "range"
+
+
 def lifecycle_state(klines: list, fx_price: float, fx_time_ms: int,
                     direction: str, min_merged: int = 5) -> str:
     """信号生命周期判定，返回 'fail' / 'ok' / 'try'。
