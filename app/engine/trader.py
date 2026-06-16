@@ -26,7 +26,17 @@ class LiveTrader:
         if not meta:
             return {"ok": False, "message": f"{symbol} 元数据缺失"}
 
-        qty = round_step(float(sig_row["suggested_qty"]), meta["step_size"] or 0)
+        lev = int(self.cfg.get("risk.leverage", 5))
+        margin = float(self.cfg.get("live.fixed_margin_u", 0) or 0)
+        fixed = float(self.cfg.get("live.fixed_notional_u", 0) or 0)
+        entry_px = float(sig_row["entry"]) or 0
+        step = meta["step_size"] or 0
+        if margin > 0 and entry_px > 0:
+            qty = round_step(margin * lev / entry_px, step)             # 固定保证金: 名义=保证金×杠杆, 张数=名义/价
+        elif fixed > 0 and entry_px > 0:
+            qty = round_step(fixed / entry_px, step)                    # 固定名义额: 张数=名义/价
+        else:
+            qty = round_step(float(sig_row["suggested_qty"]), step)
         if qty <= 0:
             return {"ok": False, "message": "数量过小，按精度取整后为0"}
         tick = meta["tick_size"] or 0
@@ -36,7 +46,6 @@ class LiveTrader:
 
         side = "BUY" if direction == "long" else "SELL"
         close_side = "SELL" if direction == "long" else "BUY"
-        lev = int(self.cfg.get("risk.leverage", 5))
         orders = []
         try:
             await self.rest.set_leverage(symbol, lev)

@@ -34,6 +34,9 @@ class Engine:
         self.started_at = 0
         self.last_eval_ms = 0.0
         self.squeeze: dict[str, dict] = {}   # 逼空候选 symbol -> 明细
+        self.trader = None                   # live 模式注入 LiveTrader(main.py)
+        self._auto_halt = False              # 熔断标志(达最大亏损后停自动)
+        self._bal_cache = (0.0, 0.0)         # (余额, 取数时间) 60s缓存
 
     # ---------- 生命周期 ----------
     async def start(self) -> None:
@@ -269,19 +272,134 @@ class Engine:
         # 信号评估（多级别联立：一次收盘可能产出多个信号）
         try:
             kbt = {t: list(self.cache.get((symbol, t), ())) for t in self.cfg.timeframes}
+            # 更新"试"信号生命周期(试→成立/失败)
+            for sid, st in self.signal_engine.update_lifecycle(symbol, tf, kbt.get(tf, [])):
+                log.info("SIGNAL #%d -> %s", sid, st)
+            new_sigs = []
+            td = self.cfg.get("trade_direction", "both")   # both/long/short: 只交易某方向
             for sig in self.signal_engine.evaluate_all(symbol, tf, kbt):
                 sid = self.db.insert_signal(sig.to_db())
-                self.paper.open_from_signal(sid, sig)
-                log.info("SIGNAL #%d %s %s %s %s rr=%.2f", sid, sig.kind, sig.symbol, sig.tf, sig.direction, sig.rr)
+                # 方向闸: alert只提示不交易; 选了单向则只交易该方向(其余只入库展示)
+                tradable = sig.kind != "alert" and (td == "both" or sig.direction == td)
+                if tradable:
+                    # 反向信号平仓：一卖平掉同币同级别的多单(一买)，一买平掉空单
+                    for rev in self.paper.close_opposite(sig.symbol, sig.tf, sig.direction, sig.entry):
+                        for sub in self.trade_close_subscribers:
+                            await sub(rev)
+                    self.paper.open_from_signal(sid, sig)
+                new_sigs.append((sid, sig))
+                log.info("SIGNAL #%d %s %s %s %s rr=%.2f trade=%s", sid, sig.kind, sig.symbol, sig.tf, sig.direction, sig.rr, tradable)
                 self.db.log("info", "signal", f"#{sid} {sig.symbol} {sig.tf} {sig.direction} rr={sig.rr}")
-                for sub in self.signal_subscribers:
-                    try:
-                        await sub(sid, sig)
-                    except Exception:
-                        log.exception("signal subscriber failed")
+                if tradable:
+                    placed = await self._auto_execute(sid, sig)   # auto_trade开→直接下单
+                    if not placed:
+                        for sub in self.signal_subscribers:        # 否则推TG卡片走人工二次确认
+                            try:
+                                await sub(sid, sig)
+                            except Exception:
+                                log.exception("signal subscriber failed")
+            await self._check_dual(symbol, new_sigs)
         except Exception:
             log.exception("evaluate failed %s %s", symbol, tf)
         self.last_eval_ms = (time.perf_counter() - t0) * 1000
+
+    async def _check_dual(self, symbol: str, new_sigs: list) -> None:
+        """双信号重叠: 同币同级别同方向, 缠论买点与威科夫买点在 overlap_bars 根内同时出现
+        → 双重加强, 标记 dual 并额外提醒(模拟仓此时已进场)。"""
+        if not new_sigs:
+            return
+        import json as _json
+        from .signals import TF_MS
+        win_bars = self.cfg.get("wyckoff.overlap_bars", 3)
+        for sid, sig in new_sigs:
+            is_wy = isinstance(sig.extra, dict) and sig.extra.get("path") == "威科夫"
+            win = win_bars * TF_MS.get(sig.tf, 300)
+            try:
+                other = self.db.one(
+                    "SELECT id, extra FROM signals WHERE symbol=? AND tf=? AND direction=? AND id<>? "
+                    "AND created_at >= ? ORDER BY id DESC LIMIT 1",
+                    (symbol, sig.tf, sig.direction, sid, sig.created_at - win))
+            except Exception:
+                continue
+            if not other:
+                continue
+            try:
+                oex = _json.loads(other["extra"] or "{}")
+            except (ValueError, TypeError):
+                oex = {}
+            if is_wy == (oex.get("path") == "威科夫"):
+                continue   # 同路径, 不算重叠
+            for x in (sid, other["id"]):
+                self._set_dual(x)
+            side = "做多" if sig.direction == "long" else "做空"
+            msg = (f"🔔双信号重叠 {symbol} {sig.tf} {side}: 缠论买点 + 威科夫买点 同位共振(双重加强), "
+                   f"模拟仓已进场, 重点关注后续走势!")
+            for sub in self.notice_subscribers:
+                try:
+                    await sub(msg)
+                except Exception:
+                    log.exception("dual notice failed")
+
+    def _set_dual(self, sid: int) -> None:
+        import json as _json
+        row = self.db.one("SELECT extra FROM signals WHERE id=?", (sid,))
+        if not row:
+            return
+        try:
+            ex = _json.loads(row["extra"] or "{}")
+        except (ValueError, TypeError):
+            ex = {}
+        if ex.get("dual"):
+            return
+        ex["dual"] = 1
+        self.db.execute("UPDATE signals SET extra=? WHERE id=?",
+                        (_json.dumps(ex, ensure_ascii=False), sid))
+
+    async def _wallet_balance(self):
+        """合约总钱包余额, 60s缓存。失败返回 None。"""
+        bal, ts = self._bal_cache
+        if time.time() - ts < 60:
+            return bal
+        try:
+            acc = await self.rest.account_info()
+            bal = float(acc.get("totalWalletBalance") or 0)
+            self._bal_cache = (bal, time.time())
+            return bal
+        except Exception:
+            return None
+
+    async def _auto_execute(self, sid: int, sig) -> bool:
+        """自动下单(带熔断+持仓上限)。返回是否已下单(False→回退人工确认)。"""
+        if self.trader is None or self.cfg.mode != "live" or not self.cfg.get("live.auto_trade", False):
+            return False
+        # 安全阀1: 亏损熔断(余额跌破本金的 1-max_loss_pct%)
+        base = float(self.cfg.get("risk.account_equity", 100) or 100)
+        loss_pct = float(self.cfg.get("live.max_loss_pct", 50) or 50)
+        bal = await self._wallet_balance()
+        if bal is not None and base > 0 and bal < base * (1 - loss_pct / 100.0):
+            if not self._auto_halt:
+                self._auto_halt = True
+                self.db.log("error", "auto", f"熔断: 余额{bal:.2f}<本金{base}的{100-loss_pct:.0f}%, 停自动")
+                for sub in self.notice_subscribers:
+                    await sub(f"🛑熔断: 余额{bal:.2f}U 跌破本金{base}的{100-loss_pct:.0f}%, 已停止自动交易")
+            return False
+        # 安全阀2: 最大同时持仓
+        try:
+            raw = await self.rest.position_risk()
+            nopen = sum(1 for p in raw if float(p.get("positionAmt") or 0) != 0)
+        except Exception:
+            nopen = 0
+        if nopen >= int(self.cfg.get("live.max_positions", 10)):
+            self.db.log("info", "auto", f"持仓达上限{nopen}, 跳过 {sig.symbol}")
+            return False
+        # 下单
+        row = sig.to_db(); row["id"] = sid
+        res = await self.trader.execute_signal(sid, row)
+        self.db.update_signal(sid, status=("confirmed" if res.get("ok") else "error"))
+        for sub in self.notice_subscribers:
+            await sub(("🚀自动下单 " if res.get("ok") else "⚠️自动下单失败 ") + res.get("message", ""))
+        log.info("AUTO #%d %s %s -> %s", sid, sig.symbol, sig.direction, res.get("ok"))
+        return True
 
     # ---------- 状态 ----------
     def status(self) -> dict:

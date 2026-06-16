@@ -97,6 +97,31 @@ def vol_spike_before(klines: list, merged: list, fx, ma: int = 10, mult: float =
     return front_vol_ratio(klines, merged, fx, ma) >= mult
 
 
+def strong_reversal(klines: list, merged: list, fx, body_ratio: float = 0.6) -> bool:
+    """15m 增量条件(强反转形态)。底分型(左L 中M 右R)三条同时满足：
+      ① 右K实体 ≥ 自身振幅 × body_ratio(大实体反转K)
+      ② 右K收盘 > 左K最高价(完全吞掉第一根下跌K)
+      ③ 中K(最低那根)有下影线(低点被买盘拒绝)
+    顶分型镜像(右K实体大 / 右K收盘<左K最低 / 中K有上影线)。"""
+    mid = fx.mid_merged_idx
+    if mid < 1 or mid + 1 >= len(merged):
+        return False
+    L, M, R = merged[mid - 1], merged[mid], merged[mid + 1]
+    Mo, Mc = _merged_oc(klines, M)
+    Ro, Rc = _merged_oc(klines, R)
+    rng = R.high - R.low
+    if rng <= 0:
+        return False
+    body_ok = abs(Rc - Ro) >= body_ratio * rng                 # ① 右K大实体
+    if fx.kind == "bottom":
+        engulf = Rc > L.high                                   # ② 右K收盘 > 左K最高
+        wick = (min(Mo, Mc) - M.low) > 0                       # ③ 中K有下影线
+    else:
+        engulf = Rc < L.low                                    # ② 右K收盘 < 左K最低
+        wick = (M.high - max(Mo, Mc)) > 0                      # ③ 中K有上影线
+    return body_ok and engulf and wick
+
+
 def quality_ok(klines: list, merged: list, fx, vol_ma: int = 10, vol_mult: float = 2.0):
     """返回 (是否通过, 强度grade, 放量倍数)。通过 = 最强/标准 且 前2根放量达标。"""
     grade = fractal_grade(klines, merged, fx)
@@ -172,6 +197,157 @@ def divergence(klines: list, seq: list, direction: str,
         tag = "+".join([t for t, ok in (("形态", shape), ("MACD", macd)) if ok])
         return True, tag
     return False, ""
+
+
+def _vol_ratio_at(klines: list, idx: int, ma: int = 20) -> float:
+    """第 idx 根量 / 其前 ma 根均量。"""
+    if idx < ma:
+        return 1.0
+    avg = sum(float(klines[j]["volume"]) for j in range(idx - ma, idx)) / ma
+    v = float(klines[idx]["volume"])
+    return v / avg if avg > 0 else 1.0
+
+
+def _wick_ok(k, direction: str, wick_min: float) -> bool:
+    """扫破K要有反向影线(拒绝)。多: 下影≥振幅×wick_min; 空: 上影。"""
+    o, c, h, l = float(k["open"]), float(k["close"]), float(k["high"]), float(k["low"])
+    rng = h - l
+    if rng <= 0:
+        return False
+    if direction == "long":
+        return (min(o, c) - l) >= wick_min * rng
+    return (h - max(o, c)) >= wick_min * rng
+
+
+def wyckoff_spring(klines: list, lookback: int = 20, reclaim_bars: int = 4,
+                   pierce_tol_pct: float = 0.0, vol_ma: int = 20,
+                   climax_mult: float = 2.0, dryup_ratio: float = 1.0,
+                   min_bounce_pct: float = 1.5, wick_min: float = 0.4):
+    """威科夫弹簧(多)/上冲回落UTAD(空)。在最新K上判定。
+    多: 近 reclaim_bars 根有一根"爆量阴线"扫破前低, 价格再收回到该爆量K的【启动位置=开盘价】以上;
+       且前低形成后价格曾反弹离开它≥min_bounce_pct%(回探支撑,非下跌途中)。空头镜像(爆量阳线扫前高)。
+    返回 (dir, 扫破极值=止损参考, 爆量K启动位置=入场, 扫破idx, grade, vol_ratio) 或 None。"""
+    n = len(klines)
+    if n < lookback + reclaim_bars + 2:
+        return None
+    i = n - 1
+    c_now = float(klines[i]["close"])
+    b0 = max(0, i - reclaim_bars - lookback + 1)
+    base = klines[b0: i - reclaim_bars + 1]
+    if len(base) < max(5, lookback // 2):
+        return None
+    lows = [float(k["low"]) for k in base]
+    highs = [float(k["high"]) for k in base]
+    j0 = i - reclaim_bars + 1
+    recent = klines[j0: i + 1]
+    rl = [float(k["low"]) for k in recent]
+    rh = [float(k["high"]) for k in recent]
+    # 多头弹簧: 爆量阴线扫破前低 → 收回到该爆量K启动位置(开盘)以上
+    prior_low = min(lows)
+    lo_pos = lows.index(prior_low)
+    spring_low = min(rl)
+    sidx = j0 + rl.index(spring_low)
+    so, sc = float(klines[sidx]["open"]), float(klines[sidx]["close"])
+    bounced_up = highs[lo_pos + 1:] and max(highs[lo_pos + 1:]) >= prior_low * (1 + min_bounce_pct / 100.0)
+    if (spring_low < prior_low * (1 - pierce_tol_pct / 100.0)
+            and sc < so and c_now > so and bounced_up):       # 爆量阴线 + 收回到其开盘上方
+        vr = _vol_ratio_at(klines, sidx, vol_ma)
+        grade = "缩量弹簧" if vr < dryup_ratio else ("放量弹簧" if vr >= climax_mult else "中性弹簧")
+        return "long", spring_low, so, sidx, grade, round(vr, 2)
+    # 空头 UTAD: 爆量阳线扫破前高 → 回落到该爆量K启动位置(开盘)以下
+    prior_high = max(highs)
+    hi_pos = highs.index(prior_high)
+    spring_high = max(rh)
+    hidx = j0 + rh.index(spring_high)
+    ho, hc = float(klines[hidx]["open"]), float(klines[hidx]["close"])
+    dropped = lows[hi_pos + 1:] and min(lows[hi_pos + 1:]) <= prior_high * (1 - min_bounce_pct / 100.0)
+    if (spring_high > prior_high * (1 + pierce_tol_pct / 100.0)
+            and hc > ho and c_now < ho and dropped):          # 爆量阳线 + 回落到其开盘下方
+        vr = _vol_ratio_at(klines, hidx, vol_ma)
+        grade = "缩量上冲" if vr < dryup_ratio else ("放量上冲" if vr >= climax_mult else "中性上冲")
+        return "short", spring_high, ho, hidx, grade, round(vr, 2)
+    return None
+
+
+def trend_reversal(klines: list, min_merged: int = 5):
+    """趋势反转(结构破位 MSB)。在最新K判定:
+    看跌: 顶2 < 顶1(更低的高点) 且 当前收盘 < 底1(收盘跌破前低);
+    看涨镜像: 底2 > 底1(更高的低点) 且 当前收盘 > 顶1(收盘升破前高)。
+    返回 (direction, ref_extreme, ref_time) 或 None。
+    direction: short=看跌反转 / long=看涨反转; ref=失败判定参照(顶1/底1)。"""
+    _, seq = build_bi(klines, min_merged)
+    if len(seq) < 3:
+        return None
+    c = float(klines[-1]["close"])
+    a, b, d = seq[-3], seq[-2], seq[-1]
+    if a.kind == "top" and b.kind == "bottom" and d.kind == "top":
+        if d.extreme_price < a.extreme_price and c < b.extreme_price:   # 更低高点 + 收盘破前低
+            return "short", a.extreme_price, a.open_time
+    if a.kind == "bottom" and b.kind == "top" and d.kind == "bottom":
+        if d.extreme_price > a.extreme_price and c > b.extreme_price:   # 更高低点 + 收盘破前高
+            return "long", a.extreme_price, a.open_time
+    return None
+
+
+def head_shoulders_top(klines: list, min_merged: int = 5, shoulder_tol_pct: float = 8.0):
+    """头肩顶: 笔序列末端 左肩-谷-头-谷-右肩(三顶,头最高,两肩相近且低于头),
+    颈线=两谷较低者,当前收盘跌破颈线 → 触发。返回 (neckline, head_price, head_time) 或 None。"""
+    _, seq = build_bi(klines, min_merged)
+    if len(seq) < 5:
+        return None
+    ls, t1, h, t2, rs = seq[-5:]
+    if not (ls.kind == "top" and t1.kind == "bottom" and h.kind == "top"
+            and t2.kind == "bottom" and rs.kind == "top"):
+        return None
+    if not (h.extreme_price > ls.extreme_price and h.extreme_price > rs.extreme_price):
+        return None
+    if abs(ls.extreme_price - rs.extreme_price) / h.extreme_price > shoulder_tol_pct / 100.0:
+        return None                                  # 两肩高度需相近
+    neckline = min(t1.extreme_price, t2.extreme_price)
+    if float(klines[-1]["close"]) < neckline:        # 收盘跌破颈线
+        return neckline, h.extreme_price, h.open_time
+    return None
+
+
+def trend_state(klines: list, ma_period: int = 20, lookback: int = 10, slope_pct: float = 0.3) -> str:
+    """趋势判定 'up'/'down'/'range'：MA(ma_period)近lookback根斜率 > slope_pct% 且收盘在MA上 → up;
+    镜像 → down; 否则 range(震荡)。用于顺势过滤:上升趋势禁做空、下降趋势禁做多。"""
+    n = len(klines)
+    if n < ma_period + lookback + 1:
+        return "range"
+    closes = [float(k["close"]) for k in klines]
+    ma_now = sum(closes[n - ma_period:]) / ma_period
+    ma_prev = sum(closes[n - ma_period - lookback: n - lookback]) / ma_period
+    if ma_prev <= 0:
+        return "range"
+    slope = (ma_now - ma_prev) / ma_prev * 100.0
+    cur = closes[-1]
+    if cur > ma_now and slope > slope_pct:
+        return "up"
+    if cur < ma_now and slope < -slope_pct:
+        return "down"
+    return "range"
+
+
+def lifecycle_state(klines: list, fx_price: float, fx_time_ms: int,
+                    direction: str, min_merged: int = 5) -> str:
+    """信号生命周期判定，返回 'fail' / 'ok' / 'try'。
+    fail = 分型后价格打穿分型极值(底分型最低/顶分型最高)= 一买/一卖失败;
+    ok   = 分型之后走完一笔(出现反向分型，间隔≥min_merged-1合并K) = 底/顶成立;
+    否则 try(仍在尝试，未定)。先判失败(破极值优先)。"""
+    for k in klines:
+        if int(k["open_time"]) <= fx_time_ms:
+            continue
+        if direction == "long" and float(k["low"]) < fx_price:
+            return "fail"
+        if direction == "short" and float(k["high"]) > fx_price:
+            return "fail"
+    _, seq = build_bi(klines, min_merged)
+    want = "top" if direction == "long" else "bottom"
+    for f in seq:
+        if f.open_time > fx_time_ms and f.kind == want:
+            return "ok"
+    return "try"
 
 
 def stall_idx(klines: list, merged: list, fx, max_gap: int = 3):

@@ -19,7 +19,7 @@ function toast(msg) {
 async function logout() { await fetch('/api/logout', {method: 'POST'}); location.href = '/login.html'; }
 
 // ---------- 状态与统计 ----------
-const TRACK_NAMES = {buy1: '✅ 一买', buy2: '🔁 二买'};
+const TRACK_NAMES = {buy1: '🧪模拟·一买', buy2: '🧪模拟·二买'};
 async function loadStatus() {
   const s = await api('/api/status');
   if (s.error) { $('stat-cards').innerHTML = '<div class="card"><h3>引擎</h3><div class="big red">未运行</div></div>'; return; }
@@ -49,9 +49,34 @@ async function loadStatus() {
 
 // ---------- 信号 ----------
 const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', chan: '分型'};
-function typeLabel(type, dir) {
-  if (dir === 'short') return type === 'buy1' ? '✅一卖' : type === 'buy2' ? '🔁二卖' : (TYPE_TAG[type] || type);
-  return TYPE_TAG[type] || type;
+// 生命周期(方案A): try=试买/试卖, ok=一买/一卖(确认), fail=一买✗(失败)
+function typeLabel(type, dir, state) {
+  if (state === 'try') return dir === 'short' ? '试卖' : '试买';
+  const base = dir === 'short'
+    ? (type === 'buy1' ? '一卖' : type === 'buy2' ? '二卖' : (TYPE_TAG[type] || type))
+    : (type === 'buy1' ? '一买' : type === 'buy2' ? '二买' : (TYPE_TAG[type] || type));
+  return state === 'fail' ? base + '✗' : base;
+}
+// 试=灰(未定) 成=金(成立) 败=红(失败), 给买卖点tag上色做区别标记
+function stateClass(state) {
+  return state === 'fail' ? 'short' : state === 'ok' ? 'primary' : 'secondary';
+}
+// 综合显示名: 威科夫买卖点单独命名 + 双信号重叠⭐徽章
+function dispType(type, dir, state, extraStr) {
+  let ex = {}; try { ex = JSON.parse(extraStr || '{}'); } catch (e) {}
+  const dual = ex.dual ? ' ⭐双' : '';
+  if (ex.path === '趋势反转') {
+    return `🔄趋势反转(${state === 'fail' ? '败' : state === 'ok' ? '成' : '试'})`;
+  }
+  if (ex.path === '头肩顶') {
+    return `🚩头肩顶(${state === 'fail' ? '败' : '试'})`;
+  }
+  if (ex.path === '威科夫') {
+    const base = dir === 'short' ? '威科夫卖' : '威科夫买';
+    if (state === 'try') return (dir === 'short' ? '试·威科夫卖' : '试·威科夫买') + dual;
+    return (state === 'fail' ? base + '✗' : base) + dual;
+  }
+  return typeLabel(type, dir, state) + dual;
 }
 let signalCache = {};
 function sigType(s) {
@@ -61,9 +86,10 @@ function sigScore(s) {
   try { return JSON.parse(s.extra || '{}').score ?? ''; } catch (e) { return ''; }
 }
 async function loadSignals() {
-  const level = $('f-level').value;
+  const level = $('f-level').value, dir = $('f-dir').value;
   let rows = await api('/api/signals?limit=200');
   if (level) rows = rows.filter(s => s.tf === level);
+  if (dir) rows = rows.filter(s => s.direction === dir);
   rows = rows.slice(0, 100);
   signalCache = {};
   rows.forEach(s => signalCache[s.id] = s);
@@ -72,7 +98,7 @@ async function loadSignals() {
       <td>${s.id}</td><td>${fmtT(s.created_at)}</td>
       <td><b>${s.symbol}</b></td><td>${s.tf}</td>
       <td><span class="tag ${s.direction}">${s.direction === 'long' ? '多' : '空'}</span></td>
-      <td><span class="tag primary">${typeLabel(sigType(s), s.direction)} ${sigScore(s)}</span></td>
+      <td><span class="tag ${stateClass(s.state)}">${dispType(sigType(s), s.direction, s.state, s.extra)} ${sigScore(s)}</span></td>
       <td>${fmtP(s.entry)}</td><td class="red">${fmtP(s.sl)}</td><td class="green">${fmtP(s.tp)}</td>
       <td><b>${s.rr}</b></td><td>${s.vol_ratio}x</td><td>${s.status}</td>
     </tr>`).join('');
@@ -85,17 +111,17 @@ function openChartFromSignal(id) {
 // ---------- 交易 ----------
 let tradeCache = {};
 async function loadTrades() {
-  const q = `?track=${$('f-track').value}&result=${$('f-result').value}`;
+  const q = `?track=${$('f-track').value}&result=${$('f-result').value}&tf=${$('f-tf-trade').value}&state=${$('f-state-trade').value}`;
   const rows = await api('/api/trades' + q);
   tradeCache = {};
   rows.forEach(t => tradeCache[t.id] = t);
   $('t-trades').innerHTML = rows.map(t => `
     <tr class="clickable" onclick="openChartFromTrade(${t.id})" title="点击查看当时K线形态与买卖点">
       <td>${t.id}</td><td><b>${t.symbol}</b></td><td>${t.tf}</td>
-      <td><span class="tag primary">${typeLabel(t.track, t.direction)}</span></td>
+      <td><span class="tag ${stateClass(t.sig_state)}">${dispType(t.track, t.direction, t.sig_state, t.sig_extra)}</span></td>
       <td><span class="tag ${t.direction}">${t.direction === 'long' ? '多' : '空'}</span></td>
       <td>${fmtP(t.entry)}</td><td class="red">${fmtP(t.sl)}</td><td class="green">${fmtP(t.tp)}</td>
-      <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : '🛑止损'}</td>
+      <td>${t.result === 'open' ? '⏳持仓' : t.result === 'tp' ? '🎯止盈' : t.result === 'rev' ? '🔄反向平仓' : '🛑止损'}</td>
       <td class="${(t.pnl ?? 0) > 0 ? 'green' : (t.pnl ?? 0) < 0 ? 'red' : ''}">${t.pnl == null ? '–' : t.pnl.toFixed(2)}</td>
       <td>${t.pnl_r == null ? '–' : t.pnl_r.toFixed(2)}</td>
       <td>${fmtT(t.opened_at)}</td>
@@ -267,13 +293,28 @@ async function loadEquity() {
   eqChart.timeScale().fitContent();
 }
 
-// ---------- K线弹窗（标注：买入/止盈/止损线 + 信号类型 + 触发K）----------
+// ---------- K线弹窗（标注：买入/止盈/止损线 + 信号类型 + 触发K，可切换级别）----------
 let klChart;
+let _chartCtx = null;                 // {symbol, ref, tf}
+const CHART_TFS = ['5m', '15m', '30m', '1h'];
 async function openChart(symbol, tf, ref) {
   $('modal').classList.add('show');
-  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 蓝=买入 绿=止盈 红=止损 · 点线=顶/底分型(用于一↔二比较)' : '');
+  _chartCtx = {symbol, ref, tf};
+  $('tf-switch').innerHTML = CHART_TFS.map(t =>
+    `<button class="tfbtn${t === tf ? ' on' : ''}" data-tf="${t}" onclick="switchTf('${t}')">${t}</button>`).join('');
+  await renderChart(symbol, tf, ref);
+}
+function switchTf(tf) {
+  if (!_chartCtx) return;
+  _chartCtx.tf = tf;
+  document.querySelectorAll('#tf-switch .tfbtn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
+  renderChart(_chartCtx.symbol, tf, _chartCtx.ref);
+}
+async function renderChart(symbol, tf, ref) {
+  $('m-title').textContent = `${symbol} · ${tf}` + (ref ? ' · 🟡黄箭头=入场 · 🟠橙圈/橙线=缠论底/顶分型(威科夫=爆量扫破位) · 蓝=买入 绿=止盈 红=止损' : '');
   const d = await api(`/api/klines?symbol=${symbol}&tf=${tf}&limit=300`);
   $('chart').innerHTML = '';
+  if (klChart) { klChart.remove(); klChart = null; }
   await new Promise(r => setTimeout(r, 60));  // 等弹窗布局完成，避免首开图表零尺寸空白
   klChart = LightweightCharts.createChart($('chart'), {
     layout: {background: {color: 'transparent'}, textColor: '#7a869c'},
@@ -289,41 +330,59 @@ async function openChart(symbol, tf, ref) {
   klChart.priceScale('vol').applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
   vs.setData(d.klines.map(k => ({time: k.open_time / 1000, value: k.volume, color: k.close >= k.open ? '#2ecc7144' : '#e74c3c44'})));
 
+  // 标记时间对齐到当前级别的K(切级别后仍能落在对应那根K上); 落在范围外则跳过
+  const barTimes = d.klines.map(k => Math.floor(k.open_time / 1000));
+  const snap = t => {
+    let lo = 0, hi = barTimes.length - 1, res = null;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (barTimes[m] <= t) { res = barTimes[m]; lo = m + 1; } else hi = m - 1; }
+    return res;
+  };
   // 信号标记：买点箭头(=停顿K入场) + 顶/底分型(真正参与一↔二比较的极值) + 破位K + 主力K(可选)
   const markers = [];
   for (const s of d.signals.filter(x => x.status !== 'error')) {
     let ex = {};
     try { ex = JSON.parse(s.extra || '{}'); } catch (e) {}
-    markers.push({
-      time: s.created_at, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
-      color: s.direction === 'long' ? '#2ecc71' : '#e74c3c',
+    const et = snap(s.created_at);
+    if (et != null) markers.push({
+      time: et, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
+      color: '#ffd700',                                   // 买入点统一黄色, 醒目区分入场位置
       shape: s.direction === 'long' ? 'arrowUp' : 'arrowDown',
-      text: `${typeLabel(ex.type, s.direction)} #${s.id}`,
+      text: `${dispType(ex.type, s.direction, s.state, s.extra)} #${s.id}`,
     });
-    // 顶/底分型：箭头浮在停顿K上方易误导高低，这里把真正比较的极值点单独标出来
-    if (ex.fractal_price != null && ex.fractal_time) {
-      const fxn = s.direction === 'long' ? '底' : '顶';
-      markers.push({
-        time: Math.floor(ex.fractal_time / 1000),
-        position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
-        color: '#f39c12', shape: 'circle', text: `${fxn}#${s.id}`,
-      });
-      // 水平点线落在 extreme_price 上：一卖与二卖的线同框，可直接比高低
+    // 橙点/橙线：缠论=底/顶分型那根K; 威科夫=爆量K扫破极值(止损位)。两者标签区分,避免混淆
+    if (ex.fractal_price != null) {
+      const isWy = ex.path === '威科夫';
+      let tag;
+      if (isWy) {
+        const vx = s.vol_ratio != null ? ` ${s.vol_ratio}x` : '';
+        tag = `💥爆量K${vx}`;          // 威科夫: 橙圈/橙线落在那根爆量扫破K上
+      } else {
+        tag = s.direction === 'long' ? '底分型' : '顶分型';
+      }
+      const ft = ex.fractal_time ? snap(Math.floor(ex.fractal_time / 1000)) : null;
+      if (ft != null) {
+        markers.push({
+          time: ft,
+          position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
+          color: '#f39c12', shape: 'circle', text: `${tag}#${s.id}`,
+        });
+      }
       cs.createPriceLine({
         price: ex.fractal_price, color: '#f39c12', lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: true,
-        title: `${typeLabel(ex.type, s.direction)}${fxn} #${s.id}`,
+        title: `${tag} #${s.id}`,
       });
     }
     if (ex.breakdown && ex.breakdown.time) {
-      markers.push({time: Math.floor(ex.breakdown.time / 1000), position: 'aboveBar',
-        color: '#f1c40f', shape: 'circle', text: '破位K'});
+      const bt = snap(Math.floor(ex.breakdown.time / 1000));
+      if (bt != null) markers.push({time: bt, position: 'aboveBar', color: '#f1c40f', shape: 'circle', text: '破位K'});
     }
     if (ex.main_k && ex.main_k.time) {
-      markers.push({time: Math.floor(ex.main_k.time / 1000), position: 'aboveBar',
-        color: '#9b59b6', shape: 'square', text: '🚩主力K'});
+      const mt = snap(Math.floor(ex.main_k.time / 1000));
+      if (mt != null) markers.push({time: mt, position: 'aboveBar', color: '#9b59b6', shape: 'square', text: '🚩主力K'});
     }
   }
+  // 同一根K上多个标记按时间稳定排序; 去掉重复时间冲突由库自行堆叠
   cs.setMarkers(markers.sort((a, b) => a.time - b.time));
 
   // 买入/止盈/止损 价格线
@@ -337,21 +396,42 @@ async function openChart(symbol, tf, ref) {
   }
   klChart.timeScale().fitContent();
 }
-function closeModal() { $('modal').classList.remove('show'); if (klChart) { klChart.remove(); klChart = null; } }
+function closeModal() { $('modal').classList.remove('show'); _chartCtx = null; if (klChart) { klChart.remove(); klChart = null; } }
 
 // ---------- 设置 ----------
 const SETTING_LABELS = {
-  'mode': '运行模式',
+  'mode': '运行模式', 'trade_direction': '交易方向',
+  'live.auto_trade': '自动下单(免确认)', 'live.fixed_margin_u': '单笔保证金U(×杠杆)', 'live.fixed_notional_u': '单笔名义额U',
+  'live.max_positions': '实盘最大持仓', 'live.max_loss_pct': '亏损熔断%',
   'chan.bi_min_bars': '一笔最少合并K', 'chan.stall_max_gap': '停顿窗口(根)',
   'chan.fractal_vol_mult': '底分型放量倍数', 'chan.fractal_vol_ma': '放量均量回看(根)',
   'chan.require_divergence': '一买必须背驰', 'chan.mtf_tol_pct': '多级别价位容差%',
+  'chan.strong_reversal_15m': '15m只认强反转', 'chan.reversal_body_ratio': '强反转右K实体占比',
   'spring.min_rr': '最低盈亏比门槛', 'spring.tp_lookback': '止盈回看根数',
   'signal.sl_buffer_pct': '止损缓冲%', 'spring.btc_filter': '回测BTC过滤',
   'risk.account_equity': '账户本金U', 'risk.risk_pct': '单笔风险%',
   'risk.max_positions': '最大持仓数', 'risk.leverage': '杠杆',
   'universe.min_quote_volume_24h': '最低24h成交额',
 };
-const BOOL_SETTINGS = ['chan.require_divergence', 'spring.btc_filter'];
+const BOOL_SETTINGS = ['chan.require_divergence', 'chan.strong_reversal_15m', 'spring.btc_filter', 'live.auto_trade'];
+// 顶部一键自动交易开关
+async function loadAutoSwitch() {
+  const s = await api('/api/settings'), btn = $('auto-switch');
+  if (!btn) return;
+  const on = !!s['live.auto_trade'], live = s.mode === 'live';
+  btn.textContent = '自动交易: ' + (on ? '🟢开' : '🔴关') + (live ? '' : '(非live)');
+  btn.style.background = on ? 'var(--green)' : 'var(--panel2)';
+  btn.style.color = on ? '#fff' : 'var(--text)';
+  btn.dataset.on = on ? '1' : '0';
+}
+async function toggleAuto() {
+  const btn = $('auto-switch'), turnOn = btn.dataset.on !== '1';
+  if (turnOn && !confirm('确认开启【自动下单】? 信号将免Telegram确认直接真实下单(受熔断/持仓/单笔名义额限制)。')) return;
+  const r = await api('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({'live.auto_trade': turnOn ? 'true' : 'false'})});
+  toast(r.ok ? ('✅ 自动交易已' + (turnOn ? '开启' : '关闭')) : '❌ ' + (r.error || '失败'));
+  loadAutoSwitch();
+}
 async function loadSettings() {
   const s = await api('/api/settings');
   $('settings').innerHTML = Object.entries(s).map(([k, v]) => {
@@ -359,6 +439,10 @@ async function loadSettings() {
     if (k === 'mode') return `<label>${label}<select data-k="${k}">
       <option value="paper" ${v === 'paper' ? 'selected' : ''}>paper 模拟</option>
       <option value="live" ${v === 'live' ? 'selected' : ''}>live 实盘</option></select></label>`;
+    if (k === 'trade_direction') return `<label>${label}<select data-k="${k}">
+      <option value="both" ${v === 'both' ? 'selected' : ''}>全部(多空)</option>
+      <option value="long" ${v === 'long' ? 'selected' : ''}>只做多</option>
+      <option value="short" ${v === 'short' ? 'selected' : ''}>只做空</option></select></label>`;
     if (BOOL_SETTINGS.includes(k)) return `<label>${label}<select data-k="${k}">
       <option value="true" ${v ? 'selected' : ''}>开</option>
       <option value="false" ${!v ? 'selected' : ''}>关</option></select></label>`;
@@ -389,8 +473,74 @@ function connectWS() {
   ws.onclose = () => setTimeout(connectWS, 5000);
 }
 
+// ---------- 实盘持仓 ----------
+async function loadPositions() {
+  const d = await api('/api/positions');
+  const note = $('pos-note'), tb = $('t-positions');
+  if (!d.live) { note.textContent = 'paper 模式(未实盘)'; tb.innerHTML = '<tr><td colspan="8" class="muted">切到 live 模式后显示真实持仓</td></tr>'; return; }
+  if (d.error) { note.textContent = '读取失败: ' + d.error; tb.innerHTML = ''; return; }
+  const ps = d.positions || [];
+  note.textContent = `${ps.length} 个持仓`;
+  tb.innerHTML = ps.map(p => `<tr>
+    <td><b>${p.symbol}</b></td>
+    <td><span class="tag ${p.direction}">${p.direction === 'long' ? '多' : '空'}</span></td>
+    <td>${p.amt}</td><td>${fmtP(p.entry)}</td><td>${fmtP(p.mark)}</td>
+    <td class="${p.pnl > 0 ? 'green' : p.pnl < 0 ? 'red' : ''}">${p.pnl >= 0 ? '+' : ''}${p.pnl}</td>
+    <td>${p.leverage}x</td><td>${p.strategy || '?'}${p.tf ? ' ' + p.tf : ''}</td>
+  </tr>`).join('') || '<tr><td colspan="8" class="muted">当前无持仓</td></tr>';
+}
+
+// ---------- 实盘数据(真实盈亏/胜率/手续费, 与模拟盘区分) ----------
+async function loadLiveStats() {
+  const el = $('live-stats');
+  if (!el) return;
+  const d = await api('/api/live_stats?days=30');
+  if (!d.live) { el.textContent = '💰 实盘数据: 切到 live 模式后显示真实盈亏/手续费'; return; }
+  if (d.error) { el.textContent = '💰 实盘数据读取失败: ' + d.error; return; }
+  if (d.note || !d.trades) { el.innerHTML = `💰 <b>实盘</b>: ${d.note || '本系统尚无实盘成交'}(只统计本系统下的单)`; return; }
+  const cls = v => v > 0 ? 'green' : v < 0 ? 'red' : '';
+  el.innerHTML = `💰 <b>实盘</b>(近${d.days}天): 净盈亏 <span class="${cls(d.net)}">${d.net >= 0 ? '+' : ''}${d.net}U</span>`
+    + ` · ${d.trades}单 胜率${d.win_rate}% 均${d.avg >= 0 ? '+' : ''}${d.avg}U`
+    + ` · 已实现${d.realized} · <span class="red">手续费${d.commission}</span> · 资金费${d.funding}`;
+}
+
+// ---------- BTC K线(可切级别) ----------
+let btcChart, btcSeries, btcVol, _btcTf = '1h';
+function switchBtcTf(tf) {
+  _btcTf = tf;
+  document.querySelectorAll('#btc-tf-switch .tfbtn').forEach(b => b.classList.toggle('on', b.dataset.tf === tf));
+  loadBtcChart();
+}
+async function loadBtcChart() {
+  if (!$('btc-tf-switch').innerHTML) {
+    $('btc-tf-switch').innerHTML = CHART_TFS.map(t =>
+      `<button class="tfbtn${t === _btcTf ? ' on' : ''}" data-tf="${t}" onclick="switchBtcTf('${t}')">${t}</button>`).join('');
+  }
+  const d = await api(`/api/klines?symbol=BTCUSDT&tf=${_btcTf}&limit=200`);
+  if (!d.klines || !d.klines.length) { $('btc-note').textContent = '无数据'; return; }
+  if (!btcChart) {
+    btcChart = LightweightCharts.createChart($('btc-chart'), {
+      layout: {background: {color: 'transparent'}, textColor: '#7a869c'},
+      grid: {vertLines: {color: '#1d2433'}, horzLines: {color: '#1d2433'}},
+      timeScale: {timeVisible: true}, autoSize: true,
+    });
+    btcSeries = btcChart.addCandlestickSeries({upColor: '#2ecc71', downColor: '#e74c3c',
+      borderVisible: false, wickUpColor: '#2ecc71', wickDownColor: '#e74c3c'});
+    btcVol = btcChart.addHistogramSeries({priceFormat: {type: 'volume'}, priceScaleId: 'vol'});
+    btcChart.priceScale('vol').applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
+  }
+  btcSeries.setData(d.klines.map(k => ({time: k.open_time / 1000, open: k.open, high: k.high, low: k.low, close: k.close})));
+  btcVol.setData(d.klines.map(k => ({time: k.open_time / 1000, value: k.volume, color: k.close >= k.open ? '#2ecc7144' : '#e74c3c44'})));
+  $('btc-note').textContent = '最新 ' + fmtP(d.klines[d.klines.length - 1].close);
+  btcChart.timeScale().fitContent();
+}
+
 // ---------- 启动 ----------
-loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); connectWS();
+loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); loadPositions(); loadLiveStats(); loadAutoSwitch(); loadBtcChart(); connectWS();
 setInterval(loadStatus, 15000);
+setInterval(loadAutoSwitch, 20000);
+setInterval(loadPositions, 15000);
+setInterval(loadLiveStats, 30000);
+setInterval(loadBtcChart, 60000);
 setInterval(loadTfStats, 60000);
 setInterval(loadPlaybooks, 30000);

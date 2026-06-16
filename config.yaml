@@ -6,6 +6,14 @@
 # ============================================================
 
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
+trade_direction: both  # both=多空都做 / long=只做多 / short=只做空(只对该方向信号开仓/推送)
+
+# ---- 自动交易(live) ----
+live:
+  auto_trade: false      # true=信号直接下单(免Telegram二次确认); false=仍需TG手动二次确认
+  fixed_notional_u: 10   # 单笔固定名义额(U), 0=用风险算法
+  max_positions: 10      # 实盘最大同时持仓数(达到不再自动开新仓)
+  max_loss_pct: 50       # 余额相对本金亏损达此%→熔断, 停止自动交易
 strategy: chan_bi      # chan_bi=缠论笔+停顿K(当前) / spring_v4=破位+底分型 / chan_v1=旧
 timeframes: ["5m", "15m", "1h"]   # 5m自身;15m结构用5m停顿触发;1h结构用15m停顿触发
 
@@ -20,6 +28,33 @@ chan:
   macd_fast: 12          # 背驰用 MACD 快线
   macd_slow: 26          # 背驰用 MACD 慢线
   macd_signal: 9         # 背驰用 MACD 信号线
+  strong_reversal_15m: false  # 仅15m强反转(过严,7天40币只过3次,已关→15m回到与5m同样标准闸)
+  reversal_body_ratio: 0.6    # 强反转:右K实体≥自身振幅×该比例
+  trend_reversal_alert: false  # ④趋势反转提示 — 已回退关闭(用户待想清楚再开)
+  hs_top_alert: false     # 头肩顶提示 — 已回退关闭(用户待想清楚再开)
+  hs_shoulder_tol_pct: 8.0    # 头肩顶两肩高度容差%
+  trend_filter: true     # ⑤顺势过滤: 上升趋势禁做空、下降趋势禁做多(震荡放行)
+  trend_ma: 20           # 趋势判定均线周期
+  trend_lookback: 10     # 均线斜率回看根数
+  trend_slope_pct: 0.3   # 斜率阈值%(MA近lookback根涨跌超过此值=趋势, 内=震荡)
+
+# ---- 威科夫弹簧买点(Spring/UTAD) 独立路径 ----
+wyckoff:
+  enabled: true
+  confirm_only: false    # false=威科夫独立开仓(回测7/14天期望稳定+0.23); true=仅提示不开仓
+  require_divergence: false  # (已去掉背驰收紧)
+  dryup_only: false      # (已去掉"只缩量"收紧)
+  vol_mult: 3.0          # 扫破前低那根下跌K量能 ≥ 前20根均量×3 才算(放量假突破)
+  lookback: 20           # 前低/前高回看根数(确定支撑/阻力)
+  reclaim_bars: 4        # 扫破后N根内收回才算弹簧
+  pierce_tol_pct: 0.0    # 扫破容差%(0=只要破)
+  vol_ma: 20             # 扫破K量能参照均线
+  climax_mult: 2.0       # 放量弹簧门槛(扫破K量≥N×均量)
+  dryup_ratio: 1.0       # 缩量弹簧门槛(扫破K量<N×均量=供给枯竭,最强)
+  min_bounce_pct: 1.5    # 前低形成后须反弹离开≥N%(确保回探支撑,非下跌途中)
+  wick_min: 0.0          # 扫破K反向影线门槛(0=关:放量下跌阴线常收低位无下影,与放量假突破冲突)
+  cooldown_bars: 10      # 同币同级别同向N根内只出一次弹簧(防洪水)
+  overlap_bars: 3        # 双信号重叠时间窗(根):缠论买点+威科夫买点同位共振
 
 # ---- 策略V4: 放量破位 → 底分型收回破位K顶部 ----
 spring:

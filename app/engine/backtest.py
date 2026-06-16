@@ -193,6 +193,7 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
         "total": _bucket(all_sigs, lambda s: "all").get("all",
                  {"signals": 0, "closed": 0, "wins": 0, "win_rate": 0, "total_r": 0, "avg_r": 0, "open": 0}),
         "by_tf": _bucket(all_sigs, lambda s: s["tf"]),
+        "by_path": _bucket(all_sigs, lambda s: s["extra"].get("path", "?")),
         "by_type": _bucket(all_sigs, lambda s: s["extra"].get("type", "?")),
         "by_direction": _bucket(all_sigs, lambda s: s["direction"]),
         "signals": [

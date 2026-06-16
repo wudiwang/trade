@@ -4,6 +4,7 @@
 之后更高低点的底分型 → 二买（主力K可选标注）。每个 (币种,级别) 一个状态机。
 保留 chan_v1（缠论分型+因子）可通过 strategy=chan_v1 切回。
 """
+import json
 import logging
 import time
 from dataclasses import dataclass, asdict
@@ -74,7 +75,7 @@ class SignalEngine:
         # 缠论笔策略：每个分型只发一次
         self._bi_fired: dict[tuple, int] = {}
         # 一买→二买链：(symbol,tf,dir)->一买的极值价。无链不发二买；跌破即清链
-        self._bi_chain: dict[tuple, float] = {}
+        self._bi_chain: dict[tuple, tuple] = {}   # (symbol,tf,dir) -> (一买/一卖极值价, 分型open_time)
 
     @staticmethod
     def _bi_label(sig_type: str, direction: str) -> str:
@@ -117,6 +118,19 @@ class SignalEngine:
         self.funnel[stage] = self.funnel.get(stage, 0) + 1
         return None
 
+    def _trend_ok(self, klines, direction) -> bool:
+        """顺势过滤: 上升趋势禁做空、下降趋势禁做多。震荡(range)放行。返回 True=放行。"""
+        if not self._p("chan.trend_filter", True):
+            return True
+        from .chan_bi import trend_state
+        st = trend_state(klines, self._p("chan.trend_ma", 20),
+                         self._p("chan.trend_lookback", 10), self._p("chan.trend_slope_pct", 0.3))
+        if direction == "short" and st == "up":
+            return False
+        if direction == "long" and st == "down":
+            return False
+        return True
+
     # ======================= 路由 =======================
 
     # 多级别联立：高级别结构 + 次级别停顿触发
@@ -129,6 +143,18 @@ class SignalEngine:
             return [s] if s else []
         out = []
         own = kbt.get(tf, [])
+        # 威科夫弹簧/UTAD: 每个收盘级别自身, 独立路径(与缠论买点互不影响)
+        sw = self._eval_wyckoff(symbol, tf, own)
+        if sw:
+            out.append(sw)
+        # 趋势反转提示(只提示不开仓)
+        sr = self._eval_trend_reversal(symbol, tf, own)
+        if sr:
+            out.append(sr)
+        # 头肩顶提示(只提示不开仓)
+        hs = self._eval_head_shoulders(symbol, tf, own)
+        if hs:
+            out.append(hs)
         if tf == "5m":
             s = self._eval_chan_bi(symbol, "5m", own)        # 5m 自身(底分型+5m停顿)
             if s:
@@ -141,6 +167,179 @@ class SignalEngine:
             if s3:
                 out.append(s3)
         return out
+
+    # ======================= 提示: 趋势反转(MSB, 不开仓) =======================
+
+    def _eval_trend_reversal(self, symbol: str, tf: str, klines: list) -> "Signal | None":
+        """趋势反转提示: 更低高点+收盘破前低(看跌)/更高低点+收盘破前高(看涨)。只提示不开仓不推买入。"""
+        if not self._p("chan.trend_reversal_alert", True):
+            return None
+        from .chan_bi import trend_reversal
+        min_bars = self._p("chan.bi_min_bars", 5)
+        if len(klines) < min_bars * 3 + 5:
+            return None
+        r = trend_reversal(klines, min_bars)
+        if not r:
+            return None
+        direction, ref, ref_time = r
+        fkey = ("rev", symbol, tf, direction, ref_time)
+        if self._bi_fired.get(fkey):
+            return None
+        self._bi_fired[fkey] = ref_time
+        c = float(klines[-1]["close"])
+        side = "看跌" if direction == "short" else "看涨"
+        why = "更低高点+收盘破前低" if direction == "short" else "更高低点+收盘破前高"
+        return Signal(
+            symbol=symbol, tf=tf, direction=direction, kind="alert",
+            entry=round(c, 8), sl=round(ref, 8), tp=round(c, 8), rr=0,
+            vol_ratio=0, strength="normal", suggested_qty=0, risk_usdt=0,
+            reason=f"🔄趋势反转({side}): {why}", created_at=int(time.time()),
+            extra={"path": "趋势反转", "ref_price": ref, "fractal_time": ref_time, "rev_dir": direction},
+        )
+
+    def _eval_head_shoulders(self, symbol: str, tf: str, klines: list) -> "Signal | None":
+        """头肩顶提示(看跌结构): 左肩-头-右肩 + 跌破颈线。只提示不开仓不推买入。"""
+        if not self._p("chan.hs_top_alert", True):
+            return None
+        from .chan_bi import head_shoulders_top
+        min_bars = self._p("chan.bi_min_bars", 5)
+        if len(klines) < min_bars * 5 + 5:
+            return None
+        r = head_shoulders_top(klines, min_bars, self._p("chan.hs_shoulder_tol_pct", 8.0))
+        if not r:
+            return None
+        neckline, head, head_time = r
+        fkey = ("hs", symbol, tf, head_time)
+        if self._bi_fired.get(fkey):
+            return None
+        self._bi_fired[fkey] = head_time
+        c = float(klines[-1]["close"])
+        return Signal(
+            symbol=symbol, tf=tf, direction="short", kind="alert",
+            entry=round(c, 8), sl=round(head, 8), tp=round(neckline, 8), rr=0,
+            vol_ratio=0, strength="normal", suggested_qty=0, risk_usdt=0,
+            reason=f"🚩头肩顶: 左肩-头-右肩, 收盘跌破颈线{neckline:.6g}", created_at=int(time.time()),
+            extra={"path": "头肩顶", "ref_price": head, "fractal_time": head_time, "rev_dir": "short",
+                   "neckline": neckline},
+        )
+
+    # ======================= 策略: 威科夫弹簧买点 =======================
+
+    def _eval_wyckoff(self, symbol: str, tf: str, klines: list) -> "Signal | None":
+        """威科夫买点(Spring)/卖点(UTAD): 扫前低/前高假突破 → 收回。激进档(收回即进),
+        不强制背驰; 仍要求前期成笔。独立出信号。"""
+        from .chan_bi import wyckoff_spring, build_bi
+        if not self._p("wyckoff.enabled", True):
+            return None
+        lookback = self._p("wyckoff.lookback", 20)
+        if len(klines) < lookback + 12:
+            return None
+        r = wyckoff_spring(klines, lookback,
+                           self._p("wyckoff.reclaim_bars", 4),
+                           self._p("wyckoff.pierce_tol_pct", 0.0),
+                           self._p("wyckoff.vol_ma", 20),
+                           self._p("wyckoff.climax_mult", 2.0),
+                           self._p("wyckoff.dryup_ratio", 1.0),
+                           self._p("wyckoff.min_bounce_pct", 1.5),
+                           self._p("wyckoff.wick_min", 0.4))
+        if not r:
+            return None
+        direction, spring_ext, prior_level, sidx, grade, vr = r
+        # 扫破前低那根下跌K必须放量 ≥ vol_mult × 前20根均量(放量假突破)
+        if vr < self._p("wyckoff.vol_mult", 3.0):
+            return None
+        # (可选)只做缩量弹簧
+        if self._p("wyckoff.dryup_only", False) and not grade.startswith("缩量"):
+            return None
+        # 冷却: 同币同级别同向 N 根内只出一次, 防洪水
+        cool = self.__dict__.setdefault("_wy_cool", {})
+        ckey = (symbol, tf, direction)
+        bar_ms = TF_MS.get(tf, 300) * 1000
+        now_ot = int(klines[-1]["open_time"])
+        last = cool.get(ckey)
+        if last is not None and now_ot - last < self._p("wyckoff.cooldown_bars", 10) * bar_ms:
+            return None
+        # 前期必须成笔(避免主跌段半山腰乱抓)
+        min_bars = self._p("chan.bi_min_bars", 5)
+        _, seq = build_bi(klines, min_bars)
+        ok_bi = seq and ((direction == "long" and seq[-1].kind == "bottom")
+                         or (direction == "short" and seq[-1].kind == "top"))
+        if not ok_bi:
+            return None
+        # 背驰(力度衰竭)确认, 提高质量
+        if self._p("wyckoff.require_divergence", True):
+            from .chan_bi import divergence
+            dok, _dt = divergence(klines, seq, direction,
+                                  (self._p("chan.macd_fast", 12), self._p("chan.macd_slow", 26),
+                                   self._p("chan.macd_signal", 9)))
+            if not dok:
+                return None
+        anchor = int(klines[sidx]["open_time"])
+        fkey = ("wyckoff", symbol, tf, direction)
+        if self._bi_fired.get(fkey) == anchor:
+            return None
+        if not self._btc_ok(direction):
+            return self._drop("btc_filter")
+        if not self._trend_ok(klines, direction):       # ⑤顺势过滤: 上升禁空/下降禁多
+            return self._drop("trend_filter")
+        self._bi_fired[fkey] = anchor
+        cool[ckey] = now_ot
+        buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
+        entry = prior_level                                   # 入场=爆量K启动位置(开盘价)
+        sl = spring_ext * (1 - buf) if direction == "long" else spring_ext * (1 + buf)
+        label = "威科夫买点" if direction == "long" else "威科夫卖点"
+        side = "做多" if direction == "long" else "做空"
+        sweep = "前低" if direction == "long" else "前高"
+        reason = f"🌀{label}({side}): {grade}·爆量扫{sweep}→回到启动位{prior_level:.6g} [量{vr}x]"
+        return self._spring_make(
+            symbol, tf, direction, entry, sl, "buy1",
+            {"detail": {"vol_ratio": vr}}, klines,
+            extra={"fractal_price": spring_ext, "fractal_time": anchor,
+                   "path": "威科夫", "spring_grade": grade}, reason=reason)
+
+    def update_lifecycle(self, symbol: str, tf: str, klines: list) -> list:
+        """每根收盘更新该币该级别"试"信号的状态(试→成立/失败)。返回 [(id, 新状态)]。
+        成立=分型后走完一笔; 失败=打穿分型极值。一旦成/败即终态，不再回看。"""
+        if self._p("strategy", "chan_bi") != "chan_bi" or not klines:
+            return []
+        try:
+            rows = self.db.query(
+                "SELECT id, direction, extra FROM signals WHERE state='try' AND symbol=? AND tf=?",
+                (symbol, tf))
+        except Exception:
+            return []
+        if not rows:
+            return []
+        from .chan_bi import lifecycle_state
+        min_bars = self._p("chan.bi_min_bars", 5)
+        changed = []
+        for r in rows:
+            try:
+                ex = json.loads(r["extra"] or "{}")
+            except (ValueError, TypeError):
+                continue
+            # 趋势反转/头肩顶: 只判 试→败(后续突破ref=形态失败), 不走成笔逻辑
+            if ex.get("path") in ("趋势反转", "头肩顶"):
+                ref, ft, rd = ex.get("ref_price"), ex.get("fractal_time"), ex.get("rev_dir")
+                if ref is None or not ft:
+                    continue
+                broke = any((float(k["high"]) > ref if rd == "short" else float(k["low"]) < ref)
+                            for k in klines if int(k["open_time"]) > ft)
+                if broke:
+                    self.db.execute("UPDATE signals SET state='fail' WHERE id=?", (r["id"],))
+                    changed.append((r["id"], "fail"))
+                continue
+            fp, ft = ex.get("fractal_price"), ex.get("fractal_time")
+            if fp is None or not ft:
+                continue
+            st = lifecycle_state(klines, float(fp), int(ft), r["direction"], min_bars)
+            if st != "try":
+                self.db.execute("UPDATE signals SET state=? WHERE id=?", (st, r["id"]))
+                changed.append((r["id"], st))
+                # 一买/一卖失败 → 清掉对应链, 后面只能出新的试买/试卖(不再接二买/二卖)
+                if st == "fail":
+                    self._bi_chain.pop((symbol, tf, r["direction"]), None)
+        return changed
 
     def evaluate(self, symbol: str, tf: str, klines: list,
                  klines_15m: list | None = None) -> Signal | None:
@@ -171,7 +370,14 @@ class SignalEngine:
         if (direction == "long") != (sfx.kind == "bottom"):
             return None
         from .chan_bi import build_bi
-        _, sseq = build_bi(struct_klines, min_bars)                            # 结构级笔序列(供背驰)
+        merged_s, sseq = build_bi(struct_klines, min_bars)                     # 结构级合并K+笔序列
+        # 15m 增量条件:只认强反转形态(右K大实体+完全吞没左K+中K带影线)
+        rev_tag = ""
+        if struct_tf == "15m" and self._p("chan.strong_reversal_15m", True):
+            from .chan_bi import strong_reversal
+            if not strong_reversal(struct_klines, merged_s, sfx, self._p("chan.reversal_body_ratio", 0.6)):
+                return self._drop("weak_reversal_15m")
+            rev_tag = "·强反转"
         tol = self._p("chan.mtf_tol_pct", 0.6) / 100.0
         if sfx.extreme_price <= 0 or abs(fx_t.extreme_price - sfx.extreme_price) / sfx.extreme_price > tol:
             return None   # 触发停顿要在结构分型的同一摆动低/高点附近
@@ -182,12 +388,19 @@ class SignalEngine:
             return None
         if not self._btc_ok(direction):
             return self._drop("btc_filter")
-        # 链失效 + 一买/二买
-        c_now = float(trig_klines[-1]["close"])
-        lv = self._bi_chain.get(ck)
-        if lv is not None and ((direction == "long" and c_now < lv) or (direction == "short" and c_now > lv)):
-            del self._bi_chain[ck]
-            lv = None
+        if not self._trend_ok(struct_klines, direction):    # ⑤顺势过滤(结构级)
+            return self._drop("trend_filter")
+        # 链失效(加固): 一卖的顶分型在其形成后被任意K突破 / 一买的底分型被跌破 → 一买一卖失败, 清链, 后面只出新试买卖
+        ch = self._bi_chain.get(ck)
+        lv = None
+        if ch is not None:
+            lv, lv_t = ch
+            broke = (any(float(k["high"]) > lv for k in struct_klines if int(k["open_time"]) > lv_t)
+                     if direction == "short" else
+                     any(float(k["low"]) < lv for k in struct_klines if int(k["open_time"]) > lv_t))
+            if broke:
+                del self._bi_chain[ck]
+                lv = None
         if lv is None:
             eff = "buy1"
         else:
@@ -202,7 +415,7 @@ class SignalEngine:
                 return self._drop("no_divergence")
         self._bi_fired[fkey] = sfx.open_time
         if eff == "buy1":
-            self._bi_chain[ck] = sfx.extreme_price
+            self._bi_chain[ck] = (sfx.extreme_price, sfx.open_time)
 
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
         entry = float(trig_klines[s]["close"])                                # 入场=触发级停顿K收盘
@@ -213,11 +426,12 @@ class SignalEngine:
         bz = "底背驰" if direction == "long" else "顶背驰"
         dsuf = f" [{bz}·{div_tag}]" if (eff == "buy1" and div_tag) else ""
         reason = (f"{'✅' if eff == 'buy1' else '🔁'}{label}({side})·{struct_tf}级: "
-                  f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn} + {trig_tf}停顿确认{dsuf}")
+                  f"{struct_tf}{GRADE_CN.get(sgrade, '')}{fxn}{rev_tag} + {trig_tf}停顿确认{dsuf}")
         return self._spring_make(
             symbol, struct_tf, direction, entry, sl, eff, {"detail": {"vol_ratio": svr}},
-            struct_klines, extra={"fractal_price": sfx.extreme_price, "struct_tf": struct_tf,
-                                  "trig_tf": trig_tf, "grade": sgrade, "path": "多级别"}, reason=reason)
+            struct_klines, extra={"fractal_price": sfx.extreme_price, "fractal_time": sfx.open_time,
+                                  "struct_tf": struct_tf, "trig_tf": trig_tf, "grade": sgrade,
+                                  "path": "多级别"}, reason=reason)
 
     # ======================= 策略: 缠论笔 + 停顿K =======================
 
@@ -229,10 +443,16 @@ class SignalEngine:
         buf = self._p("signal.sl_buffer_pct", 0.3) / 100.0
         i = len(klines) - 1
         c_now = float(klines[i]["close"])
-        # 链失效：收盘跌破一买低点(long)/升破一卖高点(short) → 清链，二买重新需要一买
+        # 链失效(加固): 一买底分型在其形成后被任意K跌破 / 一卖顶分型被升破 → 失败清链, 二买重新需要一买
         for d in ("long", "short"):
-            lv = self._bi_chain.get((symbol, tf, d))
-            if lv is not None and ((d == "long" and c_now < lv) or (d == "short" and c_now > lv)):
+            ch = self._bi_chain.get((symbol, tf, d))
+            if ch is None:
+                continue
+            lv, lv_t = ch
+            broke = (any(float(k["low"]) < lv for k in klines if int(k["open_time"]) > lv_t)
+                     if d == "long" else
+                     any(float(k["high"]) > lv for k in klines if int(k["open_time"]) > lv_t))
+            if broke:
                 del self._bi_chain[(symbol, tf, d)]
 
         # A路：笔 → 底/顶分型(最强/标准+前2根放量) → 停顿K
@@ -244,7 +464,10 @@ class SignalEngine:
             if self._bi_fired.get(ck) != fx.open_time:
                 if not self._btc_ok(direction):
                     return self._drop("btc_filter")
-                chain_lv = self._bi_chain.get(ck)
+                if not self._trend_ok(klines, direction):    # ⑤顺势过滤
+                    return self._drop("trend_filter")
+                chain_entry = self._bi_chain.get(ck)
+                chain_lv = chain_entry[0] if chain_entry else None
                 # 二买必须先有一买；没有一买链时，这一信号就是一买(开链)
                 eff = sig_type if (sig_type == "buy1" or chain_lv is not None) else "buy1"
                 # 真二买还要比一买极值更高的低点(long)/更低的高点(short)
@@ -260,7 +483,7 @@ class SignalEngine:
                         return self._drop("no_divergence")
                 self._bi_fired[ck] = fx.open_time
                 if eff == "buy1":
-                    self._bi_chain[ck] = fx.extreme_price   # 开/重置链
+                    self._bi_chain[ck] = (fx.extreme_price, fx.open_time)   # 开/重置链(价位,时间)
                 entry = float(klines[s]["close"])
                 sl = fx.extreme_price * (1 - buf) if direction == "long" else fx.extreme_price * (1 + buf)
                 label = self._bi_label(eff, direction)

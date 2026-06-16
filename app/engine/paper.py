@@ -20,6 +20,13 @@ class PaperBroker:
         """s: signals.Signal。track = 信号类型（watch/buy1/buy2/spring/chan），
         每种入场点独立统计胜率，用于验证哪个买点最有效。"""
         tracks = [s.extra.get("type", "other") if isinstance(s.extra, dict) else "other"]
+        # 提示型信号(趋势反转/头肩顶等 kind=alert): 不开仓
+        if getattr(s, "kind", "") == "alert":
+            return
+        # 威科夫确认型: 不单独开仓(只记信号, 用于与缠论重叠标注), 单独交易胜率太低
+        if (isinstance(s.extra, dict) and s.extra.get("path") == "威科夫"
+                and self.cfg.get("wyckoff.confirm_only", True)):
+            return
         # paper 模式不设仓位上限：每个信号都开模拟单、都跟踪胜负，统计才完整(验证策略用)。
         # 仓位上限只在 live 实盘起作用(真钱风控)。
         live = self.cfg.mode == "live"
@@ -37,6 +44,28 @@ class PaperBroker:
                 (signal_id, s.symbol, s.tf, s.direction, tr, s.entry, s.sl, s.tp,
                  s.suggested_qty, int(time.time())),
             )
+
+    def close_opposite(self, symbol: str, tf: str, direction: str, price: float) -> list[dict]:
+        """反向信号平仓：新信号方向为 direction 时，按市价(price)平掉同币同级别的反向持仓。
+        即 持多(一买)遇一卖→平多；持空(一卖)遇一买→平空。result='rev'。返回平掉的单子。"""
+        opp = "short" if direction == "long" else "long"
+        rows = self.db.query(
+            "SELECT * FROM paper_trades WHERE result='open' AND symbol=? AND tf=? AND direction=?",
+            (symbol, tf, opp),
+        )
+        closed = []
+        for r in rows:
+            sign = 1 if r["direction"] == "long" else -1
+            pnl = sign * (price - r["entry"]) * r["qty"]
+            sl_dist = abs(r["entry"] - r["sl"])
+            pnl_r = (sign * (price - r["entry"]) / sl_dist) if sl_dist > 0 else 0.0
+            self.db.execute(
+                "UPDATE paper_trades SET result='rev', exit_price=?, pnl=?, pnl_r=?, closed_at=? WHERE id=?",
+                (price, round(pnl, 4), round(pnl_r, 3), int(time.time()), r["id"]),
+            )
+            self._update_equity(r["track"])
+            closed.append({**dict(r), "result": "rev", "pnl": pnl, "pnl_r": pnl_r})
+        return closed
 
     def on_closed_bar(self, symbol: str, tf: str, bar: tuple) -> list[dict]:
         """bar=(open_time,o,h,l,c,v,qv,closed)。检查该币种未平仓单的TP/SL。
@@ -69,6 +98,9 @@ class PaperBroker:
                 "UPDATE paper_trades SET result=?, exit_price=?, pnl=?, pnl_r=?, closed_at=? WHERE id=?",
                 (res, exit_price, round(pnl, 4), round(pnl_r, 3), int(time.time()), r["id"]),
             )
+            # 止损=打穿分型极值=买卖点失败, 直接把信号标记为失败一买/一卖
+            if res == "sl" and r["signal_id"]:
+                self.db.execute("UPDATE signals SET state='fail' WHERE id=? AND state!='ok'", (r["signal_id"],))
             self._update_equity(r["track"])
             closed.append({**dict(r), "result": res, "pnl": pnl, "pnl_r": pnl_r})
         return closed
@@ -76,7 +108,7 @@ class PaperBroker:
     def _update_equity(self, track: str) -> None:
         base = self.cfg.get("risk.account_equity", 1000)
         s = self.db.one(
-            "SELECT COALESCE(SUM(pnl),0) p FROM paper_trades WHERE track=? AND result IN ('tp','sl')",
+            "SELECT COALESCE(SUM(pnl),0) p FROM paper_trades WHERE track=? AND result IN ('tp','sl','rev')",
             (track,),
         )
         self.db.execute(
@@ -86,11 +118,11 @@ class PaperBroker:
 
     def stats(self, track: str) -> dict:
         rows = self.db.query(
-            "SELECT result, pnl, pnl_r FROM paper_trades WHERE track=? AND result IN ('tp','sl')",
+            "SELECT result, pnl, pnl_r FROM paper_trades WHERE track=? AND result IN ('tp','sl','rev')",
             (track,),
         )
         n = len(rows)
-        wins = sum(1 for r in rows if r["result"] == "tp")
+        wins = sum(1 for r in rows if (r["pnl_r"] or 0) > 0)   # tp/盈利反向平仓都算赢
         total_pnl = sum(r["pnl"] or 0 for r in rows)
         total_r = sum(r["pnl_r"] or 0 for r in rows)
         open_cnt = self.db.one(

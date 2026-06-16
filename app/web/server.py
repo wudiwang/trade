@@ -161,18 +161,25 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         return [dict(r) for r in db.query(sql, args)]
 
     @app.get("/api/trades")
-    async def trades(track: str = "", result: str = "", limit: int = 500):
-        """track 空=全部策略；result: ''=全部, open=持仓中, closed=已结束。"""
-        sql = "SELECT * FROM paper_trades WHERE 1=1"
+    async def trades(track: str = "", result: str = "", tf: str = "", state: str = "", limit: int = 500):
+        """track 空=全部策略；tf 空=全部级别；state: 生命周期 try/ok/fail；result: open/closed。"""
+        sql = ("SELECT pt.*, s.state AS sig_state, s.extra AS sig_extra FROM paper_trades pt "
+               "LEFT JOIN signals s ON s.id=pt.signal_id WHERE 1=1")
         args: list = []
         if track:
-            sql += " AND track=?"
+            sql += " AND pt.track=?"
             args.append(track)
+        if tf:
+            sql += " AND pt.tf=?"
+            args.append(tf)
+        if state in ("try", "ok", "fail"):
+            sql += " AND s.state=?"
+            args.append(state)
         if result == "open":
-            sql += " AND result='open'"
+            sql += " AND pt.result='open'"
         elif result == "closed":
-            sql += " AND result IN ('tp','sl')"
-        sql += " ORDER BY id DESC LIMIT ?"
+            sql += " AND pt.result IN ('tp','sl','rev')"
+        sql += " ORDER BY pt.id DESC LIMIT ?"
         args.append(min(limit, 2000))
         return [dict(r) for r in db.query(sql, args)]
 
@@ -348,13 +355,87 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         return [dict(r) for r in db.query(
             "SELECT ts, equity FROM equity_curve WHERE track=? ORDER BY ts", (track,))]
 
+    _TF_MIN = {"5m": 5, "15m": 15, "30m": 30, "1h": 60}
+
     @app.get("/api/klines")
     async def klines(symbol: str, tf: str = "15m", limit: int = 300):
-        rows = db.get_klines(symbol, tf, min(limit, 500))
-        sigs = db.query(
-            "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, extra FROM signals "
+        lim = min(limit, 500)
+        if tf in cfg.timeframes:                      # 已存储的级别直接取
+            kl = [dict(r) for r in db.get_klines(symbol, tf, lim)]
+        else:                                         # 未存储(如30m)→ 从5m聚合
+            from app.engine.chan import aggregate
+            mult = max(2, _TF_MIN.get(tf, 30) // 5)
+            base = [dict(r) for r in db.get_klines(symbol, "5m", min(lim * mult, 1500))]
+            kl = aggregate(base, mult)[-lim:]
+        sigs = db.query(                              # 仅该级别自身的信号(30m无信号→价格线仍由前端ref画)
+            "SELECT id, created_at, direction, kind, entry, sl, tp, rr, status, state, vol_ratio, extra FROM signals "
             "WHERE symbol=? AND tf=? ORDER BY id DESC LIMIT 50", (symbol, tf))
-        return {"klines": [dict(r) for r in rows], "signals": [dict(r) for r in sigs]}
+        return {"klines": kl, "signals": [dict(r) for r in sigs]}
+
+    @app.get("/api/live_stats")
+    async def live_stats(days: int = 30):
+        """实盘真实盈亏/胜率/手续费(取币安收益流水)。paper模式返回 live=False。"""
+        eng = APP_STATE.get("engine")
+        if not eng or cfg.mode != "live":
+            return {"live": False}
+        # 只统计本系统下过的单(orders表的币种+首单时间), 排除账户自带的历史/手动交易
+        orow = db.query("SELECT symbol, MIN(created_at) mn FROM orders GROUP BY symbol")
+        zero = {"live": True, "trades": 0, "wins": 0, "win_rate": 0, "realized": 0,
+                "commission": 0, "funding": 0, "net": 0, "avg": 0, "note": "本系统尚无实盘成交"}
+        if not orow:
+            return zero
+        bot_syms = {r["symbol"] for r in orow}
+        first_ts = min(r["mn"] for r in orow)
+        start = max(int((time.time() - days * 86400) * 1000), first_ts * 1000)
+        try:
+            inc = await eng.rest.income(start, 1000)
+        except Exception as e:
+            return {"live": True, "error": str(e)[:200]}
+        inc = [x for x in inc if x.get("symbol") in bot_syms]   # 只算本系统交易过的币
+        pnls = [float(x["income"]) for x in inc if x.get("incomeType") == "REALIZED_PNL"]
+        comm = sum(float(x["income"]) for x in inc if x.get("incomeType") == "COMMISSION")
+        fund = sum(float(x["income"]) for x in inc if x.get("incomeType") == "FUNDING_FEE")
+        realized = sum(pnls)
+        n = len(pnls)
+        wins = sum(1 for p in pnls if p > 0)
+        return {"live": True, "days": days, "trades": n, "wins": wins,
+                "win_rate": round(wins / n * 100, 1) if n else 0,
+                "realized": round(realized, 4), "commission": round(comm, 4), "funding": round(fund, 4),
+                "net": round(realized + comm + fund, 4),
+                "avg": round((realized + comm + fund) / n, 4) if n else 0}
+
+    @app.get("/api/positions")
+    async def positions():
+        """实盘真实持仓(live模式)+ 关联开仓策略。paper模式返回空。"""
+        eng = APP_STATE.get("engine")
+        if not eng or cfg.mode != "live":
+            return {"live": False, "positions": []}
+        try:
+            raw = await eng.rest.position_risk()
+        except Exception as e:
+            return {"live": True, "error": str(e)[:200], "positions": []}
+        out = []
+        for p in raw:
+            amt = float(p.get("positionAmt") or 0)
+            if amt == 0:
+                continue
+            sym = p["symbol"]
+            sig = db.one("SELECT tf, extra FROM signals WHERE symbol=? AND status='confirmed' "
+                         "ORDER BY id DESC LIMIT 1", (sym,))
+            strat, tf = "?", ""
+            if sig:
+                tf = sig["tf"]
+                try:
+                    strat = (json.loads(sig["extra"] or "{}")).get("path", "?")
+                except (ValueError, TypeError):
+                    pass
+            out.append({
+                "symbol": sym, "direction": "long" if amt > 0 else "short", "amt": abs(amt),
+                "entry": float(p.get("entryPrice") or 0), "mark": float(p.get("markPrice") or 0),
+                "pnl": round(float(p.get("unRealizedProfit") or 0), 4),
+                "leverage": p.get("leverage"), "strategy": strat, "tf": tf,
+            })
+        return {"live": True, "positions": out}
 
     _bool = lambda v: str(v).lower() in ("1", "true", "yes")
     EDITABLE = {
@@ -364,6 +445,8 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "chan.fractal_vol_mult": float,    # 底分型前2根放量倍数(x前10根均量)
         "chan.fractal_vol_ma": int,        # 放量均量回看根数
         "chan.require_divergence": _bool,  # 一买/一卖必须背驰
+        "chan.strong_reversal_15m": _bool, # 仅15m:只认强反转形态
+        "chan.reversal_body_ratio": float, # 强反转:右K实体≥振幅×该比例
         "chan.mtf_tol_pct": float,         # 多级别:停顿与高级别分型价位容差%
         "spring.min_rr": float,            # 最低盈亏比门槛(低于不进场)
         "spring.tp_lookback": int,         # 止盈回看根数
@@ -373,6 +456,12 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "risk.account_equity": float, "risk.risk_pct": float,
         "risk.max_positions": int, "risk.leverage": int,
         "universe.min_quote_volume_24h": float,
+        "trade_direction": str,            # both/long/short: 只交易某方向
+        "live.auto_trade": _bool,          # 自动下单(免TG二次确认)
+        "live.fixed_margin_u": float,      # 单笔固定保证金U(名义=保证金×杠杆, 优先)
+        "live.fixed_notional_u": float,    # 单笔固定名义额U(margin=0时才用)
+        "live.max_positions": int,         # 实盘最大持仓
+        "live.max_loss_pct": float,        # 亏损熔断%
         "mode": str,
     }
 
@@ -389,6 +478,8 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
                 continue
             if k == "mode" and v not in ("paper", "live"):
                 return JSONResponse({"error": "mode 必须是 paper 或 live"}, status_code=400)
+            if k == "trade_direction" and v not in ("both", "long", "short"):
+                return JSONResponse({"error": "trade_direction 必须是 both/long/short"}, status_code=400)
             try:
                 tv = EDITABLE[k](v)
             except (ValueError, TypeError):
