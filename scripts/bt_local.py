@@ -105,8 +105,9 @@ async def fetch_5m(session, symbol, days, refresh=False):
 
 
 def run_smallbig(sb, series_by_sym, days, rr_target, spans=(7, 14, 30)):
-    P = dict(decline_bars=10, vol_ma=20, climax_min=3.0, climax_max=12.0, drop_pct=6.0,
-             dryup_window=10, dryup_ratio=0.6, sl_buf_pct=0.3, rr_target=rr_target)
+    P = dict(decline_bars=8, baseline_ma=20, sustain_mult=2.0, elevated_mult=1.5,
+             sustain_bars_min=3, drop_pct=6.0, dryup_ratio=0.8, rebound_within=4,
+             sl_buf_pct=0.3, rr_target=rr_target)
     alls = []
     ref = 0
     for sym, k5 in series_by_sym.items():
