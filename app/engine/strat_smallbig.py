@@ -25,62 +25,64 @@ def detect_small_to_big(k5: list, direction: str, P: dict) -> list[dict]:
     n = len(k5)
     o, h, l, c, v = _arr(k5)
     long = direction == "long"
-    db = P["decline_bars"]
-    vol_ma = P["vol_ma"]
+    db = P["decline_bars"]            # 恐慌段(急跌/急涨)长度
+    bma = P["baseline_ma"]            # 段前基线均量回看
     sigs = []
-    i = max(vol_ma, db) + 1
+    i = bma + db
     while i < n - 1:
-        avg = sum(v[i - vol_ma:i]) / vol_ma
-        if avg <= 0:
+        L = i                          # 候选恐慌极值K(段末=最低/最高)
+        legv = v[L - db + 1:L + 1]
+        base = sum(v[L - db - bma:L - db]) / bma   # 段之前的基线量
+        if base <= 0:
             i += 1; continue
-        ratio = v[i] / avg
-        if not (P["climax_min"] <= ratio <= P["climax_max"]):     # ③ 巨量但不夸张
+        leg_avg = sum(legv) / len(legv)
+        # ① 持续放量: 段均量 ≥ sustain_mult×基线, 且段内 ≥ sustain_bars_min 根明显放量(非单根spike)
+        if leg_avg < P["sustain_mult"] * base:
             i += 1; continue
-        # 高潮K必须是顺势那根并做极值
+        elevated = sum(1 for x in legv if x >= P["elevated_mult"] * base)
+        if elevated < P["sustain_bars_min"]:
+            i += 1; continue
+        # ② 急跌/急涨幅度 + L是段内极值
         if long:
-            if not (c[i] < o[i] and l[i] <= min(l[i - db:i + 1])):
+            if l[L] != min(l[L - db + 1:L + 1]):
                 i += 1; continue
-            seg_ext = max(h[i - db:i])
-            move = (seg_ext - l[i]) / seg_ext if seg_ext > 0 else 0   # ① 急跌幅度
+            seg_ext = max(h[L - db + 1:L + 1])
+            move = (seg_ext - l[L]) / seg_ext if seg_ext > 0 else 0
         else:
-            if not (c[i] > o[i] and h[i] >= max(h[i - db:i + 1])):
+            if h[L] != max(h[L - db + 1:L + 1]):
                 i += 1; continue
-            seg_ext = min(l[i - db:i])
-            move = (h[i] - seg_ext) / seg_ext if seg_ext > 0 else 0   # 急涨幅度
+            seg_ext = min(l[L - db + 1:L + 1])
+            move = (h[L] - seg_ext) / seg_ext if seg_ext > 0 else 0
         if move < P["drop_pct"] / 100.0:
             i += 1; continue
-        # ② 量能递增:末3根均量 > 段首3根均量
-        last3 = sum(v[i - 2:i + 1]) / 3
-        first3 = sum(v[i - db:i - db + 3]) / 3
-        if first3 <= 0 or last3 <= first3:
-            i += 1; continue
-        climax_lo = l[i] if long else h[i]
-        # ④⑤ 缩量企稳 + 底/顶分型
-        e_idx = None; fext = None
-        for k in range(i + 1, min(n - 1, i + 1 + P["dryup_window"])):
-            if v[k] >= v[i] * P["dryup_ratio"]:                  # 还没缩量
-                continue
-            if long:
-                if l[k] < l[k - 1] and l[k] < l[k + 1] and l[k] >= climax_lo:
-                    e_idx = k + 1; fext = l[k]; break
-            else:
-                if h[k] > h[k - 1] and h[k] > h[k + 1] and h[k] <= climax_lo:
-                    e_idx = k + 1; fext = h[k]; break
-        if e_idx is None or e_idx >= n:
+        ext = l[L] if long else h[L]               # 恐慌极值 = 止损基准
+        # ③立即缩量 + ④第一根反弹K(rebound_within根内) = 买/卖点
+        e_idx = None
+        for j in range(L + 1, min(n, L + 1 + P["rebound_within"])):
+            if long and l[j] < ext:                # 又破新低=没企稳, 作废
+                break
+            if (not long) and h[j] > ext:
+                break
+            dried = v[j] <= leg_avg * P["dryup_ratio"]    # 相对恐慌段均量明显缩量
+            rebound = (c[j] > o[j]) if long else (c[j] < o[j])   # 第一根反弹(收阳/收阴)
+            if dried and rebound:
+                e_idx = j; break
+        if e_idx is None:
             i += 1; continue
         entry = c[e_idx]
         buf = P["sl_buf_pct"] / 100.0
         if long:
-            sl = min(climax_lo, fext) * (1 - buf); risk = entry - sl
+            sl = ext * (1 - buf); risk = entry - sl
             tp = entry + P["rr_target"] * risk
         else:
-            sl = max(climax_lo, fext) * (1 + buf); risk = sl - entry
+            sl = ext * (1 + buf); risk = sl - entry
             tp = entry - P["rr_target"] * risk
         if risk > 0:
             sigs.append({"direction": direction, "entry": entry, "sl": sl, "tp": tp,
-                         "anchor": int(k5[i]["open_time"]), "entry_idx": e_idx,
+                         "anchor": int(k5[L]["open_time"]), "entry_idx": e_idx,
                          "created_at": int(k5[e_idx]["open_time"]) // 1000,
-                         "climax_ratio": round(ratio, 2), "move_pct": round(move * 100, 1)})
+                         "leg_vol_x": round(leg_avg / base, 2), "move_pct": round(move * 100, 1),
+                         "rebound_lag": e_idx - L})
         i = e_idx + 1
     return sigs
 
@@ -140,17 +142,18 @@ def _walk(sym, k5, directions, P):
 
 
 async def run_smallbig_backtest(rest, symbols, days=30, now_ms=None, directions=("long", "short"),
-                                rr_target=2.0, decline_bars=10, vol_ma=20,
-                                climax_min=3.0, climax_max=12.0, drop_pct=6.0,
-                                dryup_window=10, dryup_ratio=0.6, sl_buf_pct=0.3,
-                                spans=(7, 14, 30), progress=None):
+                                rr_target=2.0, decline_bars=8, baseline_ma=20,
+                                sustain_mult=2.0, elevated_mult=1.5, sustain_bars_min=3,
+                                drop_pct=6.0, dryup_ratio=0.8, rebound_within=4,
+                                sl_buf_pct=0.3, spans=(7, 14, 30), progress=None):
     """一次拉 days 天 5m,切出 spans 各档统计。now_ms 用于切窗(不传则用最后一根K时间)。"""
     from .backtest import fetch_series
     import time as _t
     t0 = _t.time()
-    P = dict(decline_bars=decline_bars, vol_ma=vol_ma, climax_min=climax_min,
-             climax_max=climax_max, drop_pct=drop_pct, dryup_window=dryup_window,
-             dryup_ratio=dryup_ratio, sl_buf_pct=sl_buf_pct, rr_target=rr_target)
+    P = dict(decline_bars=decline_bars, baseline_ma=baseline_ma, sustain_mult=sustain_mult,
+             elevated_mult=elevated_mult, sustain_bars_min=sustain_bars_min, drop_pct=drop_pct,
+             dryup_ratio=dryup_ratio, rebound_within=rebound_within,
+             sl_buf_pct=sl_buf_pct, rr_target=rr_target)
     sem = asyncio.Semaphore(5)
     alls = []
     done = [0]

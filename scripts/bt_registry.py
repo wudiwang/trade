@@ -52,8 +52,9 @@ def cache_loader(days):
 # ------------------------- 各策略 scan -------------------------
 def scan_smallbig(C):
     sb = load_strat("smallbig")
-    P = dict(decline_bars=10, vol_ma=20, climax_min=3.0, climax_max=12.0, drop_pct=6.0,
-             dryup_window=10, dryup_ratio=0.6, sl_buf_pct=0.3, rr_target=2.0)
+    P = dict(decline_bars=8, baseline_ma=20, sustain_mult=2.0, elevated_mult=1.5,
+             sustain_bars_min=3, drop_pct=6.0, dryup_ratio=0.8, rebound_within=4,
+             sl_buf_pct=0.3, rr_target=2.0)
     out = []
     for sym, k5 in C("5m").items():
         if len(k5) < 80:
@@ -63,7 +64,7 @@ def scan_smallbig(C):
                 s["symbol"] = sym
                 sb._settle(s, k5)
                 s["strat"] = "smallbig"
-                s["climaxX"] = s.get("climax_ratio")
+                s["climaxX"] = s.get("leg_vol_x")     # 恐慌段持续放量倍数
                 s["movePct"] = s.get("move_pct")
                 out.append(s)
     return out
@@ -117,12 +118,12 @@ META = {
     "smallbig": {
         "label": "小转大", "tf": "5m",
         "logic": [
-            "纯5m量能高潮反转。",
-            "① 急跌段:幅度特别大(≥6%)且下跌中量能不断放大",
-            "② 巨量高潮:最后一根下跌K 量 = 前20均量的 3~12 倍(明显大但不夸张)",
-            "③ 缩量企稳:高潮后量能萎缩、不破高潮低点",
-            "④ 5m底分型:企稳区出现底分型 → 买入(做空为镜像)",
-            "止损=高潮/分型低点;止盈=RR2。",
+            "纯5m·持续放量恐慌后的第一根反弹买点。",
+            "① 急跌段(默认8根):段均量≥基线2x且段内≥3根明显放量 = 持续放量(非单根spike)",
+            "② 急跌幅度≥6%,段末为恐慌低点(锚)",
+            "③ 立即缩量:低点后量能马上萎缩(≤恐慌段均量0.8x)",
+            "④ 第一根反弹K(收阳, 4根内)= 买/卖点入场(不等底分型)",
+            "止损=恐慌低点;止盈=RR2。锚标在恐慌低,箭头标在反弹入场K。",
         ]},
     "pullback": {
         "label": "浅回调二买/二卖", "tf": "5m",
