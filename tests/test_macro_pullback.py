@@ -40,6 +40,8 @@ def cfg(**overrides):
         "max_entry_distance_pct": 0.5,
         "missed_midpoint_filter": True,
         "min_effective_bars_between": 5,
+        "wyckoff_fractal_window": 5,
+        "min_second_hold_ratio": 0.35,
         "cooldown_bars": 12,
         "min_rr": 1.5,
         "tp_rr_long": 2.0,
@@ -127,10 +129,10 @@ def utad_then_second_sell():
         (94, 100, 94, 97, 100),
         (97, 101, 95, 100, 95),
         (100, 102, 96, 101, 90),
-        (101, 103, 99, 102, 90),      # H2, below H1
-        (102, 102.9, 102.6, 102.7, 110),  # confirms second top near H2
-        (102.7, 102.8, 102.5, 102.55, 110),  # stall bar: close < right K low
-        (102.55, 102.6, 102.4, 102.5, 110),  # entry bar after stall
+        (101, 102.5, 99, 102, 90),      # H2, below H1
+        (102, 102.4, 102.1, 102.2, 110),  # confirms second top near H2
+        (102.2, 102.3, 101.9, 102.0, 110),  # stall bar: close < right K low
+        (102.0, 102.1, 101.8, 102.0, 110),  # entry bar after stall
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
@@ -188,6 +190,55 @@ def invalid_mid_leg_spring_then_second_buy():
         (100.4, 100.45, 100.2, 100.3, 110),
         (100.3, 100.5, 100.25, 100.46, 110),
         (100.46, 100.55, 100.35, 100.49, 110),
+    ]
+    return [k(*row, t=i) for i, row in enumerate(vals)]
+
+
+def sweep_before_true_l1_then_second_buy():
+    vals = [
+        (111, 112, 109, 110, 100),
+        (109, 110, 106, 107, 100),
+        (106, 107, 103, 104, 100),
+        (103, 104, 100, 101, 100),
+        (100, 101, 98, 99, 100),
+        (99, 100, 94, 95, 360),       # high-volume sweep starts the spring
+        (95, 99, 93, 94, 130),
+        (94, 98, 92, 93, 120),
+        (93, 97, 91, 96, 120),        # true L1 bottom within 5 bars of sweep
+        (96, 101, 95, 100, 130),      # reclaim after true L1
+        (100, 105, 99, 104, 130),
+        (104, 110, 103, 109, 120),
+        (109, 109, 106, 107, 100),
+        (107, 108, 105, 106, 95),
+        (106, 107, 104.2, 105, 90),
+        (105, 106, 103.8, 104.5, 90),  # L2 holds well above the old center
+        (104.5, 104.8, 104.0, 104.2, 100),
+        (104.2, 105.0, 104.1, 104.9, 100),
+        (104.9, 105.2, 104.6, 105.0, 100),
+    ]
+    return [k(*row, t=i) for i, row in enumerate(vals)]
+
+
+def second_buy_inside_prior_center():
+    vals = [
+        (103, 104, 102, 103, 100),
+        (102, 103, 101, 102, 100),
+        (101, 102, 100, 101, 100),
+        (100, 101, 99, 100, 100),
+        (99, 100, 98, 99, 100),
+        (99, 100, 94, 95, 360),
+        (95, 101, 95, 99, 130),
+        (99, 103, 97, 102, 140),
+        (102, 105, 99, 104, 130),
+        (104, 107, 101, 106, 100),
+        (106, 106, 102, 104, 100),
+        (104, 105, 101, 102, 95),
+        (102, 104, 100.5, 101, 90),
+        (101, 103, 99.0, 99.6, 90),
+        (99.6, 101, 98.2, 99.0, 90),  # L2 is only a weak higher low inside the old center
+        (99.0, 99.45, 98.5, 99.2, 110),
+        (99.2, 99.7, 99.1, 99.6, 110),
+        (99.6, 99.9, 99.3, 99.7, 110),
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
@@ -290,10 +341,28 @@ def test_second_sell_requires_stall_after_h2_confirmation():
     assert detect_macro_pullback("SOLUSDT", "short", second_sell_without_stall(), second_sell_without_stall(), cfg()) is None
 
 
-def test_volume_l1_must_be_completed_chan_bottom_not_mid_leg():
+def test_volume_l1_uses_completed_chan_bottom_not_mid_leg_sweep():
     series = invalid_mid_leg_spring_then_second_buy()
-    assert _find_spring(series, cfg()) is None
-    assert detect_macro_pullback("XMRUSDT", "long", series, series, cfg()) is None
+    first = _find_spring(series, cfg(reclaim_bars=5))
+    assert first is not None
+    assert first["sweep_idx"] == 5
+    assert first["idx"] == 9
+
+
+def test_sweep_can_appear_within_five_bars_before_true_l1():
+    series = sweep_before_true_l1_then_second_buy()
+    sig = detect_macro_pullback(
+        "HUSDT", "long", series, series,
+        cfg(reclaim_bars=5, max_entry_distance_pct=1.5, min_effective_bars_between=4, missed_midpoint_filter=False),
+    )
+    assert sig is not None
+    assert sig.extra["wyckoff"]["sweep_idx"] == 5
+    assert sig.extra["wyckoff"]["idx"] == 8
+
+
+def test_second_buy_inside_prior_center_is_filtered():
+    series = second_buy_inside_prior_center()
+    assert detect_macro_pullback("HYPEUSDT", "long", series, series, cfg(max_entry_distance_pct=1.5)) is None
 
 
 def test_second_sell_must_trigger_soon_after_h2_confirmation():
@@ -334,8 +403,10 @@ class MiniCfg:
             "macro_pullback.reclaim_bars": 3,
             "macro_pullback.reclaim_tolerance_pct": 0.5,
             "macro_pullback.reclaim_body_pct": 80,
+            "macro_pullback.wyckoff_fractal_window": 5,
             "macro_pullback.min_leg_pct": 1.0,
             "macro_pullback.second_tolerance_pct": 0.2,
+            "macro_pullback.min_second_hold_ratio": 0.35,
             "macro_pullback.stop_buffer_pct": 0.3,
             "macro_pullback.cooldown_bars": 12,
             "macro_pullback.min_rr": 1.5,

@@ -44,12 +44,14 @@ def _effective_bar_count(klines: list, start_idx: int, end_idx: int) -> int:
     return len(merge_klines(klines[start_idx:end_idx + 1]))
 
 
-def _is_chan_fractal_extreme(klines: list, idx: int, kind: str) -> bool:
+def _chan_fractal_extremes_near(klines: list, idx: int, kind: str, window: int) -> list[int]:
     from .chan import find_fractals, merge_klines
+    out = []
     for fx in find_fractals(klines, merge_klines(klines)):
-        if fx.kind == kind and int(fx.extreme_src_idx) == idx:
-            return True
-    return False
+        ext_idx = int(fx.extreme_src_idx)
+        if fx.kind == kind and abs(ext_idx - idx) <= window:
+            out.append(ext_idx)
+    return out
 
 
 def _invalidated_extreme(klines: list, idx: int, direction: str, tolerance_pct: float = 0.0) -> bool:
@@ -74,6 +76,7 @@ def _find_spring(klines: list, params: dict) -> dict | None:
     vol_ma = int(params.get("vol_ma", 20))
     vol_mult = float(params.get("vol_mult", 3.0))
     reclaim_bars = int(params.get("reclaim_bars", 4))
+    fractal_window = int(params.get("wyckoff_fractal_window", 5))
     body_pct = float(params.get("reclaim_body_pct", 80)) / 100.0
     end = len(klines) - 3
     for i in range(end - 1, vol_ma - 1, -1):
@@ -95,12 +98,10 @@ def _find_spring(klines: list, params: dict) -> dict | None:
                 break
         if reclaimed_at is None:
             continue
-        bottom_candidates = [x for x in range(max(1, i - 1), min(len(klines) - 1, i + 2)) if _is_bottom(klines, x)]
+        bottom_candidates = _chan_fractal_extremes_near(klines, i, "bottom", fractal_window)
         if not bottom_candidates:
             continue
         l1 = min(bottom_candidates, key=lambda x: _f(klines[x], "low"))
-        if not _is_chan_fractal_extreme(klines, l1, "bottom"):
-            continue
         if _invalidated_extreme(klines, l1, "long"):
             continue
         return {
@@ -115,6 +116,7 @@ def _find_utad(klines: list, params: dict) -> dict | None:
     vol_ma = int(params.get("vol_ma", 20))
     vol_mult = float(params.get("vol_mult", 3.0))
     reclaim_bars = int(params.get("reclaim_bars", 4))
+    fractal_window = int(params.get("wyckoff_fractal_window", 5))
     body_pct = float(params.get("reclaim_body_pct", 80)) / 100.0
     end = len(klines) - 3
     for i in range(end - 1, vol_ma - 1, -1):
@@ -136,12 +138,10 @@ def _find_utad(klines: list, params: dict) -> dict | None:
                 break
         if reclaimed_at is None:
             continue
-        top_candidates = [x for x in range(max(1, i - 1), min(len(klines) - 1, i + 2)) if _is_top(klines, x)]
+        top_candidates = _chan_fractal_extremes_near(klines, i, "top", fractal_window)
         if not top_candidates:
             continue
         h1 = max(top_candidates, key=lambda x: _f(klines[x], "high"))
-        if not _is_chan_fractal_extreme(klines, h1, "top"):
-            continue
         if _invalidated_extreme(klines, h1, "short"):
             continue
         return {
@@ -157,6 +157,7 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
+    min_hold = float(params.get("min_second_hold_ratio", 0.35))
     bottoms = _bottoms_after(klines, l1_idx + 3)
     for l2_idx in bottoms:
         if _f(klines[l2_idx], "low") < l1 * (1 - tol):
@@ -168,6 +169,9 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
         if _effective_bar_count(klines, leg_high_idx, l2_idx) < min_bars:
             continue
         if (leg_high - l1) / max(l1, 1e-12) < min_leg:
+            continue
+        hold_ratio = (_f(klines[l2_idx], "low") - l1) / max(leg_high - l1, 1e-12)
+        if hold_ratio < min_hold:
             continue
         return {"L1": l1, "H1": leg_high, "L2": _f(klines[l2_idx], "low"),
                 "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"]),
@@ -181,6 +185,7 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
+    min_hold = float(params.get("min_second_hold_ratio", 0.35))
     tops = _tops_after(klines, h1_idx + 3)
     for h2_idx in tops:
         if _f(klines[h2_idx], "high") > h1 * (1 + tol):
@@ -192,6 +197,9 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
         if _effective_bar_count(klines, leg_low_idx, h2_idx) < min_bars:
             continue
         if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
+            continue
+        hold_ratio = (h1 - _f(klines[h2_idx], "high")) / max(h1 - leg_low, 1e-12)
+        if hold_ratio < min_hold:
             continue
         return {"H1": h1, "L1": leg_low, "H2": _f(klines[h2_idx], "high"),
                 "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"]),

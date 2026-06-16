@@ -32,8 +32,10 @@ macro_pullback:
   reclaim_bars: 4
   reclaim_tolerance_pct: 0.5
   reclaim_body_pct: 80       # spring/UTAD: 后续K收回爆量K实体80%区间即成立
+  wyckoff_fractal_window: 5   # 爆量K允许出现在真正L1/H1分型前后N根内
   min_leg_pct: 0.8
   second_tolerance_pct: 0.2
+  min_second_hold_ratio: 0.35 # L2/H2必须脱离前中枢下/上沿, 至少守住前一段35%
   stop_buffer_pct: 0.3
   max_signal_bars_after_second: 2   # 二买/二卖只在第二分型确认后最多2根K内触发
   max_entry_distance_r: 0.3         # 入场价距离第二分型不超过0.3R
