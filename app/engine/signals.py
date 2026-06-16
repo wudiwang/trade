@@ -181,6 +181,8 @@ class SignalEngine:
             "enabled", "exclusive", "timeframes", "structure_tf", "trigger_tf", "context_tf",
             "vol_ma", "vol_mult", "lookback", "reclaim_bars", "reclaim_tolerance_pct",
             "min_leg_pct", "second_tolerance_pct", "stop_buffer_pct", "cooldown_bars",
+            "max_signal_bars_after_second", "max_entry_distance_r", "max_entry_distance_pct",
+            "missed_midpoint_filter", "min_effective_bars_between",
             "min_rr", "tp_rr_long", "tp_rr_short", "tp_lookback", "vp_bins",
         )
         params = {k: self._p(f"macro_pullback.{k}") for k in keys}
@@ -215,6 +217,11 @@ class SignalEngine:
             fkey = ("macro_pullback_anchor", symbol, tf, direction, anchor)
             if anchor and self._bi_fired.get(fkey):
                 return None
+            if anchor and hasattr(self.db, "claim_signal_anchor"):
+                claimed = self.db.claim_signal_anchor("macro_pullback", symbol, tf, direction, int(anchor))
+                if not claimed:
+                    self._bi_fired[fkey] = 1
+                    return None
             if anchor:
                 self._bi_fired[fkey] = 1
             self._cooldown[ckey] = last_t

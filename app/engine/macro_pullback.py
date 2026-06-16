@@ -37,6 +37,13 @@ def _tops_after(klines: list, start: int) -> list[int]:
     return [i for i in range(max(1, start), len(klines) - 1) if _is_top(klines, i)]
 
 
+def _effective_bar_count(klines: list, start_idx: int, end_idx: int) -> int:
+    if end_idx < start_idx:
+        start_idx, end_idx = end_idx, start_idx
+    from .chan import merge_klines
+    return len(merge_klines(klines[start_idx:end_idx + 1]))
+
+
 def _find_spring(klines: list, params: dict) -> dict | None:
     lookback = int(params.get("lookback", 20))
     vol_ma = int(params.get("vol_ma", 20))
@@ -116,15 +123,22 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
     l1 = _f(klines[l1_idx], "low")
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
+    min_bars = int(params.get("min_effective_bars_between", 5))
     bottoms = _bottoms_after(klines, l1_idx + 3)
     for l2_idx in bottoms:
         if _f(klines[l2_idx], "low") < l1 * (1 - tol):
             continue
-        leg_high = max(_f(k, "high") for k in klines[l1_idx + 1:l2_idx + 1])
+        leg_high_idx = max(range(l1_idx + 1, l2_idx + 1), key=lambda x: _f(klines[x], "high"))
+        leg_high = _f(klines[leg_high_idx], "high")
+        if _effective_bar_count(klines, l1_idx, leg_high_idx) < min_bars:
+            continue
+        if _effective_bar_count(klines, leg_high_idx, l2_idx) < min_bars:
+            continue
         if (leg_high - l1) / max(l1, 1e-12) < min_leg:
             continue
         return {"L1": l1, "H1": leg_high, "L2": _f(klines[l2_idx], "low"),
-                "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"])}
+                "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"]),
+                "L1_idx": l1_idx, "H1_idx": leg_high_idx, "L2_idx": l2_idx}
     return None
 
 
@@ -133,16 +147,52 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
     h1 = _f(klines[h1_idx], "high")
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
+    min_bars = int(params.get("min_effective_bars_between", 5))
     tops = _tops_after(klines, h1_idx + 3)
     for h2_idx in tops:
         if _f(klines[h2_idx], "high") > h1 * (1 + tol):
             continue
-        leg_low = min(_f(k, "low") for k in klines[h1_idx + 1:h2_idx + 1])
+        leg_low_idx = min(range(h1_idx + 1, h2_idx + 1), key=lambda x: _f(klines[x], "low"))
+        leg_low = _f(klines[leg_low_idx], "low")
+        if _effective_bar_count(klines, h1_idx, leg_low_idx) < min_bars:
+            continue
+        if _effective_bar_count(klines, leg_low_idx, h2_idx) < min_bars:
+            continue
         if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
             continue
         return {"H1": h1, "L1": leg_low, "H2": _f(klines[h2_idx], "high"),
-                "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"])}
+                "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"]),
+                "H1_idx": h1_idx, "L1_idx": leg_low_idx, "H2_idx": h2_idx}
     return None
+
+
+def _entry_near_second(direction: str, klines: list, second: dict, entry: float, sl: float, params: dict) -> bool:
+    max_bars = int(params.get("max_signal_bars_after_second", 2))
+    max_r = float(params.get("max_entry_distance_r", 0.3))
+    max_pct = float(params.get("max_entry_distance_pct", 0.5)) / 100.0
+    midpoint_filter = bool(params.get("missed_midpoint_filter", True))
+
+    if direction == "long":
+        second_idx = int(second.get("L2_idx", len(klines) - 1))
+        second_price = float(second["L2"])
+        midpoint = (float(second["L1"]) + float(second["H1"])) / 2.0
+        missed_midpoint = entry >= midpoint
+    else:
+        second_idx = int(second.get("H2_idx", len(klines) - 1))
+        second_price = float(second["H2"])
+        midpoint = (float(second["H1"]) + float(second["L1"])) / 2.0
+        missed_midpoint = entry <= midpoint
+
+    if len(klines) - 1 - second_idx > max_bars:
+        return False
+    if midpoint_filter and missed_midpoint:
+        return False
+
+    distance = abs(entry - second_price)
+    risk = abs(entry - sl)
+    near_by_r = risk > 0 and distance <= max_r * risk
+    near_by_pct = second_price > 0 and distance / second_price <= max_pct
+    return near_by_r or near_by_pct
 
 
 def _tp_for(klines: list, direction: str, entry: float, sl: float, params: dict) -> tuple[float, float]:
@@ -172,6 +222,8 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         sl = second["L2"] * (1 - float(params.get("stop_buffer_pct", 0.3)) / 100.0)
         if sl >= entry:
             return None
+        if not _entry_near_second(direction, klines, second, entry, sl, params):
+            return None
         label = "second_buy"
         side = "做多"
     else:
@@ -183,6 +235,8 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         entry = _f(klines[-1], "close")
         sl = second["H2"] * (1 + float(params.get("stop_buffer_pct", 0.3)) / 100.0)
         if sl <= entry:
+            return None
+        if not _entry_near_second(direction, klines, second, entry, sl, params):
             return None
         label = "second_sell"
         side = "做空"

@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS paper_trades (
     result TEXT DEFAULT 'open'          -- open / tp / sl / expired
 );
 CREATE INDEX IF NOT EXISTS idx_paper_open ON paper_trades(result);
+CREATE TABLE IF NOT EXISTS signal_anchors (
+    strategy TEXT NOT NULL, symbol TEXT NOT NULL, tf TEXT NOT NULL,
+    direction TEXT NOT NULL, anchor_time INTEGER NOT NULL,
+    signal_id INTEGER, created_at INTEGER NOT NULL,
+    PRIMARY KEY (strategy, symbol, tf, direction, anchor_time)
+);
 CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     signal_id INTEGER, created_at INTEGER,
@@ -189,6 +195,14 @@ class DB:
             "SELECT * FROM signals WHERE symbol=? AND tf=? AND direction=? AND created_at>=? ORDER BY created_at DESC LIMIT 1",
             (symbol, tf, direction, since_ts),
         )
+
+    def claim_signal_anchor(self, strategy: str, symbol: str, tf: str, direction: str, anchor_time: int) -> bool:
+        cur = self.execute(
+            "INSERT OR IGNORE INTO signal_anchors "
+            "(strategy, symbol, tf, direction, anchor_time, created_at) VALUES (?,?,?,?,?,?)",
+            (strategy, symbol, tf, direction, int(anchor_time), int(time.time())),
+        )
+        return cur.rowcount > 0
 
     # ---------- playbooks (预演) ----------
     def insert_playbook(self, p: dict) -> int:

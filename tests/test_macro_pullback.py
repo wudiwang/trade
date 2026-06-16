@@ -34,6 +34,11 @@ def cfg(**overrides):
         "min_leg_pct": 1.0,
         "second_tolerance_pct": 0.2,
         "stop_buffer_pct": 0.3,
+        "max_signal_bars_after_second": 2,
+        "max_entry_distance_r": 0.3,
+        "max_entry_distance_pct": 0.5,
+        "missed_midpoint_filter": True,
+        "min_effective_bars_between": 5,
         "cooldown_bars": 12,
         "min_rr": 1.5,
         "tp_rr_long": 2.0,
@@ -56,12 +61,16 @@ def spring_then_second_buy():
         (100, 101, 99, 100, 100),
         (99, 100, 98, 99, 100),
         (99, 100, 94, 95, 360),       # Spring sweep below prior low, high volume
-        (95, 100, 95, 99, 130),
-        (99, 104, 98, 103, 140),      # reclaim prior down-leg start area
-        (103, 107, 102, 106, 130),    # up leg after L1
-        (106, 106.5, 103, 104, 100),
-        (104, 104.5, 100, 101, 90),   # L2, higher than L1
-        (101, 105, 101, 104, 110),    # confirms second bottom
+        (95, 101, 95, 99, 130),
+        (99, 103, 97, 102, 140),
+        (102, 105, 99, 104, 130),     # reclaim prior down-leg start area
+        (104, 107, 101, 106, 100),    # up leg high after L1
+        (106, 106, 102, 104, 100),
+        (104, 105, 101, 102, 95),
+        (102, 104, 100.5, 101, 90),
+        (101, 103, 100.2, 100.6, 90),
+        (100.6, 102, 100, 100.4, 90),  # L2, higher than L1
+        (100.4, 101.2, 100.2, 100.3, 110),  # confirms second bottom near L2
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
@@ -74,14 +83,41 @@ def utad_then_second_sell():
         (100, 101, 99, 100, 100),
         (101, 102, 100, 101, 100),
         (101, 108, 100, 107, 380),    # UTAD sweep above prior high, high volume
-        (107, 107, 101, 102, 140),
-        (102, 103, 96, 97, 150),      # reclaim prior up-leg start area
-        (97, 98, 93, 94, 130),        # down leg after H1
-        (94, 99, 94, 98, 100),
-        (98, 103, 97, 102, 90),       # H2, below H1
-        (102, 102.5, 98, 99, 110),    # confirms second top
+        (107, 107, 99, 100, 140),
+        (100, 105, 97, 98, 150),
+        (98, 103, 95, 96.4, 130),     # reclaim prior up-leg start area
+        (96.4, 101, 94, 95, 120),
+        (95, 99, 93, 94, 100),        # down leg low after H1
+        (94, 100, 94, 97, 100),
+        (97, 101, 95, 100, 95),
+        (100, 102, 96, 101, 90),
+        (101, 103, 99, 102, 90),      # H2, below H1
+        (102, 102.9, 101.8, 102.7, 110),  # confirms second top near H2
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
+
+
+def late_after_second_sell():
+    vals = list(utad_then_second_sell())
+    start = len(vals)
+    vals.extend([
+        k(102.7, 102.8, 101.9, 102.2, 90, t=start),
+        k(102.2, 102.3, 101.4, 101.6, 90, t=start + 1),
+        k(101.6, 101.8, 100.9, 101.1, 90, t=start + 2),
+    ])
+    return vals
+
+
+def far_from_second_sell():
+    vals = list(utad_then_second_sell())
+    vals[-1] = k(102, 102.5, 99.8, 100.0, 110, t=len(vals) - 1)
+    return vals
+
+
+def below_down_leg_midpoint_sell():
+    vals = list(utad_then_second_sell())
+    vals[-1] = k(102, 102.5, 99.0, 99.8, 110, t=len(vals) - 1)
+    return vals
 
 
 def no_utad_second_top_only():
@@ -125,6 +161,21 @@ def test_detect_second_sell_requires_prior_high_volume_utad():
     assert abs((sig.entry - sig.tp) / risk - 0.8) < 0.01
 
 
+def test_second_sell_must_trigger_soon_after_h2_confirmation():
+    sig = detect_macro_pullback("SOLUSDT", "short", late_after_second_sell(), late_after_second_sell(), cfg())
+    assert sig is None
+
+
+def test_second_sell_rejects_entry_too_far_from_h2():
+    sig = detect_macro_pullback("SOLUSDT", "short", far_from_second_sell(), far_from_second_sell(), cfg())
+    assert sig is None
+
+
+def test_second_sell_rejects_price_below_down_leg_midpoint():
+    sig = detect_macro_pullback("SOLUSDT", "short", below_down_leg_midpoint_sell(), below_down_leg_midpoint_sell(), cfg())
+    assert sig is None
+
+
 def test_second_top_without_utad_does_not_signal():
     sig = detect_macro_pullback("SOLUSDT", "short", no_utad_second_top_only(), no_utad_second_top_only(), cfg())
     assert sig is None
@@ -164,8 +215,20 @@ class MiniCfg:
 
 
 class FakeDB:
+    anchors = set()
+
+    def __init__(self):
+        self.anchors = set()
+
     def log(self, *args, **kwargs):
         pass
+
+    def claim_signal_anchor(self, strategy, symbol, tf, direction, anchor_time):
+        key = (strategy, symbol, tf, direction, anchor_time)
+        if key in self.anchors:
+            return False
+        self.anchors.add(key)
+        return True
 
 
 def legacy_signal():
@@ -205,6 +268,19 @@ def test_same_second_fractal_does_not_refire_after_cooldown_window():
         extended.append(k(99, 100, 98, 99, 80, t=t0 + i))
 
     second = eng.evaluate_all("SOLUSDT", "5m", {"15m": [], "5m": extended, "1h": []})
+    assert second == []
+
+
+def test_same_second_fractal_does_not_refire_after_engine_restart():
+    db = FakeDB()
+    first_engine = SignalEngine(MiniCfg(), db)
+    first_engine.macro_view = {"direction": "short", "note": "manual", "at": 1}
+    first = first_engine.evaluate_all("SOLUSDT", "5m", {"15m": [], "5m": utad_then_second_sell(), "1h": []})
+    assert len(first) == 1
+
+    restarted_engine = SignalEngine(MiniCfg(), db)
+    restarted_engine.macro_view = {"direction": "short", "note": "manual", "at": 1}
+    second = restarted_engine.evaluate_all("SOLUSDT", "5m", {"15m": [], "5m": utad_then_second_sell(), "1h": []})
     assert second == []
 
 
