@@ -19,7 +19,12 @@ function toast(msg) {
 async function logout() { await fetch('/api/logout', {method: 'POST'}); location.href = '/login.html'; }
 
 // ---------- 状态与统计 ----------
-const TRACK_NAMES = {buy1: '🧪模拟·一买', buy2: '🧪模拟·二买'};
+const TRACK_NAMES = {
+  buy1: '🧪模拟·一买',
+  buy2: '🧪模拟·二买',
+  second_buy: '🟢 BTC手动·二买',
+  second_sell: '🔴 BTC手动·二卖',
+};
 async function loadStatus() {
   const s = await api('/api/status');
   if (s.error) { $('stat-cards').innerHTML = '<div class="card"><h3>引擎</h3><div class="big red">未运行</div></div>'; return; }
@@ -48,10 +53,12 @@ async function loadStatus() {
 }
 
 // ---------- 信号 ----------
-const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', chan: '分型'};
+const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', second_buy: '🟢二买', second_sell: '🔴二卖', chan: '分型'};
 // 生命周期(方案A): try=试买/试卖, ok=一买/一卖(确认), fail=一买✗(失败)
 function typeLabel(type, dir, state) {
   if (state === 'try') return dir === 'short' ? '试卖' : '试买';
+  if (type === 'second_sell') return state === 'fail' ? 'BTC手动二卖✗' : 'BTC手动二卖';
+  if (type === 'second_buy') return state === 'fail' ? 'BTC手动二买✗' : 'BTC手动二买';
   const base = dir === 'short'
     ? (type === 'buy1' ? '一卖' : type === 'buy2' ? '二卖' : (TYPE_TAG[type] || type))
     : (type === 'buy1' ? '一买' : type === 'buy2' ? '二买' : (TYPE_TAG[type] || type));

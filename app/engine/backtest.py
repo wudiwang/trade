@@ -85,6 +85,11 @@ def walk_symbol_mtf(cfg, symbol: str, series_by_tf: dict, btc_lookup, tfs: list[
             continue
         kbt = {t: series_by_tf[t][max(0, closed[t] - WINDOW): closed[t]] for t in tfs}
         eng.btc_trend = btc_lookup(ct)
+        eng.macro_view = {
+            "direction": "long" if eng.btc_trend == 1 else "short" if eng.btc_trend == -1 else "neutral",
+            "note": "backtest proxy from BTC trend",
+            "at": ct // 1000,
+        }
         try:
             out = eng.evaluate_all(symbol, tf, kbt)
         except Exception:
@@ -150,7 +155,7 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
                        progress=None) -> dict:
     """全量回测。progress(done, total, msg) 可选回调。"""
     t0 = time.time()
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(12)
     total = len(symbols)
     done = 0
     all_sigs: list[dict] = []
@@ -176,7 +181,7 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
             sigs = await asyncio.to_thread(walk_symbol_mtf, cfg, sym, series_by_tf, btc_lookup, tfs)
             all_sigs.extend(sigs)
         done += 1
-        if progress and (done % 5 == 0 or done == total):
+        if progress and (done % 2 == 0 or done == total):
             progress(done, total, sym)
 
     await asyncio.gather(*(one(s) for s in symbols))
@@ -185,7 +190,9 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
     snapshot = {k: cfg.get(k) for k in (
         "chan.bi_min_bars", "chan.stall_max_gap", "chan.fractal_vol_mult",
         "chan.fractal_vol_ma", "chan.require_divergence", "chan.mtf_tol_pct",
-        "spring.min_rr", "spring.btc_filter")}
+        "spring.min_rr", "spring.btc_filter", "macro_pullback.enabled",
+        "macro_pullback.impulse_min_pct", "macro_pullback.retest_tolerance_pct",
+        "macro_pullback.volume_decay_ratio", "macro_pullback.min_rr")}
     result = {
         "period_days": days, "tfs": tfs, "symbols": len(symbols),
         "elapsed_s": round(time.time() - t0, 1),

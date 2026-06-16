@@ -17,6 +17,25 @@ live:
 strategy: chan_bi      # chan_bi=缠论笔+停顿K(当前) / spring_v4=破位+底分型 / chan_v1=旧
 timeframes: ["5m", "15m", "1h"]   # 5m自身;15m结构用5m停顿触发;1h结构用15m停顿触发
 
+# ---- 手动BTC大趋势 -> 山寨二买/二卖 ----
+macro_pullback:
+  enabled: true
+  exclusive: true          # true=paper只跑这套BTC手动二买/二卖策略
+  structure_tf: 15m
+  trigger_tf: 5m
+  context_tf: 1h
+  impulse_window: 24
+  impulse_min_pct: 4.0
+  ma_period: 20
+  ma_extension_pct: 1.5
+  retest_tolerance_pct: 0.4
+  volume_decay_ratio: 0.8
+  stop_buffer_pct: 0.3
+  cooldown_bars: 12
+  min_rr: 1.5
+  tp_lookback: 100
+  vp_bins: 50
+
 # ---- 缠论笔策略 ----
 chan:
   bi_min_bars: 5         # 一笔至少N根合并K(去包含后)
@@ -71,7 +90,7 @@ spring:
 # ---- 币种筛选 ----
 universe:
   quote: USDT                  # 只监控 U 本位永续
-  min_quote_volume_24h: 50000000   # 24h成交额低于5000万U的币不监控
+  min_quote_volume_24h: 0      # 0=全部合约币种；高于0则按24h成交额过滤
   refresh_minutes: 60          # 每小时刷新一次币种列表
   exclude: []                  # 手动排除的币种
 

@@ -138,6 +138,11 @@ class SignalEngine:
 
     def evaluate_all(self, symbol: str, tf: str, kbt: dict) -> list:
         """tf=刚收盘的级别；kbt={级别:klines}。返回该次收盘产生的所有信号(可多个)。"""
+        if self._p("macro_pullback.enabled", True) and self._p("macro_pullback.exclusive", True):
+            if tf != self._p("macro_pullback.trigger_tf", "5m"):
+                return []
+            mp = self._eval_macro_pullback(symbol, kbt)
+            return [mp] if mp else []
         if self._p("strategy", "chan_bi") != "chan_bi":
             s = self.evaluate(symbol, tf, kbt.get(tf, []))
             return [s] if s else []
@@ -156,6 +161,9 @@ class SignalEngine:
         if hs:
             out.append(hs)
         if tf == "5m":
+            mp = self._eval_macro_pullback(symbol, kbt)
+            if mp:
+                out.append(mp)
             s = self._eval_chan_bi(symbol, "5m", own)        # 5m 自身(底分型+5m停顿)
             if s:
                 out.append(s)
@@ -167,6 +175,43 @@ class SignalEngine:
             if s3:
                 out.append(s3)
         return out
+
+    def _macro_params(self) -> dict:
+        keys = (
+            "enabled", "structure_tf", "trigger_tf", "context_tf", "impulse_window",
+            "impulse_min_pct", "ma_period", "ma_extension_pct", "retest_tolerance_pct",
+            "volume_decay_ratio", "stop_buffer_pct", "cooldown_bars", "min_rr",
+            "tp_lookback", "vp_bins",
+        )
+        params = {k: self._p(f"macro_pullback.{k}") for k in keys}
+        params["account_equity"] = self._p("risk.account_equity", 1000)
+        params["risk_pct"] = self._p("risk.risk_pct", 0.5)
+        return params
+
+    def _eval_macro_pullback(self, symbol: str, kbt: dict) -> "Signal | None":
+        if not self._p("macro_pullback.enabled", True):
+            return None
+        direction = (self.macro_view or {}).get("direction", "neutral")
+        if direction not in ("long", "short"):
+            return None
+        struct_tf = self._p("macro_pullback.structure_tf", "15m")
+        trigger_tf = self._p("macro_pullback.trigger_tf", "5m")
+        struct = kbt.get(struct_tf, [])
+        trigger = kbt.get(trigger_tf, [])
+        if not struct or not trigger:
+            return None
+        last_t = int(trigger[-1]["open_time"])
+        cd_bars = self._p("macro_pullback.cooldown_bars", 12)
+        cd_ms = cd_bars * TF_MS.get(trigger_tf, 300) * 1000
+        ckey = ("macro_pullback", symbol, direction)
+        if last_t - self._cooldown.get(ckey, 0) < cd_ms:
+            return None
+        from .macro_pullback import detect_macro_pullback
+        sig = detect_macro_pullback(symbol, direction, struct, trigger, self._macro_params())
+        if sig:
+            self._cooldown[ckey] = last_t
+            self.funnel[f"macro_pullback_{direction}"] = self.funnel.get(f"macro_pullback_{direction}", 0) + 1
+        return sig
 
     # ======================= 提示: 趋势反转(MSB, 不开仓) =======================
 
