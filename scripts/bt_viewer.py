@@ -149,6 +149,24 @@ load();
 </script></body></html>"""
 
 
+def _load_precomputed(days, strats):
+    """读 bt_scan.py 预生成的 sig_<strat>_<days>d.json,秒级启动(不在此扫描)。"""
+    import glob
+    names = strats or list(R.SCANS)
+    sigs = []
+    for n in names:
+        p = os.path.join(R.CACHE, f"sig_{n}_{days}d.json")
+        if os.path.exists(p):
+            try:
+                sigs.extend(json.load(open(p)))
+            except Exception:
+                pass
+    sigs.sort(key=lambda s: s.get("created_at") or 0)
+    for i, s in enumerate(sigs):
+        s["id"] = i
+    return sigs
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30)
@@ -158,7 +176,9 @@ if __name__ == "__main__":
     DAYS = a.days
     META = R.META
     strats = [x for x in a.strats.split(",") if x] or None
-    SIGNALS, STATS = R.scan_all(a.days, strats)
+    SIGNALS = _load_precomputed(a.days, strats)
+    if not SIGNALS:
+        print("[viewer] 无预生成信号; 请先跑: .venv/Scripts/python scripts/bt_scan.py --days %d" % a.days)
     by = {}
     for s in SIGNALS:
         by[s["strat"]] = by.get(s["strat"], 0) + 1
