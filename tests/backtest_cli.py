@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.config import get_config
 from app.engine.binance_rest import BinanceRest
 from app.engine.backtest import run_backtest
+import app.engine.macro_pullback as macro_pullback
 
 
 def balanced_sample(symbols: list[str], volumes: dict[str, float], target: int) -> list[str]:
@@ -36,6 +37,16 @@ async def main():
     btc_filter = len(sys.argv) > 3 and sys.argv[3] == "btc_on"
     cfg = get_config()
     cfg.set_override("spring.btc_filter", btc_filter)
+    fixed_rr = None
+    if len(sys.argv) > 5 and sys.argv[5].startswith("rr:"):
+        fixed_rr = float(sys.argv[5].split(":", 1)[1])
+        def fixed_tp_for(_klines, direction, entry, sl, _params):
+            risk = abs(entry - sl)
+            if direction == "long":
+                return entry + fixed_rr * risk, fixed_rr
+            return entry - fixed_rr * risk, fixed_rr
+        macro_pullback._tp_for = fixed_tp_for
+        print(f"fixed_rr={fixed_rr}")
     rest = BinanceRest(cfg.get("binance.rest_base"))
     syms = await rest.usdt_perp_symbols()
     exclude = set(cfg.get("universe.exclude", []) or [])
@@ -59,4 +70,5 @@ async def main():
               f"entry={s['entry']} {s['result']} pnl_r={s['pnl_r']}")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

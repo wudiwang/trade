@@ -181,7 +181,7 @@ class SignalEngine:
             "enabled", "exclusive", "timeframes", "structure_tf", "trigger_tf", "context_tf",
             "vol_ma", "vol_mult", "lookback", "reclaim_bars", "reclaim_tolerance_pct",
             "min_leg_pct", "second_tolerance_pct", "stop_buffer_pct", "cooldown_bars",
-            "min_rr", "tp_lookback", "vp_bins",
+            "min_rr", "tp_rr_long", "tp_rr_short", "tp_lookback", "vp_bins",
         )
         params = {k: self._p(f"macro_pullback.{k}") for k in keys}
         params = {k: v for k, v in params.items() if v is not None}

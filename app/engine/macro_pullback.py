@@ -1,8 +1,6 @@
 """Manual BTC macro direction -> Wyckoff first entry -> Chan second entry."""
 import time
 
-from .volume_profile import build_profile, nearest_hvn_above, nearest_hvn_below
-
 
 def _f(k, name: str) -> float:
     return float(k[name])
@@ -149,23 +147,12 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
 
 def _tp_for(klines: list, direction: str, entry: float, sl: float, params: dict) -> tuple[float, float]:
     risk = abs(entry - sl)
-    profile = build_profile(klines[-int(params.get("tp_lookback", 100)):], int(params.get("vp_bins", 50)))
-    min_rr = float(params.get("min_rr", 1.5))
-    fallback_rr = max(min_rr, 2.0)
     if direction == "long":
-        hvn = nearest_hvn_above(profile, entry)
-        tp = hvn if hvn and hvn > entry else entry + fallback_rr * risk
-        rr = (tp - entry) / max(risk, 1e-12)
-        if rr < min_rr:
-            tp = entry + fallback_rr * risk
-            rr = (tp - entry) / max(risk, 1e-12)
+        rr = float(params.get("tp_rr_long", 2.0))
+        tp = entry + rr * risk
     else:
-        hvn = nearest_hvn_below(profile, entry)
-        tp = hvn if hvn and hvn < entry else entry - fallback_rr * risk
-        rr = (entry - tp) / max(risk, 1e-12)
-        if rr < min_rr:
-            tp = entry - fallback_rr * risk
-            rr = (entry - tp) / max(risk, 1e-12)
+        rr = float(params.get("tp_rr_short", 0.8))
+        tp = entry - rr * risk
     return tp, rr
 
 

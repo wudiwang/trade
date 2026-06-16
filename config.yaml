@@ -35,6 +35,8 @@ macro_pullback:
   stop_buffer_pct: 0.3
   cooldown_bars: 12
   min_rr: 1.5
+  tp_rr_long: 2.0          # 回测最佳: 二买做多用2R
+  tp_rr_short: 0.8         # 回测最佳: 二卖做空用0.8R(仍偏弱, 先降低止盈)
   tp_lookback: 100
   vp_bins: 50
 

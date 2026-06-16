@@ -36,6 +36,8 @@ def cfg(**overrides):
         "stop_buffer_pct": 0.3,
         "cooldown_bars": 12,
         "min_rr": 1.5,
+        "tp_rr_long": 2.0,
+        "tp_rr_short": 0.8,
         "tp_lookback": 30,
         "vp_bins": 12,
         "account_equity": 1000,
@@ -107,6 +109,8 @@ def test_detect_second_buy_requires_prior_high_volume_spring():
     assert sig.extra["wyckoff"]["kind"] == "spring"
     assert sig.extra["structure"]["L2"] > sig.extra["structure"]["L1"]
     assert sig.sl < sig.entry < sig.tp
+    risk = sig.entry - sig.sl
+    assert abs((sig.tp - sig.entry) / risk - 2.0) < 0.01
 
 
 def test_detect_second_sell_requires_prior_high_volume_utad():
@@ -117,6 +121,8 @@ def test_detect_second_sell_requires_prior_high_volume_utad():
     assert sig.extra["wyckoff"]["kind"] == "utad"
     assert sig.extra["structure"]["H2"] < sig.extra["structure"]["H1"]
     assert sig.tp < sig.entry < sig.sl
+    risk = sig.sl - sig.entry
+    assert abs((sig.entry - sig.tp) / risk - 0.8) < 0.01
 
 
 def test_second_top_without_utad_does_not_signal():
@@ -145,6 +151,8 @@ class MiniCfg:
             "macro_pullback.stop_buffer_pct": 0.3,
             "macro_pullback.cooldown_bars": 12,
             "macro_pullback.min_rr": 1.5,
+            "macro_pullback.tp_rr_long": 2.0,
+            "macro_pullback.tp_rr_short": 0.8,
             "macro_pullback.tp_lookback": 30,
             "macro_pullback.vp_bins": 12,
             "risk.account_equity": 1000,
