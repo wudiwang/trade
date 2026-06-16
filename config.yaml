@@ -21,15 +21,17 @@ timeframes: ["5m", "15m", "1h"]   # 5m自身;15m结构用5m停顿触发;1h结构
 macro_pullback:
   enabled: true
   exclusive: true          # true=paper只跑这套BTC手动二买/二卖策略
+  timeframes: ["5m", "15m"]
   structure_tf: 15m
   trigger_tf: 5m
   context_tf: 1h
-  impulse_window: 24
-  impulse_min_pct: 4.0
-  ma_period: 20
-  ma_extension_pct: 1.5
-  retest_tolerance_pct: 0.4
-  volume_decay_ratio: 0.8
+  vol_ma: 20
+  vol_mult: 3.0
+  lookback: 20
+  reclaim_bars: 4
+  reclaim_tolerance_pct: 0.5
+  min_leg_pct: 0.8
+  second_tolerance_pct: 0.2
   stop_buffer_pct: 0.3
   cooldown_bars: 12
   min_rr: 1.5

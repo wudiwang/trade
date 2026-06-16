@@ -191,8 +191,10 @@ async def run_backtest(cfg, rest, symbols: list[str], tfs: list[str], days: int,
         "chan.bi_min_bars", "chan.stall_max_gap", "chan.fractal_vol_mult",
         "chan.fractal_vol_ma", "chan.require_divergence", "chan.mtf_tol_pct",
         "spring.min_rr", "spring.btc_filter", "macro_pullback.enabled",
-        "macro_pullback.impulse_min_pct", "macro_pullback.retest_tolerance_pct",
-        "macro_pullback.volume_decay_ratio", "macro_pullback.min_rr")}
+        "macro_pullback.exclusive", "macro_pullback.timeframes", "macro_pullback.vol_mult",
+        "macro_pullback.lookback", "macro_pullback.reclaim_bars",
+        "macro_pullback.min_leg_pct", "macro_pullback.second_tolerance_pct",
+        "macro_pullback.min_rr")}
     result = {
         "period_days": days, "tfs": tfs, "symbols": len(symbols),
         "elapsed_s": round(time.time() - t0, 1),

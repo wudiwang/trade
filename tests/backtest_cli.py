@@ -11,6 +11,25 @@ from app.engine.binance_rest import BinanceRest
 from app.engine.backtest import run_backtest
 
 
+def balanced_sample(symbols: list[str], volumes: dict[str, float], target: int) -> list[str]:
+    ranked = sorted(symbols, key=lambda s: volumes.get(s, 0.0), reverse=True)
+    if target <= 0 or target >= len(ranked):
+        return ranked
+    thirds = [ranked[:len(ranked) // 3], ranked[len(ranked) // 3: 2 * len(ranked) // 3], ranked[2 * len(ranked) // 3:]]
+    per = max(1, target // 3)
+    out: list[str] = []
+    for bucket in thirds:
+        if not bucket:
+            continue
+        if len(bucket) <= per:
+            out.extend(bucket)
+            continue
+        step = (len(bucket) - 1) / max(per - 1, 1)
+        picks = [bucket[round(i * step)] for i in range(per)]
+        out.extend(picks)
+    return sorted(dict.fromkeys(out))
+
+
 async def main():
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 7
     tfs = (sys.argv[2].split(",") if len(sys.argv) > 2 else ["5m", "15m", "1h", "4h"])
@@ -18,12 +37,18 @@ async def main():
     cfg = get_config()
     cfg.set_override("spring.btc_filter", btc_filter)
     rest = BinanceRest(cfg.get("binance.rest_base"))
-    if len(sys.argv) > 4:
+    syms = await rest.usdt_perp_symbols()
+    exclude = set(cfg.get("universe.exclude", []) or [])
+    all_symbols = sorted(s["symbol"] for s in syms if s["symbol"] not in exclude)
+    if len(sys.argv) > 4 and sys.argv[4].startswith("sample:"):
+        target = int(sys.argv[4].split(":", 1)[1])
+        volumes = await rest.ticker_24h()
+        symbols = balanced_sample(all_symbols, volumes, target)
+        print(f"sampled {len(symbols)} symbols from {len(all_symbols)} contracts")
+    elif len(sys.argv) > 4:
         symbols = [s.upper() for s in sys.argv[4].split(",") if s.strip()]
     else:
-        syms = await rest.usdt_perp_symbols()
-        exclude = set(cfg.get("universe.exclude", []) or [])
-        symbols = sorted(s["symbol"] for s in syms if s["symbol"] not in exclude)
+        symbols = all_symbols
     res = await run_backtest(cfg, rest, symbols, tfs, days,
                              progress=lambda d, t, m: print(f"  {d}/{t} {m}"))
     await rest.close()

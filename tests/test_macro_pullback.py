@@ -24,101 +24,108 @@ def k(o, h, l, c, v=100.0, t=0, step_ms=300000):
 def cfg(**overrides):
     base = {
         "enabled": True,
-        "structure_tf": "15m",
-        "trigger_tf": "5m",
-        "impulse_window": 18,
-        "impulse_min_pct": 3.0,
-        "ma_period": 5,
-        "ma_extension_pct": 0.5,
-        "retest_tolerance_pct": 0.4,
-        "volume_decay_ratio": 1.2,
+        "exclusive": True,
+        "timeframes": ["5m", "15m"],
+        "vol_ma": 5,
+        "vol_mult": 2.5,
+        "lookback": 5,
+        "reclaim_bars": 3,
+        "reclaim_tolerance_pct": 0.5,
+        "min_leg_pct": 1.0,
+        "second_tolerance_pct": 0.2,
         "stop_buffer_pct": 0.3,
-        "min_rr": 1.2,
+        "cooldown_bars": 12,
+        "min_rr": 1.5,
         "tp_lookback": 30,
         "vp_bins": 12,
+        "account_equity": 1000,
+        "risk_pct": 0.5,
+        "tf": "5m",
     }
     base.update(overrides)
     return base
 
 
-def sell_structure():
+def spring_then_second_buy():
     vals = [
-        (70, 70.5, 69.8, 70.2, 100),
-        (70.2, 71.2, 70.1, 71.0, 120),
-        (71.0, 72.2, 70.9, 72.0, 150),
-        (72.0, 73.4, 71.9, 73.2, 170),
-        (73.2, 74.7, 73.0, 74.5, 190),
-        (74.5, 76.1, 74.2, 75.8, 220),
-        (75.8, 76.05, 74.8, 75.0, 180),
-        (75.0, 75.2, 73.8, 74.0, 160),
-        (74.0, 74.4, 73.2, 73.6, 150),
-        (73.6, 74.4, 73.4, 74.1, 90),
-        (74.1, 75.35, 73.9, 75.0, 85),
-        (75.0, 75.45, 74.6, 74.8, 80),
+        (103, 104, 102, 103, 100),
+        (102, 103, 101, 102, 100),
+        (101, 102, 100, 101, 100),
+        (100, 101, 99, 100, 100),
+        (99, 100, 98, 99, 100),
+        (99, 100, 94, 95, 360),       # Spring sweep below prior low, high volume
+        (95, 100, 95, 99, 130),
+        (99, 104, 98, 103, 140),      # reclaim prior down-leg start area
+        (103, 107, 102, 106, 130),    # up leg after L1
+        (106, 106.5, 103, 104, 100),
+        (104, 104.5, 100, 101, 90),   # L2, higher than L1
+        (101, 105, 101, 104, 110),    # confirms second bottom
     ]
-    return [k(*row, t=i, step_ms=900000) for i, row in enumerate(vals)]
+    return [k(*row, t=i) for i, row in enumerate(vals)]
 
 
-def sell_trigger():
+def utad_then_second_sell():
     vals = [
-        (74.6, 75.1, 74.5, 74.9, 60),
-        (74.9, 75.35, 74.8, 75.25, 65),
-        (75.25, 75.45, 75.0, 75.1, 60),
-        (75.1, 75.15, 74.7, 74.8, 70),
-        (74.8, 74.9, 74.2, 74.35, 90),
+        (97, 98, 96, 97, 100),
+        (98, 99, 97, 98, 100),
+        (99, 100, 98, 99, 100),
+        (100, 101, 99, 100, 100),
+        (101, 102, 100, 101, 100),
+        (101, 108, 100, 107, 380),    # UTAD sweep above prior high, high volume
+        (107, 107, 101, 102, 140),
+        (102, 103, 96, 97, 150),      # reclaim prior up-leg start area
+        (97, 98, 93, 94, 130),        # down leg after H1
+        (94, 99, 94, 98, 100),
+        (98, 103, 97, 102, 90),       # H2, below H1
+        (102, 102.5, 98, 99, 110),    # confirms second top
     ]
-    return [k(*row, t=100 + i) for i, row in enumerate(vals)]
+    return [k(*row, t=i) for i, row in enumerate(vals)]
 
 
-def test_detect_second_sell_after_failed_retest():
-    sig = detect_macro_pullback("SOLUSDT", "short", sell_structure(), sell_trigger(), cfg())
+def no_utad_second_top_only():
+    vals = [
+        (100, 101, 99, 100, 100),
+        (101, 102, 100, 101, 100),
+        (102, 103, 101, 102, 100),
+        (102, 104, 101, 103, 100),
+        (103, 103.5, 99, 100, 100),
+        (100, 101, 96, 97, 100),
+        (97, 101, 97, 100, 100),
+        (100, 102, 99, 101, 100),
+        (101, 101.5, 98, 99, 100),
+    ]
+    return [k(*row, t=i) for i, row in enumerate(vals)]
+
+
+def test_detect_second_buy_requires_prior_high_volume_spring():
+    sig = detect_macro_pullback("SOLUSDT", "long", spring_then_second_buy(), spring_then_second_buy(), cfg())
+    assert sig is not None
+    assert sig.direction == "long"
+    assert sig.tf == "5m"
+    assert sig.extra["type"] == "second_buy"
+    assert sig.extra["path"] == "macro_chan_pullback"
+    assert sig.extra["wyckoff"]["kind"] == "spring"
+    assert sig.extra["structure"]["L2"] > sig.extra["structure"]["L1"]
+    assert sig.sl < sig.entry < sig.tp
+
+
+def test_detect_second_sell_requires_prior_high_volume_utad():
+    sig = detect_macro_pullback("SOLUSDT", "short", utad_then_second_sell(), utad_then_second_sell(), cfg())
     assert sig is not None
     assert sig.direction == "short"
     assert sig.extra["type"] == "second_sell"
-    assert sig.extra["path"] == "macro_chan_pullback"
-    assert sig.sl > sig.entry
-    assert sig.tp < sig.entry
+    assert sig.extra["wyckoff"]["kind"] == "utad"
     assert sig.extra["structure"]["H2"] < sig.extra["structure"]["H1"]
+    assert sig.tp < sig.entry < sig.sl
 
 
-def buy_structure():
-    vals = [
-        (76, 76.2, 75.5, 75.6, 100),
-        (75.6, 75.8, 74.5, 74.7, 130),
-        (74.7, 74.9, 73.2, 73.5, 170),
-        (73.5, 73.8, 72.1, 72.4, 210),
-        (72.4, 72.6, 70.8, 71.2, 240),
-        (71.2, 72.0, 70.7, 71.8, 180),
-        (71.8, 73.2, 71.6, 72.9, 130),
-        (72.9, 73.4, 72.4, 73.1, 110),
-        (73.1, 73.2, 71.4, 71.8, 90),
-        (71.8, 72.1, 71.3, 71.9, 85),
-    ]
-    return [k(*row, t=i, step_ms=900000) for i, row in enumerate(vals)]
-
-
-def buy_trigger():
-    vals = [
-        (71.8, 72.0, 71.35, 71.5, 60),
-        (71.5, 71.7, 71.3, 71.45, 58),
-        (71.45, 72.0, 71.4, 71.9, 65),
-        (71.9, 72.35, 71.85, 72.25, 90),
-    ]
-    return [k(*row, t=100 + i) for i, row in enumerate(vals)]
-
-
-def test_detect_second_buy_after_higher_low():
-    sig = detect_macro_pullback("SOLUSDT", "long", buy_structure(), buy_trigger(), cfg())
-    assert sig is not None
-    assert sig.direction == "long"
-    assert sig.extra["type"] == "second_buy"
-    assert sig.sl < sig.entry
-    assert sig.tp > sig.entry
-    assert sig.extra["structure"]["L2"] > sig.extra["structure"]["L1"]
+def test_second_top_without_utad_does_not_signal():
+    sig = detect_macro_pullback("SOLUSDT", "short", no_utad_second_top_only(), no_utad_second_top_only(), cfg())
+    assert sig is None
 
 
 def test_neutral_macro_has_no_signal():
-    assert detect_macro_pullback("SOLUSDT", "neutral", sell_structure(), sell_trigger(), cfg()) is None
+    assert detect_macro_pullback("SOLUSDT", "neutral", spring_then_second_buy(), spring_then_second_buy(), cfg()) is None
 
 
 class MiniCfg:
@@ -127,18 +134,17 @@ class MiniCfg:
             "strategy": "chan_bi",
             "macro_pullback.enabled": True,
             "macro_pullback.exclusive": True,
-            "macro_pullback.structure_tf": "15m",
-            "macro_pullback.trigger_tf": "5m",
-            "macro_pullback.context_tf": "1h",
-            "macro_pullback.impulse_window": 18,
-            "macro_pullback.impulse_min_pct": 3.0,
-            "macro_pullback.ma_period": 5,
-            "macro_pullback.ma_extension_pct": 0.5,
-            "macro_pullback.retest_tolerance_pct": 0.4,
-            "macro_pullback.volume_decay_ratio": 1.2,
+            "macro_pullback.timeframes": ["5m", "15m"],
+            "macro_pullback.vol_ma": 5,
+            "macro_pullback.vol_mult": 2.5,
+            "macro_pullback.lookback": 5,
+            "macro_pullback.reclaim_bars": 3,
+            "macro_pullback.reclaim_tolerance_pct": 0.5,
+            "macro_pullback.min_leg_pct": 1.0,
+            "macro_pullback.second_tolerance_pct": 0.2,
             "macro_pullback.stop_buffer_pct": 0.3,
             "macro_pullback.cooldown_bars": 12,
-            "macro_pullback.min_rr": 1.2,
+            "macro_pullback.min_rr": 1.5,
             "macro_pullback.tp_lookback": 30,
             "macro_pullback.vp_bins": 12,
             "risk.account_equity": 1000,
@@ -172,10 +178,26 @@ def test_exclusive_mode_returns_only_macro_pullback_signal():
     eng._eval_chan_bi = lambda *args, **kwargs: legacy_signal()
     eng._eval_mtf = lambda *args, **kwargs: legacy_signal()
 
-    out = eng.evaluate_all("SOLUSDT", "5m", {"15m": sell_structure(), "5m": sell_trigger(), "1h": []})
+    out = eng.evaluate_all("SOLUSDT", "5m", {"15m": [], "5m": utad_then_second_sell(), "1h": []})
 
     assert len(out) == 1
     assert out[0].extra["path"] == "macro_chan_pullback"
+
+
+def test_same_second_fractal_does_not_refire_after_cooldown_window():
+    eng = SignalEngine(MiniCfg(), FakeDB())
+    eng.macro_view = {"direction": "short", "note": "manual", "at": 1}
+    base = utad_then_second_sell()
+    first = eng.evaluate_all("SOLUSDT", "5m", {"15m": [], "5m": base, "1h": []})
+    assert len(first) == 1
+
+    extended = list(base)
+    t0 = len(extended)
+    for i in range(14):
+        extended.append(k(99, 100, 98, 99, 80, t=t0 + i))
+
+    second = eng.evaluate_all("SOLUSDT", "5m", {"15m": [], "5m": extended, "1h": []})
+    assert second == []
 
 
 def main():

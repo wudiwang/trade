@@ -1,7 +1,6 @@
-"""Manual BTC macro direction -> altcoin second-buy/second-sell pullback signals."""
+"""Manual BTC macro direction -> Wyckoff first entry -> Chan second entry."""
 import time
 
-from .chan import ema
 from .volume_profile import build_profile, nearest_hvn_above, nearest_hvn_below
 
 
@@ -9,206 +8,221 @@ def _f(k, name: str) -> float:
     return float(k[name])
 
 
-def _avg(values: list[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
+def _avg(nums: list[float]) -> float:
+    return sum(nums) / len(nums) if nums else 0.0
 
 
-def _slice_avg_volume(klines: list, start: int, end: int) -> float:
-    if end < start:
+def _vol_ratio(klines: list, idx: int, period: int) -> float:
+    if idx < period:
         return 0.0
-    return _avg([_f(k, "volume") for k in klines[start:end + 1]])
+    base = _avg([_f(k, "volume") for k in klines[idx - period:idx]])
+    return _f(klines[idx], "volume") / base if base > 0 else 0.0
 
 
-def _ma_extension_ok(klines: list, idx: int, direction: str, period: int, min_pct: float) -> bool:
-    if period <= 1 or len(klines[:idx + 1]) < period:
-        return True
-    closes = [_f(k, "close") for k in klines[:idx + 1]]
-    e = ema(closes, period)[-1]
-    if e <= 0:
-        return True
-    price = _f(klines[idx], "high" if direction == "short" else "low")
-    if direction == "short":
-        return (price - e) / e * 100.0 >= min_pct
-    return (e - price) / e * 100.0 >= min_pct
+def _is_bottom(klines: list, idx: int) -> bool:
+    if idx <= 0 or idx >= len(klines) - 1:
+        return False
+    return _f(klines[idx], "low") < _f(klines[idx - 1], "low") and _f(klines[idx], "low") < _f(klines[idx + 1], "low")
 
 
-def _bearish_trigger(trigger_klines: list) -> str | None:
-    if len(trigger_klines) < 3:
-        return None
-    a, b, c = trigger_klines[-3], trigger_klines[-2], trigger_klines[-1]
-    if _f(b, "high") > _f(a, "high") and _f(b, "high") > _f(c, "high") and _f(c, "close") < _f(b, "low"):
-        return "5m_top_fractal"
-    lows = [_f(k, "low") for k in trigger_klines[-5:-1]]
-    if lows and _f(c, "close") < min(lows):
-        return "5m_range_breakdown"
-    if _f(c, "close") < _f(c, "open") and _f(c, "close") < _f(b, "close"):
-        return "5m_bearish_close"
+def _is_top(klines: list, idx: int) -> bool:
+    if idx <= 0 or idx >= len(klines) - 1:
+        return False
+    return _f(klines[idx], "high") > _f(klines[idx - 1], "high") and _f(klines[idx], "high") > _f(klines[idx + 1], "high")
+
+
+def _bottoms_after(klines: list, start: int) -> list[int]:
+    return [i for i in range(max(1, start), len(klines) - 1) if _is_bottom(klines, i)]
+
+
+def _tops_after(klines: list, start: int) -> list[int]:
+    return [i for i in range(max(1, start), len(klines) - 1) if _is_top(klines, i)]
+
+
+def _find_spring(klines: list, params: dict) -> dict | None:
+    lookback = int(params.get("lookback", 20))
+    vol_ma = int(params.get("vol_ma", 20))
+    vol_mult = float(params.get("vol_mult", 3.0))
+    reclaim_bars = int(params.get("reclaim_bars", 4))
+    tol = float(params.get("reclaim_tolerance_pct", 0.5)) / 100.0
+    end = len(klines) - 3
+    for i in range(vol_ma, end):
+        start = max(0, i - lookback)
+        if i - start < 3:
+            continue
+        prior_low = min(_f(k, "low") for k in klines[start:i])
+        if _f(klines[i], "low") >= prior_low:
+            continue
+        vr = _vol_ratio(klines, i, vol_ma)
+        if vr < vol_mult:
+            continue
+        down_start = max(_f(k, "high") for k in klines[start:i])
+        reclaim_end = min(len(klines) - 1, i + reclaim_bars)
+        reclaimed_at = None
+        for j in range(i + 1, reclaim_end + 1):
+            if _f(klines[j], "close") >= down_start * (1 - tol):
+                reclaimed_at = j
+                break
+        if reclaimed_at is None:
+            continue
+        bottom_candidates = [x for x in range(max(1, i - 1), min(len(klines) - 1, i + 2)) if _is_bottom(klines, x)]
+        if not bottom_candidates:
+            continue
+        l1 = min(bottom_candidates, key=lambda x: _f(klines[x], "low"))
+        return {
+            "kind": "spring", "idx": l1, "sweep_idx": i, "reclaimed_at": reclaimed_at,
+            "level": prior_low, "start_price": down_start, "vol_ratio": round(vr, 2),
+        }
     return None
 
 
-def _bullish_trigger(trigger_klines: list) -> str | None:
-    if len(trigger_klines) < 3:
-        return None
-    a, b, c = trigger_klines[-3], trigger_klines[-2], trigger_klines[-1]
-    if _f(b, "low") < _f(a, "low") and _f(b, "low") < _f(c, "low") and _f(c, "close") > _f(b, "high"):
-        return "5m_bottom_fractal"
-    highs = [_f(k, "high") for k in trigger_klines[-5:-1]]
-    if highs and _f(c, "close") > max(highs):
-        return "5m_range_breakout"
-    if _f(c, "close") > _f(c, "open") and _f(c, "close") > _f(b, "close"):
-        return "5m_bullish_close"
+def _find_utad(klines: list, params: dict) -> dict | None:
+    lookback = int(params.get("lookback", 20))
+    vol_ma = int(params.get("vol_ma", 20))
+    vol_mult = float(params.get("vol_mult", 3.0))
+    reclaim_bars = int(params.get("reclaim_bars", 4))
+    tol = float(params.get("reclaim_tolerance_pct", 0.5)) / 100.0
+    end = len(klines) - 3
+    for i in range(vol_ma, end):
+        start = max(0, i - lookback)
+        if i - start < 3:
+            continue
+        prior_high = max(_f(k, "high") for k in klines[start:i])
+        if _f(klines[i], "high") <= prior_high:
+            continue
+        vr = _vol_ratio(klines, i, vol_ma)
+        if vr < vol_mult:
+            continue
+        up_start = min(_f(k, "low") for k in klines[start:i])
+        reclaim_end = min(len(klines) - 1, i + reclaim_bars)
+        reclaimed_at = None
+        for j in range(i + 1, reclaim_end + 1):
+            if _f(klines[j], "close") <= up_start * (1 + tol):
+                reclaimed_at = j
+                break
+        if reclaimed_at is None:
+            continue
+        top_candidates = [x for x in range(max(1, i - 1), min(len(klines) - 1, i + 2)) if _is_top(klines, x)]
+        if not top_candidates:
+            continue
+        h1 = max(top_candidates, key=lambda x: _f(klines[x], "high"))
+        return {
+            "kind": "utad", "idx": h1, "sweep_idx": i, "reclaimed_at": reclaimed_at,
+            "level": prior_high, "start_price": up_start, "vol_ratio": round(vr, 2),
+        }
     return None
 
 
-def _short_setup(struct_klines: list, trigger_klines: list, params: dict) -> dict | None:
-    win = int(params.get("impulse_window", 24))
-    ks = struct_klines[-win:] if len(struct_klines) > win else struct_klines
-    if len(ks) < 8:
-        return None
-    search_end = max(2, len(ks) - 3)
-    h1_idx = max(range(search_end), key=lambda i: _f(ks[i], "high"))
-    if h1_idx < 2 or h1_idx >= len(ks) - 4:
-        return None
-    pre_low = min(_f(k, "low") for k in ks[:h1_idx + 1])
-    h1 = _f(ks[h1_idx], "high")
-    impulse_pct = (h1 - pre_low) / max(pre_low, 1e-12) * 100.0
-    if impulse_pct < float(params.get("impulse_min_pct", 4.0)):
-        return None
-    if not _ma_extension_ok(ks, h1_idx, "short", int(params.get("ma_period", 20)),
-                            float(params.get("ma_extension_pct", 1.5))):
-        return None
-    l1_rel = min(range(h1_idx + 1, len(ks)), key=lambda i: _f(ks[i], "low"))
-    if l1_rel >= len(ks) - 2:
-        return None
-    h2_rel = max(range(l1_rel + 1, len(ks)), key=lambda i: _f(ks[i], "high"))
-    h2 = _f(ks[h2_rel], "high")
-    tol = float(params.get("retest_tolerance_pct", 0.4)) / 100.0
-    if h2 >= h1 * (1 + tol):
-        return None
-    imp_vol = _slice_avg_volume(ks, max(0, h1_idx - 5), h1_idx)
-    reb_vol = _slice_avg_volume(ks, l1_rel + 1, h2_rel)
-    if imp_vol > 0 and reb_vol > imp_vol * float(params.get("volume_decay_ratio", 0.8)):
-        return None
-    trigger = _bearish_trigger(trigger_klines)
-    if not trigger:
-        return None
-    entry = _f(trigger_klines[-1], "close")
-    sl = h2 * (1 + float(params.get("stop_buffer_pct", 0.3)) / 100.0)
-    risk = sl - entry
-    if risk <= 0:
-        return None
-    profile = build_profile(ks[-int(params.get("tp_lookback", 100)):], int(params.get("vp_bins", 50)))
-    hvn = nearest_hvn_below(profile, entry)
-    tp = hvn if hvn and hvn < entry else entry - 2 * risk
-    rr = (entry - tp) / risk
-    if rr < float(params.get("min_rr", 1.5)):
-        tp = entry - max(float(params.get("min_rr", 1.5)), 2.0) * risk
-        rr = (entry - tp) / risk
-    return {
-        "direction": "short", "entry": entry, "sl": sl, "tp": tp, "rr": rr,
-        "trigger": trigger, "vol_ratio": round(reb_vol / imp_vol, 3) if imp_vol > 0 else 0.0,
-        "structure": {
-            "H1": h1, "L1": _f(ks[l1_rel], "low"), "H2": h2,
-            "H1_time": int(ks[h1_idx]["open_time"]),
-            "L1_time": int(ks[l1_rel]["open_time"]),
-            "H2_time": int(ks[h2_rel]["open_time"]),
-            "impulse_pct": round(impulse_pct, 3),
-        },
-    }
+def _long_second(klines: list, first: dict, params: dict) -> dict | None:
+    l1_idx = int(first["idx"])
+    l1 = _f(klines[l1_idx], "low")
+    min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
+    tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
+    bottoms = _bottoms_after(klines, l1_idx + 3)
+    for l2_idx in bottoms:
+        if _f(klines[l2_idx], "low") < l1 * (1 - tol):
+            continue
+        leg_high = max(_f(k, "high") for k in klines[l1_idx + 1:l2_idx + 1])
+        if (leg_high - l1) / max(l1, 1e-12) < min_leg:
+            continue
+        return {"L1": l1, "H1": leg_high, "L2": _f(klines[l2_idx], "low"),
+                "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"])}
+    return None
 
 
-def _long_setup(struct_klines: list, trigger_klines: list, params: dict) -> dict | None:
-    win = int(params.get("impulse_window", 24))
-    ks = struct_klines[-win:] if len(struct_klines) > win else struct_klines
-    if len(ks) < 8:
-        return None
-    search_end = max(2, len(ks) - 3)
-    l1_idx = min(range(search_end), key=lambda i: _f(ks[i], "low"))
-    if l1_idx < 2 or l1_idx >= len(ks) - 4:
-        return None
-    pre_high = max(_f(k, "high") for k in ks[:l1_idx + 1])
-    l1 = _f(ks[l1_idx], "low")
-    impulse_pct = (pre_high - l1) / max(pre_high, 1e-12) * 100.0
-    if impulse_pct < float(params.get("impulse_min_pct", 4.0)):
-        return None
-    if not _ma_extension_ok(ks, l1_idx, "long", int(params.get("ma_period", 20)),
-                            float(params.get("ma_extension_pct", 1.5))):
-        return None
-    h1_rel = max(range(l1_idx + 1, len(ks)), key=lambda i: _f(ks[i], "high"))
-    if h1_rel >= len(ks) - 2:
-        return None
-    l2_rel = min(range(h1_rel + 1, len(ks)), key=lambda i: _f(ks[i], "low"))
-    l2 = _f(ks[l2_rel], "low")
-    tol = float(params.get("retest_tolerance_pct", 0.4)) / 100.0
-    if l2 <= l1 * (1 - tol):
-        return None
-    imp_vol = _slice_avg_volume(ks, max(0, l1_idx - 5), l1_idx)
-    pb_vol = _slice_avg_volume(ks, h1_rel + 1, l2_rel)
-    if imp_vol > 0 and pb_vol > imp_vol * float(params.get("volume_decay_ratio", 0.8)):
-        return None
-    trigger = _bullish_trigger(trigger_klines)
-    if not trigger:
-        return None
-    entry = _f(trigger_klines[-1], "close")
-    sl = l2 * (1 - float(params.get("stop_buffer_pct", 0.3)) / 100.0)
-    risk = entry - sl
-    if risk <= 0:
-        return None
-    profile = build_profile(ks[-int(params.get("tp_lookback", 100)):], int(params.get("vp_bins", 50)))
-    hvn = nearest_hvn_above(profile, entry)
-    tp = hvn if hvn and hvn > entry else entry + 2 * risk
-    rr = (tp - entry) / risk
-    if rr < float(params.get("min_rr", 1.5)):
-        tp = entry + max(float(params.get("min_rr", 1.5)), 2.0) * risk
-        rr = (tp - entry) / risk
-    return {
-        "direction": "long", "entry": entry, "sl": sl, "tp": tp, "rr": rr,
-        "trigger": trigger, "vol_ratio": round(pb_vol / imp_vol, 3) if imp_vol > 0 else 0.0,
-        "structure": {
-            "L1": l1, "H1": _f(ks[h1_rel], "high"), "L2": l2,
-            "L1_time": int(ks[l1_idx]["open_time"]),
-            "H1_time": int(ks[h1_rel]["open_time"]),
-            "L2_time": int(ks[l2_rel]["open_time"]),
-            "impulse_pct": round(impulse_pct, 3),
-        },
-    }
+def _short_second(klines: list, first: dict, params: dict) -> dict | None:
+    h1_idx = int(first["idx"])
+    h1 = _f(klines[h1_idx], "high")
+    min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
+    tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
+    tops = _tops_after(klines, h1_idx + 3)
+    for h2_idx in tops:
+        if _f(klines[h2_idx], "high") > h1 * (1 + tol):
+            continue
+        leg_low = min(_f(k, "low") for k in klines[h1_idx + 1:h2_idx + 1])
+        if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
+            continue
+        return {"H1": h1, "L1": leg_low, "H2": _f(klines[h2_idx], "high"),
+                "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"])}
+    return None
+
+
+def _tp_for(klines: list, direction: str, entry: float, sl: float, params: dict) -> tuple[float, float]:
+    risk = abs(entry - sl)
+    profile = build_profile(klines[-int(params.get("tp_lookback", 100)):], int(params.get("vp_bins", 50)))
+    min_rr = float(params.get("min_rr", 1.5))
+    fallback_rr = max(min_rr, 2.0)
+    if direction == "long":
+        hvn = nearest_hvn_above(profile, entry)
+        tp = hvn if hvn and hvn > entry else entry + fallback_rr * risk
+        rr = (tp - entry) / max(risk, 1e-12)
+        if rr < min_rr:
+            tp = entry + fallback_rr * risk
+            rr = (tp - entry) / max(risk, 1e-12)
+    else:
+        hvn = nearest_hvn_below(profile, entry)
+        tp = hvn if hvn and hvn < entry else entry - fallback_rr * risk
+        rr = (entry - tp) / max(risk, 1e-12)
+        if rr < min_rr:
+            tp = entry - fallback_rr * risk
+            rr = (entry - tp) / max(risk, 1e-12)
+    return tp, rr
 
 
 def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list,
                           trigger_klines: list, params: dict):
-    if not params.get("enabled", True) or macro_direction not in ("long", "short"):
+    klines = trigger_klines or struct_klines
+    if not params.get("enabled", True) or macro_direction not in ("long", "short") or len(klines) < 8:
         return None
-    setup = (_short_setup(struct_klines, trigger_klines, params)
-             if macro_direction == "short"
-             else _long_setup(struct_klines, trigger_klines, params))
-    if not setup:
-        return None
+
+    if macro_direction == "long":
+        first = _find_spring(klines, params)
+        second = _long_second(klines, first, params) if first else None
+        if not first or not second:
+            return None
+        direction = "long"
+        entry = _f(klines[-1], "close")
+        sl = second["L2"] * (1 - float(params.get("stop_buffer_pct", 0.3)) / 100.0)
+        if sl >= entry:
+            return None
+        label = "second_buy"
+        side = "做多"
+    else:
+        first = _find_utad(klines, params)
+        second = _short_second(klines, first, params) if first else None
+        if not first or not second:
+            return None
+        direction = "short"
+        entry = _f(klines[-1], "close")
+        sl = second["H2"] * (1 + float(params.get("stop_buffer_pct", 0.3)) / 100.0)
+        if sl <= entry:
+            return None
+        label = "second_sell"
+        side = "做空"
+
+    tp, rr = _tp_for(klines, direction, entry, sl, params)
 
     from .signals import Signal
 
-    equity = float(params.get("account_equity", 1000))
-    risk_pct = float(params.get("risk_pct", 0.5))
-    risk_usdt = equity * risk_pct / 100.0
-    risk = abs(setup["entry"] - setup["sl"])
+    risk = abs(entry - sl)
+    risk_usdt = float(params.get("account_equity", 1000)) * float(params.get("risk_pct", 0.5)) / 100.0
     qty = risk_usdt / risk if risk > 0 else 0.0
-    label = "second_sell" if setup["direction"] == "short" else "second_buy"
-    side = "做空" if setup["direction"] == "short" else "做多"
+    tf = str(params.get("tf") or params.get("structure_tf") or "15m")
     reason = (
-        f"BTC手动{macro_direction} | 15m类{'二卖' if setup['direction'] == 'short' else '二买'}"
-        f" + {setup['trigger']}触发 {side}"
+        f"BTC手动{macro_direction} | {tf}威科夫{first['kind']}一{'买' if direction == 'long' else '卖'}"
+        f"后缠论{'二买' if direction == 'long' else '二卖'} {side}"
     )
     return Signal(
-        symbol=symbol, tf=str(params.get("structure_tf", "15m")),
-        direction=setup["direction"], kind="primary",
-        entry=round(setup["entry"], 8), sl=round(setup["sl"], 8), tp=round(setup["tp"], 8),
-        rr=round(setup["rr"], 2), vol_ratio=setup["vol_ratio"], strength="normal",
+        symbol=symbol, tf=tf, direction=direction, kind="primary",
+        entry=round(entry, 8), sl=round(sl, 8), tp=round(tp, 8), rr=round(rr, 2),
+        vol_ratio=float(first["vol_ratio"]), strength="strong",
         suggested_qty=round(qty, 8), risk_usdt=round(risk_usdt, 2),
         reason=reason, created_at=int(time.time()),
         extra={
             "path": "macro_chan_pullback",
             "type": label,
-            "trigger": setup["trigger"],
-            "structure": setup["structure"],
+            "wyckoff": first,
+            "structure": second,
             "macro": macro_direction,
         },
     )
