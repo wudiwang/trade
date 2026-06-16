@@ -7,6 +7,7 @@
 部署于 VPS `76.13.182.175`，`mode=paper`。推 `main` 触发 GitHub Actions 自动部署。
 
 ## 文档地图
+- **`DOCTRINE.md`** — 🧭 **纲领/最底座**：交易决策层级（大盘环境→预判→策略→买点→止盈损，不可跳级）。优先级最高，任何买点都要能追溯到它。
 - **`ROADMAP.md`** — 系统演化施工图（V5路线、分阶段规划、用户核心理念）。
 - **`RESEARCH.md`** — 📌 后续研究方向与待办（策略因子蓄水池：Volume Profile / Order Flow / ICT / FVG / Wyckoff / VWAP / 布林带 / MACD / 斐波那契 / 谐波）。**想新增研究方向就写这里。**
 - **`PLAN.md`** — 实施细节计划。
