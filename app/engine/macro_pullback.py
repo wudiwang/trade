@@ -215,6 +215,30 @@ def _tp_for(klines: list, direction: str, entry: float, sl: float, params: dict)
     return tp, rr
 
 
+def _structure_markers(klines: list, direction: str, first: dict, second: dict) -> list[dict]:
+    sweep_idx = int(first["sweep_idx"])
+    sweep_time = int(klines[sweep_idx]["open_time"])
+    if direction == "long":
+        return [
+            {"key": "first_fractal", "label": "L1底分型", "time": int(second["L1_time"]),
+             "price": float(second["L1"]), "position": "belowBar"},
+            {"key": "volume_sweep", "label": "爆量K", "time": sweep_time,
+             "price": float(klines[sweep_idx]["low"]), "position": "belowBar",
+             "vol_ratio": float(first["vol_ratio"])},
+            {"key": "second_fractal", "label": "L2底分型", "time": int(second["L2_time"]),
+             "price": float(second["L2"]), "position": "belowBar"},
+        ]
+    return [
+        {"key": "first_fractal", "label": "H1顶分型", "time": int(second["H1_time"]),
+         "price": float(second["H1"]), "position": "aboveBar"},
+        {"key": "volume_sweep", "label": "爆量K", "time": sweep_time,
+         "price": float(klines[sweep_idx]["high"]), "position": "aboveBar",
+         "vol_ratio": float(first["vol_ratio"])},
+        {"key": "second_fractal", "label": "H2顶分型", "time": int(second["H2_time"]),
+         "price": float(second["H2"]), "position": "aboveBar"},
+    ]
+
+
 def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list,
                           trigger_klines: list, params: dict):
     klines = trigger_klines or struct_klines
@@ -273,6 +297,7 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
             "type": label,
             "wyckoff": first,
             "structure": second,
+            "markers": _structure_markers(klines, direction, first, second),
             "macro": macro_direction,
         },
     )

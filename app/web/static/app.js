@@ -384,6 +384,34 @@ async function renderChart(symbol, tf, ref) {
       const bt = snap(Math.floor(ex.breakdown.time / 1000));
       if (bt != null) markers.push({time: bt, position: 'aboveBar', color: '#f1c40f', shape: 'circle', text: '破位K'});
     }
+    if (Array.isArray(ex.markers)) {
+      for (const m of ex.markers) {
+        const rawTime = Number(m.time || 0);
+        const mt = rawTime ? snap(Math.floor(rawTime / 1000)) : null;
+        if (mt == null) continue;
+        const isSweep = m.key === 'volume_sweep';
+        const text = isSweep && m.vol_ratio != null ? `${m.label} ${m.vol_ratio}x #${s.id}` : `${m.label} #${s.id}`;
+        const position = m.position || (s.direction === 'long' ? 'belowBar' : 'aboveBar');
+        const color = isSweep ? '#ff7043' : '#4f8ef7';
+        markers.push({
+          time: mt,
+          position,
+          color,
+          shape: isSweep ? 'square' : 'circle',
+          text,
+        });
+        if (m.price != null) {
+          cs.createPriceLine({
+            price: Number(m.price),
+            color,
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: text,
+          });
+        }
+      }
+    }
     if (ex.main_k && ex.main_k.time) {
       const mt = snap(Math.floor(ex.main_k.time / 1000));
       if (mt != null) markers.push({time: mt, position: 'aboveBar', color: '#9b59b6', shape: 'square', text: '🚩主力K'});
