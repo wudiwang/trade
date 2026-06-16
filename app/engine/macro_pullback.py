@@ -283,7 +283,7 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
     qty = risk_usdt / risk if risk > 0 else 0.0
     tf = str(params.get("tf") or params.get("structure_tf") or "15m")
     reason = (
-        f"BTC手动{macro_direction} | {tf}威科夫{first['kind']}一{'买' if direction == 'long' else '卖'}"
+        f"反转战法{macro_direction} | {tf}威科夫{first['kind']}一{'买' if direction == 'long' else '卖'}"
         f"后缠论{'二买' if direction == 'long' else '二卖'} {side}"
     )
     return Signal(
