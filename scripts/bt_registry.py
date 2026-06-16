@@ -29,14 +29,12 @@ def load_strat(name):
 
 
 def cache_loader(days):
-    """返回 C(tf)->{symbol: klines},读 .btcache 当日缓存,带记忆。"""
-    date = time.strftime("%Y%m%d")
-
+    """返回 C(tf)->{symbol: klines},读 .btcache 缓存(覆盖式, 文件名不带日期), 带记忆。"""
     def C(tf):
-        key = (tf, days, date)
+        key = (tf, days)
         if key in _CACHE_MEM:
             return _CACHE_MEM[key]
-        tag = f"_{tf}_{days}d_{date}.json"
+        tag = f"_{tf}_{days}d.json"
         out = {}
         for f in glob.glob(os.path.join(CACHE, f"*{tag}")):
             sym = os.path.basename(f)[: -len(tag)]
@@ -155,6 +153,49 @@ META = {
 
 SCANS = {"smallbig": scan_smallbig, "pullback": scan_pullback,
          "deepbase": scan_deepbase, "reversal": scan_reversal}
+
+
+def score(strat, days=30, spans=(7, 14, 30), fee_pct_side=0.045, n_samples=8):
+    """单策略成绩单:1周/2周/1月 × 多空,含扣费后净期望 + 代表性样本。供策略研究Agent判断。"""
+    sigs, _ = scan_all(days, [strat])
+    ref = max((s["created_at"] for s in sigs), default=0)
+
+    def bucket(rows):
+        out = {}
+        for s in rows:
+            d = s["direction"]
+            b = out.setdefault(d, {"n": 0, "closed": 0, "wins": 0, "r": 0.0, "rnet": 0.0})
+            b["n"] += 1
+            if s.get("result") in ("tp", "sl"):
+                b["closed"] += 1
+                b["r"] += s["pnl_r"]
+                risk = abs(s["entry"] - s["sl"]) or 1e-9
+                cost = 2 * (fee_pct_side / 100.0) * s["entry"] / risk     # 往返手续费(R)
+                b["rnet"] += s["pnl_r"] - cost
+                if s["result"] == "tp":
+                    b["wins"] += 1
+        for b in out.values():
+            c = b["closed"] or 1
+            b["win_rate"] = round(b["wins"] / c * 100, 1)
+            b["exp_r"] = round(b["r"] / c, 3)
+            b["exp_net_r"] = round(b["rnet"] / c, 3)
+            b["total_r"] = round(b["r"], 1)
+        return out
+
+    by = {}
+    for sp in spans:
+        cut = ref - sp * 86400
+        by[f"{sp}d"] = bucket([s for s in sigs if s["created_at"] >= cut])
+    closed = [s for s in sigs if s.get("result") in ("tp", "sl")]
+    wins = [s for s in closed if s["result"] == "tp"][:n_samples // 2]
+    losses = [s for s in closed if s["result"] == "sl"][:n_samples - len(wins)]
+    samp = [{"sym": s["symbol"], "dir": s["direction"], "t": s["created_at"],
+             "entry": s["entry"], "sl": s["sl"], "tp": s["tp"], "result": s["result"],
+             "pnl_r": s["pnl_r"], "climaxX": s.get("climaxX"), "movePct": s.get("movePct")}
+            for s in wins + losses]
+    return {"strat": strat, "label": META.get(strat, {}).get("label", strat),
+            "days": days, "fee_pct_side": fee_pct_side, "n_sig": len(sigs),
+            "by_span": by, "samples": samp}
 
 
 def scan_all(days, strats=None):

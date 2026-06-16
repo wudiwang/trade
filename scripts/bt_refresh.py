@@ -62,12 +62,12 @@ async def top_symbols(session, top):
 
 
 def _cache_path(sym, tf, days):
-    return os.path.join(CACHE, f"{sym}_{tf}_{days}d_{time.strftime('%Y%m%d')}.json")
+    return os.path.join(CACHE, f"{sym}_{tf}_{days}d.json")
 
 
 def _load_prev(sym, tf, days):
     """读最近一份该(sym,tf,days)缓存(任意日期),用于增量起点。"""
-    files = sorted(glob.glob(os.path.join(CACHE, f"{sym}_{tf}_{days}d_*.json")))
+    p = os.path.join(CACHE, f"{sym}_{tf}_{days}d.json"); files = [p] if os.path.exists(p) else []
     if not files:
         return []
     try:

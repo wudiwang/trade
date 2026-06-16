@@ -79,7 +79,7 @@ async def top_symbols(session, top=0):
 
 
 async def fetch_5m(session, symbol, days, refresh=False):
-    cache = os.path.join(CACHE, f"{symbol}_5m_{days}d_{time.strftime('%Y%m%d')}.json")
+    cache = os.path.join(CACHE, f"{symbol}_5m_{days}d.json")
     if os.path.exists(cache) and not refresh:
         return json.load(open(cache))
     tf_ms = 300 * 1000
@@ -146,7 +146,7 @@ async def main():
     series_by_sym = {}
     if a.cached_only:
         import glob
-        tag = f"_5m_{a.days}d_{time.strftime('%Y%m%d')}.json"
+        tag = f"_5m_{a.days}d.json"
         for f in glob.glob(os.path.join(CACHE, f"*{tag}")):
             sym = os.path.basename(f)[: -len(tag)]
             series_by_sym[sym] = json.load(open(f))
