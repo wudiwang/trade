@@ -141,8 +141,7 @@ class SignalEngine:
         if self._p("macro_pullback.enabled", True) and self._p("macro_pullback.exclusive", True):
             if tf not in (self._p("macro_pullback.timeframes", ["5m", "15m"]) or ["5m", "15m"]):
                 return []
-            mp = self._eval_macro_pullback(symbol, kbt, tf)
-            return [mp] if mp else []
+            return self._eval_macro_pullbacks(symbol, kbt, tf)
         if self._p("strategy", "chan_bi") != "chan_bi":
             s = self.evaluate(symbol, tf, kbt.get(tf, []))
             return [s] if s else []
@@ -161,9 +160,7 @@ class SignalEngine:
         if hs:
             out.append(hs)
         if tf == "5m":
-            mp = self._eval_macro_pullback(symbol, kbt, tf)
-            if mp:
-                out.append(mp)
+            out.extend(self._eval_macro_pullbacks(symbol, kbt, tf))
             s = self._eval_chan_bi(symbol, "5m", own)        # 5m 自身(底分型+5m停顿)
             if s:
                 out.append(s)
@@ -180,6 +177,7 @@ class SignalEngine:
         keys = (
             "enabled", "exclusive", "timeframes", "structure_tf", "trigger_tf", "context_tf",
             "vol_ma", "vol_mult", "lookback", "reclaim_bars", "reclaim_tolerance_pct",
+            "reclaim_body_pct",
             "min_leg_pct", "second_tolerance_pct", "stop_buffer_pct", "cooldown_bars",
             "max_signal_bars_after_second", "max_entry_distance_r", "max_entry_distance_pct",
             "missed_midpoint_filter", "min_effective_bars_between",
@@ -191,10 +189,30 @@ class SignalEngine:
         params["risk_pct"] = self._p("risk.risk_pct", 0.5)
         return params
 
-    def _eval_macro_pullback(self, symbol: str, kbt: dict, tf: str) -> "Signal | None":
+    def _macro_directions(self) -> list[str]:
+        directions = self._p("macro_pullback.directions", ["long", "short"])
+        if directions in ("both", "all"):
+            return ["long", "short"]
+        if isinstance(directions, str):
+            directions = [directions]
+        out = [d for d in (directions or []) if d in ("long", "short")]
+        if out:
+            return out
+        mv = (self.macro_view or {}).get("direction", "neutral")
+        return [mv] if mv in ("long", "short") else []
+
+    def _eval_macro_pullbacks(self, symbol: str, kbt: dict, tf: str) -> list["Signal"]:
+        out = []
+        for direction in self._macro_directions():
+            sig = self._eval_macro_pullback(symbol, kbt, tf, direction)
+            if sig:
+                out.append(sig)
+        return out
+
+    def _eval_macro_pullback(self, symbol: str, kbt: dict, tf: str, direction: str | None = None) -> "Signal | None":
         if not self._p("macro_pullback.enabled", True):
             return None
-        direction = (self.macro_view or {}).get("direction", "neutral")
+        direction = direction or (self.macro_view or {}).get("direction", "neutral")
         if direction not in ("long", "short"):
             return None
         klines = kbt.get(tf, [])

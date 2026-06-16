@@ -44,12 +44,21 @@ def _effective_bar_count(klines: list, start_idx: int, end_idx: int) -> int:
     return len(merge_klines(klines[start_idx:end_idx + 1]))
 
 
+def _body_reclaim_level(kline: dict, direction: str, pct: float) -> float:
+    body_low = min(_f(kline, "open"), _f(kline, "close"))
+    body_high = max(_f(kline, "open"), _f(kline, "close"))
+    body = body_high - body_low
+    if direction == "long":
+        return body_low + body * pct
+    return body_high - body * pct
+
+
 def _find_spring(klines: list, params: dict) -> dict | None:
     lookback = int(params.get("lookback", 20))
     vol_ma = int(params.get("vol_ma", 20))
     vol_mult = float(params.get("vol_mult", 3.0))
     reclaim_bars = int(params.get("reclaim_bars", 4))
-    tol = float(params.get("reclaim_tolerance_pct", 0.5)) / 100.0
+    body_pct = float(params.get("reclaim_body_pct", 80)) / 100.0
     end = len(klines) - 3
     for i in range(vol_ma, end):
         start = max(0, i - lookback)
@@ -61,11 +70,11 @@ def _find_spring(klines: list, params: dict) -> dict | None:
         vr = _vol_ratio(klines, i, vol_ma)
         if vr < vol_mult:
             continue
-        down_start = max(_f(k, "high") for k in klines[start:i])
+        reclaim_level = _body_reclaim_level(klines[i], "long", body_pct)
         reclaim_end = min(len(klines) - 1, i + reclaim_bars)
         reclaimed_at = None
         for j in range(i + 1, reclaim_end + 1):
-            if _f(klines[j], "close") >= down_start * (1 - tol):
+            if _f(klines[j], "close") >= reclaim_level:
                 reclaimed_at = j
                 break
         if reclaimed_at is None:
@@ -76,7 +85,7 @@ def _find_spring(klines: list, params: dict) -> dict | None:
         l1 = min(bottom_candidates, key=lambda x: _f(klines[x], "low"))
         return {
             "kind": "spring", "idx": l1, "sweep_idx": i, "reclaimed_at": reclaimed_at,
-            "level": prior_low, "start_price": down_start, "vol_ratio": round(vr, 2),
+            "level": prior_low, "reclaim_level": round(reclaim_level, 8), "vol_ratio": round(vr, 2),
         }
     return None
 
@@ -86,7 +95,7 @@ def _find_utad(klines: list, params: dict) -> dict | None:
     vol_ma = int(params.get("vol_ma", 20))
     vol_mult = float(params.get("vol_mult", 3.0))
     reclaim_bars = int(params.get("reclaim_bars", 4))
-    tol = float(params.get("reclaim_tolerance_pct", 0.5)) / 100.0
+    body_pct = float(params.get("reclaim_body_pct", 80)) / 100.0
     end = len(klines) - 3
     for i in range(vol_ma, end):
         start = max(0, i - lookback)
@@ -98,11 +107,11 @@ def _find_utad(klines: list, params: dict) -> dict | None:
         vr = _vol_ratio(klines, i, vol_ma)
         if vr < vol_mult:
             continue
-        up_start = min(_f(k, "low") for k in klines[start:i])
+        reclaim_level = _body_reclaim_level(klines[i], "short", body_pct)
         reclaim_end = min(len(klines) - 1, i + reclaim_bars)
         reclaimed_at = None
         for j in range(i + 1, reclaim_end + 1):
-            if _f(klines[j], "close") <= up_start * (1 + tol):
+            if _f(klines[j], "close") <= reclaim_level:
                 reclaimed_at = j
                 break
         if reclaimed_at is None:
@@ -113,7 +122,7 @@ def _find_utad(klines: list, params: dict) -> dict | None:
         h1 = max(top_candidates, key=lambda x: _f(klines[x], "high"))
         return {
             "kind": "utad", "idx": h1, "sweep_idx": i, "reclaimed_at": reclaimed_at,
-            "level": prior_high, "start_price": up_start, "vol_ratio": round(vr, 2),
+            "level": prior_high, "reclaim_level": round(reclaim_level, 8), "vol_ratio": round(vr, 2),
         }
     return None
 

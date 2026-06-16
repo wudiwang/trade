@@ -31,6 +31,7 @@ def cfg(**overrides):
         "lookback": 5,
         "reclaim_bars": 3,
         "reclaim_tolerance_pct": 0.5,
+        "reclaim_body_pct": 80,
         "min_leg_pct": 1.0,
         "second_tolerance_pct": 0.2,
         "stop_buffer_pct": 0.3,
@@ -71,6 +72,28 @@ def spring_then_second_buy():
         (101, 103, 100.2, 100.6, 90),
         (100.6, 102, 100, 100.4, 90),  # L2, higher than L1
         (100.4, 101.2, 100.2, 100.3, 110),  # confirms second bottom near L2
+    ]
+    return [k(*row, t=i) for i, row in enumerate(vals)]
+
+
+def body_reclaim_spring_then_second_buy():
+    vals = [
+        (111, 112, 109, 110, 100),
+        (109, 110, 106, 107, 100),
+        (106, 107, 103, 104, 100),
+        (103, 104, 100, 101, 100),
+        (100, 101, 98, 99, 100),
+        (99, 100, 94, 95, 360),       # body 80% reclaim level is 98.2
+        (95, 101, 95, 99, 130),       # reclaims body, not prior down-leg start
+        (99, 103, 97, 102, 140),
+        (102, 105, 99, 104, 130),
+        (104, 107, 101, 106, 100),
+        (106, 106, 102, 104, 100),
+        (104, 105, 101, 102, 95),
+        (102, 104, 100.5, 101, 90),
+        (101, 103, 100.2, 100.6, 90),
+        (100.6, 102, 100, 100.4, 90),
+        (100.4, 101.2, 100.2, 100.3, 110),
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
@@ -149,6 +172,16 @@ def test_detect_second_buy_requires_prior_high_volume_spring():
     assert abs((sig.tp - sig.entry) / risk - 2.0) < 0.01
 
 
+def test_spring_reclaims_when_price_stands_back_above_80pct_of_sweep_body():
+    sig = detect_macro_pullback(
+        "HUSDT", "long", body_reclaim_spring_then_second_buy(), body_reclaim_spring_then_second_buy(), cfg()
+    )
+    assert sig is not None
+    assert sig.direction == "long"
+    assert sig.extra["wyckoff"]["reclaim_level"] == 98.2
+    assert sig.extra["wyckoff"]["reclaimed_at"] == 6
+
+
 def test_detect_second_sell_requires_prior_high_volume_utad():
     sig = detect_macro_pullback("SOLUSDT", "short", utad_then_second_sell(), utad_then_second_sell(), cfg())
     assert sig is not None
@@ -192,11 +225,13 @@ class MiniCfg:
             "macro_pullback.enabled": True,
             "macro_pullback.exclusive": True,
             "macro_pullback.timeframes": ["5m", "15m"],
+            "macro_pullback.directions": ["long", "short"],
             "macro_pullback.vol_ma": 5,
             "macro_pullback.vol_mult": 2.5,
             "macro_pullback.lookback": 5,
             "macro_pullback.reclaim_bars": 3,
             "macro_pullback.reclaim_tolerance_pct": 0.5,
+            "macro_pullback.reclaim_body_pct": 80,
             "macro_pullback.min_leg_pct": 1.0,
             "macro_pullback.second_tolerance_pct": 0.2,
             "macro_pullback.stop_buffer_pct": 0.3,
@@ -253,6 +288,17 @@ def test_exclusive_mode_returns_only_macro_pullback_signal():
 
     assert len(out) == 1
     assert out[0].extra["path"] == "macro_chan_pullback"
+
+
+def test_exclusive_mode_monitors_long_and_short_by_default():
+    eng = SignalEngine(MiniCfg(), FakeDB())
+    eng.macro_view = {"direction": "short", "note": "manual", "at": 1}
+
+    out = eng.evaluate_all("HUSDT", "5m", {"15m": [], "5m": body_reclaim_spring_then_second_buy(), "1h": []})
+
+    assert len(out) == 1
+    assert out[0].direction == "long"
+    assert out[0].extra["type"] == "second_buy"
 
 
 def test_same_second_fractal_does_not_refire_after_cooldown_window():

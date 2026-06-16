@@ -22,6 +22,7 @@ macro_pullback:
   enabled: true
   exclusive: true          # true=paper只跑这套BTC手动二买/二卖策略
   timeframes: ["5m", "15m"]
+  directions: ["long", "short"]       # 默认多空双向监控
   structure_tf: 15m
   trigger_tf: 5m
   context_tf: 1h
@@ -30,6 +31,7 @@ macro_pullback:
   lookback: 20
   reclaim_bars: 4
   reclaim_tolerance_pct: 0.5
+  reclaim_body_pct: 80       # spring/UTAD: 后续K收回爆量K实体80%区间即成立
   min_leg_pct: 0.8
   second_tolerance_pct: 0.2
   stop_buffer_pct: 0.3
