@@ -78,7 +78,7 @@ def detect_reversal(k5: list, ctx_lookup, direction: str, P: dict) -> list[dict]
         if not is_cli:
             i += 1
             continue
-        if not ctx_lookup(int(k5[i]["open_time"]) + 300 * 1000, direction):
+        if not ctx_lookup(int(k5[i]["open_time"]) + 300 * 1000):
             i += 1
             continue
         P_start = o[i]                       # 起跌位 = 标志K开盘
