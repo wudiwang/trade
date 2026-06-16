@@ -60,7 +60,7 @@ def _find_spring(klines: list, params: dict) -> dict | None:
     reclaim_bars = int(params.get("reclaim_bars", 4))
     body_pct = float(params.get("reclaim_body_pct", 80)) / 100.0
     end = len(klines) - 3
-    for i in range(vol_ma, end):
+    for i in range(end - 1, vol_ma - 1, -1):
         start = max(0, i - lookback)
         if i - start < 3:
             continue
@@ -97,7 +97,7 @@ def _find_utad(klines: list, params: dict) -> dict | None:
     reclaim_bars = int(params.get("reclaim_bars", 4))
     body_pct = float(params.get("reclaim_body_pct", 80)) / 100.0
     end = len(klines) - 3
-    for i in range(vol_ma, end):
+    for i in range(end - 1, vol_ma - 1, -1):
         start = max(0, i - lookback)
         if i - start < 3:
             continue

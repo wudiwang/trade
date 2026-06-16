@@ -98,6 +98,15 @@ def body_reclaim_spring_then_second_buy():
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
 
+def old_missed_then_recent_body_reclaim_buy():
+    old = body_reclaim_spring_then_second_buy()
+    spacer = [k(130, 131, 129, 130, 80, t=len(old) + i) for i in range(8)]
+    recent = body_reclaim_spring_then_second_buy()
+    offset = len(old) + len(spacer)
+    recent = [dict(row, open_time=(offset + i) * 300000) for i, row in enumerate(recent)]
+    return old + spacer + recent
+
+
 def utad_then_second_sell():
     vals = [
         (97, 98, 96, 97, 100),
@@ -180,6 +189,15 @@ def test_spring_reclaims_when_price_stands_back_above_80pct_of_sweep_body():
     assert sig.direction == "long"
     assert sig.extra["wyckoff"]["reclaim_level"] == 98.2
     assert sig.extra["wyckoff"]["reclaimed_at"] == 6
+
+
+def test_uses_latest_valid_spring_in_window_not_stale_older_one():
+    sig = detect_macro_pullback(
+        "HUSDT", "long", old_missed_then_recent_body_reclaim_buy(), old_missed_then_recent_body_reclaim_buy(), cfg()
+    )
+    assert sig is not None
+    assert sig.extra["wyckoff"]["sweep_idx"] > 20
+    assert sig.extra["structure"]["L2_idx"] > sig.extra["wyckoff"]["sweep_idx"]
 
 
 def test_detect_second_sell_requires_prior_high_volume_utad():
