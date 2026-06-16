@@ -1,7 +1,11 @@
 """Replay today's macro pullback signals and write them into paper trades."""
 import asyncio
 import json
+import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import get_config
 from app.db import DB
