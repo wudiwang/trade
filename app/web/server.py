@@ -192,6 +192,15 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         pb = PaperBroker(cfg, db)
         return {"rr5": pb.stats("rr5"), "rr25": pb.stats("rr25")}
 
+    @app.get("/api/strategy_stats")
+    async def strategy_stats():
+        from app.web.strategy_stats import build_strategy_stats
+        rows = db.query(
+            "SELECT pt.track, pt.result, pt.pnl, pt.pnl_r, s.extra AS sig_extra "
+            "FROM paper_trades pt LEFT JOIN signals s ON s.id=pt.signal_id ORDER BY pt.id"
+        )
+        return build_strategy_stats([dict(r) for r in rows])
+
     # ---------- 关注列表 Watchlist (P4) ----------
     @app.get("/api/watchlist")
     async def watch_list():
