@@ -175,6 +175,26 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
     return None
 
 
+def _stall_entry_idx(direction: str, klines: list, second: dict, params: dict) -> int | None:
+    max_bars = int(params.get("max_signal_bars_after_second", 2))
+    last_idx = len(klines) - 1
+    if direction == "long":
+        second_idx = int(second["L2_idx"])
+        right_idx = second_idx + 1
+        if right_idx >= len(klines):
+            return None
+        if last_idx <= right_idx or last_idx - second_idx > max_bars:
+            return None
+        return last_idx if _f(klines[last_idx], "close") > _f(klines[right_idx], "high") else None
+    second_idx = int(second["H2_idx"])
+    right_idx = second_idx + 1
+    if right_idx >= len(klines):
+        return None
+    if last_idx <= right_idx or last_idx - second_idx > max_bars:
+        return None
+    return last_idx if _f(klines[last_idx], "close") < _f(klines[right_idx], "low") else None
+
+
 def _entry_near_second(direction: str, klines: list, second: dict, entry: float, sl: float, params: dict) -> bool:
     max_bars = int(params.get("max_signal_bars_after_second", 2))
     max_r = float(params.get("max_entry_distance_r", 0.3))
@@ -250,8 +270,13 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         second = _long_second(klines, first, params) if first else None
         if not first or not second:
             return None
+        entry_idx = _stall_entry_idx("long", klines, second, params)
+        if entry_idx is None:
+            return None
+        second["entry_idx"] = entry_idx
+        second["entry_time"] = int(klines[entry_idx]["open_time"])
         direction = "long"
-        entry = _f(klines[-1], "close")
+        entry = _f(klines[entry_idx], "close")
         sl = second["L2"] * (1 - float(params.get("stop_buffer_pct", 0.3)) / 100.0)
         if sl >= entry:
             return None
@@ -264,8 +289,13 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         second = _short_second(klines, first, params) if first else None
         if not first or not second:
             return None
+        entry_idx = _stall_entry_idx("short", klines, second, params)
+        if entry_idx is None:
+            return None
+        second["entry_idx"] = entry_idx
+        second["entry_time"] = int(klines[entry_idx]["open_time"])
         direction = "short"
-        entry = _f(klines[-1], "close")
+        entry = _f(klines[entry_idx], "close")
         sl = second["H2"] * (1 + float(params.get("stop_buffer_pct", 0.3)) / 100.0)
         if sl <= entry:
             return None

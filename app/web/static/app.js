@@ -348,7 +348,8 @@ async function renderChart(symbol, tf, ref) {
   for (const s of d.signals.filter(x => x.status !== 'error')) {
     let ex = {};
     try { ex = JSON.parse(s.extra || '{}'); } catch (e) {}
-    const et = snap(s.created_at);
+    const entryTime = ex.structure && ex.structure.entry_time ? Math.floor(Number(ex.structure.entry_time) / 1000) : s.created_at;
+    const et = snap(entryTime);
     if (et != null) markers.push({
       time: et, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
       color: '#ffd700',                                   // 买入点统一黄色, 醒目区分入场位置
