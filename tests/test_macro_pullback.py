@@ -176,6 +176,14 @@ def test_detect_second_buy_requires_prior_high_volume_spring():
     assert sig.extra["path"] == "macro_chan_pullback"
     assert sig.extra["wyckoff"]["kind"] == "spring"
     assert sig.extra["structure"]["L2"] > sig.extra["structure"]["L1"]
+    markers = sig.extra["markers"]
+    assert [m["key"] for m in markers] == ["first_fractal", "volume_sweep", "second_fractal"]
+    assert markers[0]["label"] == "L1底分型"
+    assert markers[1]["label"] == "爆量K"
+    assert markers[2]["label"] == "L2底分型"
+    assert markers[0]["time"] == sig.extra["structure"]["L1_time"]
+    assert markers[1]["time"] == spring_then_second_buy()[sig.extra["wyckoff"]["sweep_idx"]]["open_time"]
+    assert markers[2]["time"] == sig.extra["structure"]["L2_time"]
     assert sig.sl < sig.entry < sig.tp
     risk = sig.entry - sig.sl
     assert abs((sig.tp - sig.entry) / risk - 2.0) < 0.01
@@ -207,6 +215,14 @@ def test_detect_second_sell_requires_prior_high_volume_utad():
     assert sig.extra["type"] == "second_sell"
     assert sig.extra["wyckoff"]["kind"] == "utad"
     assert sig.extra["structure"]["H2"] < sig.extra["structure"]["H1"]
+    markers = sig.extra["markers"]
+    assert [m["key"] for m in markers] == ["first_fractal", "volume_sweep", "second_fractal"]
+    assert markers[0]["label"] == "H1顶分型"
+    assert markers[1]["label"] == "爆量K"
+    assert markers[2]["label"] == "H2顶分型"
+    assert markers[0]["time"] == sig.extra["structure"]["H1_time"]
+    assert markers[1]["time"] == utad_then_second_sell()[sig.extra["wyckoff"]["sweep_idx"]]["open_time"]
+    assert markers[2]["time"] == sig.extra["structure"]["H2_time"]
     assert sig.tp < sig.entry < sig.sl
     risk = sig.sl - sig.entry
     assert abs((sig.entry - sig.tp) / risk - 0.8) < 0.01
