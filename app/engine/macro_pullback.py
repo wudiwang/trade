@@ -44,6 +44,22 @@ def _effective_bar_count(klines: list, start_idx: int, end_idx: int) -> int:
     return len(merge_klines(klines[start_idx:end_idx + 1]))
 
 
+def _is_chan_fractal_extreme(klines: list, idx: int, kind: str) -> bool:
+    from .chan import find_fractals, merge_klines
+    for fx in find_fractals(klines, merge_klines(klines)):
+        if fx.kind == kind and int(fx.extreme_src_idx) == idx:
+            return True
+    return False
+
+
+def _invalidated_extreme(klines: list, idx: int, direction: str, tolerance_pct: float = 0.0) -> bool:
+    if direction == "long":
+        base = _f(klines[idx], "low") * (1 - tolerance_pct / 100.0)
+        return any(_f(k, "low") < base for k in klines[idx + 1:])
+    base = _f(klines[idx], "high") * (1 + tolerance_pct / 100.0)
+    return any(_f(k, "high") > base for k in klines[idx + 1:])
+
+
 def _body_reclaim_level(kline: dict, direction: str, pct: float) -> float:
     body_low = min(_f(kline, "open"), _f(kline, "close"))
     body_high = max(_f(kline, "open"), _f(kline, "close"))
@@ -83,6 +99,10 @@ def _find_spring(klines: list, params: dict) -> dict | None:
         if not bottom_candidates:
             continue
         l1 = min(bottom_candidates, key=lambda x: _f(klines[x], "low"))
+        if not _is_chan_fractal_extreme(klines, l1, "bottom"):
+            continue
+        if _invalidated_extreme(klines, l1, "long"):
+            continue
         return {
             "kind": "spring", "idx": l1, "sweep_idx": i, "reclaimed_at": reclaimed_at,
             "level": prior_low, "reclaim_level": round(reclaim_level, 8), "vol_ratio": round(vr, 2),
@@ -120,6 +140,10 @@ def _find_utad(klines: list, params: dict) -> dict | None:
         if not top_candidates:
             continue
         h1 = max(top_candidates, key=lambda x: _f(klines[x], "high"))
+        if not _is_chan_fractal_extreme(klines, h1, "top"):
+            continue
+        if _invalidated_extreme(klines, h1, "short"):
+            continue
         return {
             "kind": "utad", "idx": h1, "sweep_idx": i, "reclaimed_at": reclaimed_at,
             "level": prior_high, "reclaim_level": round(reclaim_level, 8), "vol_ratio": round(vr, 2),
@@ -181,18 +205,22 @@ def _stall_entry_idx(direction: str, klines: list, second: dict, params: dict) -
     if direction == "long":
         second_idx = int(second["L2_idx"])
         right_idx = second_idx + 1
-        if right_idx >= len(klines):
+        stall_idx = right_idx + 1
+        entry_idx = stall_idx + 1
+        if entry_idx >= len(klines) or last_idx != entry_idx:
             return None
-        if last_idx <= right_idx or last_idx - second_idx > max_bars:
+        if stall_idx - second_idx > max_bars:
             return None
-        return last_idx if _f(klines[last_idx], "close") > _f(klines[right_idx], "high") else None
+        return entry_idx if _f(klines[stall_idx], "close") > _f(klines[right_idx], "high") else None
     second_idx = int(second["H2_idx"])
     right_idx = second_idx + 1
-    if right_idx >= len(klines):
+    stall_idx = right_idx + 1
+    entry_idx = stall_idx + 1
+    if entry_idx >= len(klines) or last_idx != entry_idx:
         return None
-    if last_idx <= right_idx or last_idx - second_idx > max_bars:
+    if stall_idx - second_idx > max_bars:
         return None
-    return last_idx if _f(klines[last_idx], "close") < _f(klines[right_idx], "low") else None
+    return entry_idx if _f(klines[stall_idx], "close") < _f(klines[right_idx], "low") else None
 
 
 def _entry_near_second(direction: str, klines: list, second: dict, entry: float, sl: float, params: dict) -> bool:
@@ -212,7 +240,8 @@ def _entry_near_second(direction: str, klines: list, second: dict, entry: float,
         midpoint = (float(second["H1"]) + float(second["L1"])) / 2.0
         missed_midpoint = entry <= midpoint
 
-    if len(klines) - 1 - second_idx > max_bars:
+    freshness_idx = int(second.get("stall_idx", len(klines) - 1))
+    if freshness_idx - second_idx > max_bars:
         return False
     if midpoint_filter and missed_midpoint:
         return False
@@ -274,6 +303,8 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         if entry_idx is None:
             return None
         second["entry_idx"] = entry_idx
+        second["stall_idx"] = entry_idx - 1
+        second["stall_time"] = int(klines[entry_idx - 1]["open_time"])
         second["entry_time"] = int(klines[entry_idx]["open_time"])
         direction = "long"
         entry = _f(klines[entry_idx], "close")
@@ -293,6 +324,8 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         if entry_idx is None:
             return None
         second["entry_idx"] = entry_idx
+        second["stall_idx"] = entry_idx - 1
+        second["stall_time"] = int(klines[entry_idx - 1]["open_time"])
         second["entry_time"] = int(klines[entry_idx]["open_time"])
         direction = "short"
         entry = _f(klines[entry_idx], "close")

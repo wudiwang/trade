@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.engine.macro_pullback import detect_macro_pullback
+from app.engine.macro_pullback import detect_macro_pullback, _find_spring
 from app.engine.signals import Signal, SignalEngine
 
 
@@ -73,6 +73,7 @@ def spring_then_second_buy():
         (100.6, 102, 100, 100.4, 90),  # L2, higher than L1
         (100.4, 100.45, 100.2, 100.3, 110),  # confirms second bottom near L2
         (100.3, 100.5, 100.25, 100.46, 110),  # stall bar: close > right K high
+        (100.46, 100.55, 100.35, 100.49, 110),  # entry bar after stall
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
@@ -96,6 +97,7 @@ def body_reclaim_spring_then_second_buy():
         (100.6, 102, 100, 100.4, 90),
         (100.4, 100.45, 100.2, 100.3, 110),
         (100.3, 100.5, 100.25, 100.46, 110),
+        (100.46, 100.55, 100.35, 100.49, 110),
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
@@ -128,6 +130,7 @@ def utad_then_second_sell():
         (101, 103, 99, 102, 90),      # H2, below H1
         (102, 102.9, 102.6, 102.7, 110),  # confirms second top near H2
         (102.7, 102.8, 102.5, 102.55, 110),  # stall bar: close < right K low
+        (102.55, 102.6, 102.4, 102.5, 110),  # entry bar after stall
     ]
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
@@ -151,12 +154,42 @@ def far_from_second_sell():
 
 def second_buy_without_stall():
     vals = list(spring_then_second_buy())
-    return vals[:-1]
+    return vals[:-2]
 
 
 def second_sell_without_stall():
     vals = list(utad_then_second_sell())
+    return vals[:-2]
+
+
+def second_buy_without_entry_bar_after_stall():
+    vals = list(spring_then_second_buy())
     return vals[:-1]
+
+
+def invalid_mid_leg_spring_then_second_buy():
+    vals = [
+        (111, 112, 109, 110, 100),
+        (109, 110, 106, 107, 100),
+        (106, 107, 103, 104, 100),
+        (103, 104, 100, 101, 100),
+        (100, 101, 98, 99, 100),
+        (99, 100, 94, 95, 360),       # local sweep, but not the completed down-leg bottom
+        (95, 101, 95, 99, 130),       # body reclaim
+        (99, 100, 93, 94, 100),
+        (94, 98, 91, 92, 100),
+        (92, 96, 90, 95, 100),        # later lower low, so the volume L1 is mid-leg
+        (95, 102, 94, 101, 120),
+        (101, 107, 100, 106, 120),
+        (106, 106, 102, 103, 100),
+        (103, 104, 100.6, 101, 90),
+        (101, 103, 100.2, 100.6, 90),
+        (100.6, 102, 100.0, 100.4, 90),
+        (100.4, 100.45, 100.2, 100.3, 110),
+        (100.3, 100.5, 100.25, 100.46, 110),
+        (100.46, 100.55, 100.35, 100.49, 110),
+    ]
+    return [k(*row, t=i) for i, row in enumerate(vals)]
 
 
 def below_down_leg_midpoint_sell():
@@ -197,6 +230,7 @@ def test_detect_second_buy_requires_prior_high_volume_spring():
     assert markers[0]["time"] == sig.extra["structure"]["L1_time"]
     assert markers[1]["time"] == spring_then_second_buy()[sig.extra["wyckoff"]["sweep_idx"]]["open_time"]
     assert markers[2]["time"] == sig.extra["structure"]["L2_time"]
+    assert sig.extra["structure"]["stall_time"] == spring_then_second_buy()[-2]["open_time"]
     assert sig.extra["structure"]["entry_time"] == spring_then_second_buy()[-1]["open_time"]
     assert sig.sl < sig.entry < sig.tp
     risk = sig.entry - sig.sl
@@ -229,6 +263,7 @@ def test_detect_second_sell_requires_prior_high_volume_utad():
     assert sig.extra["type"] == "second_sell"
     assert sig.extra["wyckoff"]["kind"] == "utad"
     assert sig.extra["structure"]["H2"] < sig.extra["structure"]["H1"]
+    assert sig.extra["structure"]["stall_time"] == utad_then_second_sell()[-2]["open_time"]
     assert sig.extra["structure"]["entry_time"] == utad_then_second_sell()[-1]["open_time"]
     markers = sig.extra["markers"]
     assert [m["key"] for m in markers] == ["first_fractal", "volume_sweep", "second_fractal"]
@@ -247,8 +282,18 @@ def test_second_buy_requires_stall_after_l2_confirmation():
     assert detect_macro_pullback("SOLUSDT", "long", second_buy_without_stall(), second_buy_without_stall(), cfg()) is None
 
 
+def test_second_buy_enters_on_bar_after_stall_not_stall_bar():
+    assert detect_macro_pullback("SOLUSDT", "long", second_buy_without_entry_bar_after_stall(), second_buy_without_entry_bar_after_stall(), cfg()) is None
+
+
 def test_second_sell_requires_stall_after_h2_confirmation():
     assert detect_macro_pullback("SOLUSDT", "short", second_sell_without_stall(), second_sell_without_stall(), cfg()) is None
+
+
+def test_volume_l1_must_be_completed_chan_bottom_not_mid_leg():
+    series = invalid_mid_leg_spring_then_second_buy()
+    assert _find_spring(series, cfg()) is None
+    assert detect_macro_pullback("XMRUSDT", "long", series, series, cfg()) is None
 
 
 def test_second_sell_must_trigger_soon_after_h2_confirmation():
