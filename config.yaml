@@ -8,9 +8,6 @@
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
 trade_direction: both  # both=多空都做 / long=只做多 / short=只做空(只对该方向信号开仓/推送)
 
-web:
-  public_url: "http://76.13.182.175:8488"
-
 # ---- 自动交易(live) ----
 live:
   auto_trade: false      # true=信号直接下单(免Telegram二次确认); false=仍需TG手动二次确认
@@ -162,6 +159,7 @@ risk:
 web:
   host: 0.0.0.0
   port: 8488
+  public_url: "http://76.13.182.175:8488"
   username: admin
   # 首次启动若 users 表为空, 用这个初始密码创建账号(登录后请修改)
   initial_password: "trade@2026"
