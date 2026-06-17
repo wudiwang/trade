@@ -2,6 +2,7 @@
 import logging
 import math
 import time
+from decimal import Decimal, ROUND_DOWN
 
 log = logging.getLogger("trader")
 
@@ -10,6 +11,21 @@ def round_step(value: float, step: float) -> float:
     if not step or step <= 0:
         return value
     return math.floor(value / step) * step
+
+
+def format_step(value: float, step: float | None, precision: int | None = None) -> str:
+    """Round down to exchange step/tick and return a plain decimal string."""
+    d = Decimal(str(value))
+    st = Decimal(str(step or 0))
+    if st > 0:
+        d = (d / st).to_integral_value(rounding=ROUND_DOWN) * st
+        places = max(0, -st.normalize().as_tuple().exponent)
+    elif precision is not None:
+        places = max(0, int(precision))
+        d = d.quantize(Decimal(1).scaleb(-places), rounding=ROUND_DOWN)
+    else:
+        return format(d.normalize(), "f")
+    return f"{d:.{places}f}"
 
 
 class LiveTrader:
@@ -33,20 +49,24 @@ class LiveTrader:
         equity = float(self.cfg.get("risk.account_equity", 0) or 0)
         entry_px = float(sig_row["entry"]) or 0
         step = meta["step_size"] or 0
+        qty_precision = meta["qty_precision"]
         if margin > 0 and entry_px > 0:
-            qty = round_step(margin * lev / entry_px, step)             # 固定保证金: 名义=保证金×杠杆, 张数=名义/价
+            raw_qty = margin * lev / entry_px                           # 固定保证金: 名义=保证金×杠杆, 张数=名义/价
         elif margin_pct > 0 and equity > 0 and entry_px > 0:
-            qty = round_step(equity * margin_pct / 100.0 * lev / entry_px, step)
+            raw_qty = equity * margin_pct / 100.0 * lev / entry_px
         elif fixed > 0 and entry_px > 0:
-            qty = round_step(fixed / entry_px, step)                    # 固定名义额: 张数=名义/价
+            raw_qty = fixed / entry_px                                  # 固定名义额: 张数=名义/价
         else:
-            qty = round_step(float(sig_row["suggested_qty"]), step)
-        if qty <= 0:
+            raw_qty = float(sig_row["suggested_qty"])
+        qty = format_step(raw_qty, step, qty_precision)
+        qty_num = float(qty)
+        if qty_num <= 0:
             return {"ok": False, "message": "数量过小，按精度取整后为0"}
         tick = meta["tick_size"] or 0
+        price_precision = meta["price_precision"]
 
         def round_price(p: float) -> float:
-            return round_step(p, tick) if tick else p
+            return format_step(p, tick, price_precision)
 
         side = "BUY" if direction == "long" else "SELL"
         close_side = "SELL" if direction == "long" else "BUY"
@@ -88,11 +108,11 @@ class LiveTrader:
                     self.db.log("error", "trader", f"#{sid} {symbol} 保护单失败，已尝试reduceOnly市价平仓")
                 except Exception as close_err:
                     self.db.log("error", "trader", f"#{sid} {symbol} 保护单失败且保护平仓失败: {close_err}")
-            self._log_orders(sid, symbol, qty, orders)
+            self._log_orders(sid, symbol, qty_num, orders)
             self.db.log("error", "trader", f"#{sid} {symbol} 下单失败: {e}")
             return {"ok": False, "message": f"下单失败: {e}", "orders": orders}
 
-        self._log_orders(sid, symbol, qty, orders)
+        self._log_orders(sid, symbol, qty_num, orders)
         self.db.log("info", "trader", f"#{sid} {symbol} {direction} 实盘下单成功 qty={qty} lev={lev}")
         return {"ok": True, "message": f"已下单 {symbol} {side} qty={qty} 杠杆{lev}x，TP/SL已挂", "orders": orders}
 
