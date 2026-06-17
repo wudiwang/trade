@@ -141,6 +141,9 @@ class BinanceRest:
     async def place_order(self, **params: Any) -> Any:
         return await self._signed("POST", "/fapi/v1/order", params)
 
+    async def place_algo_order(self, **params: Any) -> Any:
+        return await self._signed("POST", "/fapi/v1/algoOrder", params)
+
     async def cancel_order(self, **params: Any) -> Any:
         return await self._signed("DELETE", "/fapi/v1/order", params)
 

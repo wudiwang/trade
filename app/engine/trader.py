@@ -58,32 +58,52 @@ class LiveTrader:
                 newClientOrderId=f"chan{sid}e",
             )
             orders.append(entry)
-            sl = await self.rest.place_order(
+            sl = await self.rest.place_algo_order(
+                algoType="CONDITIONAL",
                 symbol=symbol, side=close_side, type="STOP_MARKET",
-                stopPrice=round_price(float(sig_row["sl"])),
+                triggerPrice=round_price(float(sig_row["sl"])),
                 closePosition="true", workingType="MARK_PRICE",
-                newClientOrderId=f"chan{sid}s",
+                clientAlgoId=f"chan{sid}s",
             )
             orders.append(sl)
-            tp = await self.rest.place_order(
+            tp = await self.rest.place_algo_order(
+                algoType="CONDITIONAL",
                 symbol=symbol, side=close_side, type="TAKE_PROFIT_MARKET",
-                stopPrice=round_price(float(sig_row["tp"])),
+                triggerPrice=round_price(float(sig_row["tp"])),
                 closePosition="true", workingType="MARK_PRICE",
-                newClientOrderId=f"chan{sid}t",
+                clientAlgoId=f"chan{sid}t",
             )
             orders.append(tp)
         except Exception as e:
             log.exception("execute signal #%d failed", sid)
+            has_entry = any(o.get("type") == "MARKET" for o in orders)
+            has_stop = any((o.get("type") or o.get("orderType")) == "STOP_MARKET" for o in orders)
+            if has_entry and not has_stop:
+                try:
+                    emergency = await self.rest.place_order(
+                        symbol=symbol, side=close_side, type="MARKET", quantity=qty,
+                        reduceOnly="true", newClientOrderId=f"chan{sid}x",
+                    )
+                    orders.append(emergency)
+                    self.db.log("error", "trader", f"#{sid} {symbol} 保护单失败，已尝试reduceOnly市价平仓")
+                except Exception as close_err:
+                    self.db.log("error", "trader", f"#{sid} {symbol} 保护单失败且保护平仓失败: {close_err}")
+            self._log_orders(sid, symbol, qty, orders)
             self.db.log("error", "trader", f"#{sid} {symbol} 下单失败: {e}")
             return {"ok": False, "message": f"下单失败: {e}", "orders": orders}
 
+        self._log_orders(sid, symbol, qty, orders)
+        self.db.log("info", "trader", f"#{sid} {symbol} {direction} 实盘下单成功 qty={qty} lev={lev}")
+        return {"ok": True, "message": f"已下单 {symbol} {side} qty={qty} 杠杆{lev}x，TP/SL已挂", "orders": orders}
+
+    def _log_orders(self, sid: int, symbol: str, qty: float, orders: list[dict]) -> None:
         for o in orders:
             self.db.execute(
                 "INSERT INTO orders (signal_id, created_at, binance_order_id, client_order_id, symbol, side, type, qty, price, status, payload) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (sid, int(time.time()), str(o.get("orderId")), o.get("clientOrderId"),
-                 symbol, o.get("side"), o.get("type"), qty,
-                 float(o.get("avgPrice") or o.get("stopPrice") or 0), o.get("status"), str(o)[:1500]),
+                (sid, int(time.time()), str(o.get("orderId") or o.get("algoId")),
+                 o.get("clientOrderId") or o.get("clientAlgoId"),
+                 symbol, o.get("side"), o.get("type") or o.get("orderType"), qty,
+                 float(o.get("avgPrice") or o.get("stopPrice") or o.get("triggerPrice") or 0),
+                 o.get("status") or o.get("algoStatus"), str(o)[:1500]),
             )
-        self.db.log("info", "trader", f"#{sid} {symbol} {direction} 实盘下单成功 qty={qty} lev={lev}")
-        return {"ok": True, "message": f"已下单 {symbol} {side} qty={qty} 杠杆{lev}x，TP/SL已挂", "orders": orders}
