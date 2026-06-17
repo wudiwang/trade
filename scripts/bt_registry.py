@@ -122,8 +122,7 @@ def _macro_params():
         "vol_ma", "vol_mult", "lookback", "reclaim_bars", "reclaim_tolerance_pct",
         "reclaim_body_pct", "wyckoff_fractal_window",
         "min_leg_pct", "second_tolerance_pct", "stop_buffer_pct", "cooldown_bars",
-        "max_signal_bars_after_second", "max_entry_distance_r", "max_entry_distance_pct",
-        "missed_midpoint_filter", "min_effective_bars_between",
+        "max_signal_bars_after_second", "max_entry_leg_ratio", "min_effective_bars_between",
         "min_rr", "tp_rr_long", "tp_rr_short", "tp_lookback", "vp_bins",
     )
     params = {k: cfg.get(f"macro_pullback.{k}") for k in keys}
@@ -167,7 +166,7 @@ def scan_macro_pullback(C):
     from app.engine.chan import find_fractals, merge_klines
     from app.engine.macro_pullback import (
         _body_reclaim_level, _effective_bar_count, _entry_near_second, _f,
-        _is_bottom, _is_top, _tp_for, _vol_ratio,
+        _tp_for, _vol_ratio,
     )
     params = _macro_params()
     lookback = int(params.get("lookback", 20))
@@ -179,7 +178,7 @@ def scan_macro_pullback(C):
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
-    stop_buf = float(params.get("stop_buffer_pct", 0.3)) / 100.0
+    stop_buf = float(params.get("stop_buffer_pct", 0.0)) / 100.0
     out = []
     for sym, k5 in C("5m").items():
         if len(k5) < max(80, vol_ma + lookback + 10):
@@ -187,8 +186,6 @@ def scan_macro_pullback(C):
         fractals = find_fractals(k5, merge_klines(k5))
         chan_bottoms = [int(f.extreme_src_idx) for f in fractals if f.kind == "bottom"]
         chan_tops = [int(f.extreme_src_idx) for f in fractals if f.kind == "top"]
-        raw_bottoms = [i for i in range(1, len(k5) - 1) if _is_bottom(k5, i)]
-        raw_tops = [i for i in range(1, len(k5) - 1) if _is_top(k5, i)]
         fired = set()
         processed_l1 = set()
         processed_h1 = set()
@@ -227,7 +224,7 @@ def scan_macro_pullback(C):
         def long_seconds(first):
             l1_idx = int(first["idx"])
             l1 = _f(k5[l1_idx], "low")
-            for l2_idx in raw_bottoms:
+            for l2_idx in chan_bottoms:
                 if l2_idx < l1_idx + 3:
                     continue
                 if l2_idx > l1_idx + lookback:
@@ -259,7 +256,7 @@ def scan_macro_pullback(C):
         def short_seconds(first):
             h1_idx = int(first["idx"])
             h1 = _f(k5[h1_idx], "high")
-            for h2_idx in raw_tops:
+            for h2_idx in chan_tops:
                 if h2_idx < h1_idx + 3:
                     continue
                 if h2_idx > h1_idx + lookback:
@@ -377,7 +374,7 @@ META = {
             "本地缓存回测默认多空双向扫描，不访问服务器。",
             "爆量扫低/扫高 K 可以在真正 L1/H1 分型前后 5 根内。",
             "L1/H1 必须是真正的缠论合并 K 底/顶分型，后续不能被新低/新高破坏。",
-            "L2/H2 确认后等停顿 K，真实入场在停顿后的下一根 K。",
+            "L2/H2 也必须是真正的缠论合并 K 底/顶分型；确认后等停顿 K，真实入场在停顿后的下一根 K。",
         ]},
 }
 

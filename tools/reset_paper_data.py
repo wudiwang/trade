@@ -7,7 +7,7 @@ from app.config import get_config
 from app.db import DB
 
 
-TABLES = ("signals", "paper_trades", "equity_curve")
+TABLES = ("signals", "paper_trades", "equity_curve", "signal_anchors")
 
 
 def main():
@@ -15,7 +15,7 @@ def main():
     db = DB(cfg.db_path)
     for table in TABLES:
         db.execute(f"DELETE FROM {table}")
-    db.log("info", "reset", "cleared signals, paper_trades, equity_curve for macro_pullback rollout")
+    db.log("info", "reset", "cleared paper data and signal anchors for macro_pullback rollout")
     print("cleared: " + ", ".join(TABLES))
 
 

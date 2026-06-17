@@ -467,6 +467,7 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         "universe.min_quote_volume_24h": float,
         "trade_direction": str,            # both/long/short: 只交易某方向
         "live.auto_trade": _bool,          # 自动下单(免TG二次确认)
+        "live.fixed_margin_pct": float,    # 单笔保证金占账户本金%, 名义=本金×比例×杠杆
         "live.fixed_margin_u": float,      # 单笔固定保证金U(名义=保证金×杠杆, 优先)
         "live.fixed_notional_u": float,    # 单笔固定名义额U(margin=0时才用)
         "live.max_positions": int,         # 实盘最大持仓

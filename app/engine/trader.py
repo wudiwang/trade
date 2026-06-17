@@ -28,11 +28,15 @@ class LiveTrader:
 
         lev = int(self.cfg.get("risk.leverage", 5))
         margin = float(self.cfg.get("live.fixed_margin_u", 0) or 0)
+        margin_pct = float(self.cfg.get("live.fixed_margin_pct", 0) or 0)
         fixed = float(self.cfg.get("live.fixed_notional_u", 0) or 0)
+        equity = float(self.cfg.get("risk.account_equity", 0) or 0)
         entry_px = float(sig_row["entry"]) or 0
         step = meta["step_size"] or 0
         if margin > 0 and entry_px > 0:
             qty = round_step(margin * lev / entry_px, step)             # 固定保证金: 名义=保证金×杠杆, 张数=名义/价
+        elif margin_pct > 0 and equity > 0 and entry_px > 0:
+            qty = round_step(equity * margin_pct / 100.0 * lev / entry_px, step)
         elif fixed > 0 and entry_px > 0:
             qty = round_step(fixed / entry_px, step)                    # 固定名义额: 张数=名义/价
         else:

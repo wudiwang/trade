@@ -19,7 +19,7 @@ def fmt_price(p: float) -> str:
     return f"{p:.6g}"
 
 
-def signal_card(sid: int, s: dict, mode: str) -> str:
+def signal_card(sid: int, s: dict, mode: str, chart_url: str | None = None) -> str:
     d = "做多 🟢" if s["direction"] == "long" else "做空 🔴"
     star = "⭐强信号" if s["strength"] == "strong" else ""
     lines = [
@@ -34,6 +34,8 @@ def signal_card(sid: int, s: dict, mode: str) -> str:
         "",
         f"依据: {s['reason']}",
     ]
+    if chart_url:
+        lines += ["", f"图形: {chart_url}"]
     return "\n".join(lines)
 
 
@@ -71,16 +73,26 @@ class TgBot:
         s = sig.to_db() if hasattr(sig, "to_db") else dict(sig)
         if s.get("kind") != "primary":
             return
-        kb = {"inline_keyboard": [[
+        chart_url = self._chart_url(sid)
+        buttons = [[
             {"text": "✅ 确认买入", "callback_data": f"c:{sid}"},
             {"text": "❌ 忽略", "callback_data": f"i:{sid}"},
-        ]]}
+        ]]
+        if chart_url:
+            buttons.append([{"text": "📈 查看图形", "url": chart_url}])
+        kb = {"inline_keyboard": buttons}
         r = await self.api(
-            "sendMessage", chat_id=self.chat_id, text=signal_card(sid, s, self.cfg.mode),
+            "sendMessage", chat_id=self.chat_id, text=signal_card(sid, s, self.cfg.mode, chart_url),
             parse_mode="HTML", reply_markup=kb,
         )
         if r.get("ok"):
             self.db.update_signal(sid, status="notified", tg_message_id=r["result"]["message_id"])
+
+    def _chart_url(self, sid: int) -> str | None:
+        base = (self.cfg.get("web.public_url", "") or "").strip()
+        if not base:
+            return None
+        return f"{base.rstrip('/')}/?signal={sid}"
 
     async def on_trade_close(self, trade: dict) -> None:
         """paper 平仓播报。"""

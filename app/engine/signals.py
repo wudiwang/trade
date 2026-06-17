@@ -179,8 +179,7 @@ class SignalEngine:
             "vol_ma", "vol_mult", "lookback", "reclaim_bars", "reclaim_tolerance_pct",
             "reclaim_body_pct", "wyckoff_fractal_window",
             "min_leg_pct", "second_tolerance_pct", "stop_buffer_pct", "cooldown_bars",
-            "max_signal_bars_after_second", "max_entry_distance_r", "max_entry_distance_pct",
-            "missed_midpoint_filter", "min_effective_bars_between",
+            "max_signal_bars_after_second", "max_entry_leg_ratio", "min_effective_bars_between",
             "min_rr", "tp_rr_long", "tp_rr_short", "tp_lookback", "vp_bins",
         )
         params = {k: self._p(f"macro_pullback.{k}") for k in keys}

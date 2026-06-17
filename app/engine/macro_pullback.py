@@ -54,6 +54,16 @@ def _chan_fractal_extremes_near(klines: list, idx: int, kind: str, window: int) 
     return out
 
 
+def _chan_fractal_extremes_after(klines: list, start: int, kind: str) -> list[int]:
+    from .chan import find_fractals, merge_klines
+    out = []
+    for fx in find_fractals(klines, merge_klines(klines)):
+        ext_idx = int(fx.extreme_src_idx)
+        if fx.kind == kind and ext_idx >= start:
+            out.append(ext_idx)
+    return sorted(out)
+
+
 def _invalidated_extreme(klines: list, idx: int, direction: str, tolerance_pct: float = 0.0) -> bool:
     if direction == "long":
         base = _f(klines[idx], "low") * (1 - tolerance_pct / 100.0)
@@ -157,7 +167,7 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
-    bottoms = _bottoms_after(klines, l1_idx + 3)
+    bottoms = _chan_fractal_extremes_after(klines, l1_idx + 3, "bottom")
     for l2_idx in bottoms:
         if _f(klines[l2_idx], "low") < l1 * (1 - tol):
             continue
@@ -181,7 +191,7 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
-    tops = _tops_after(klines, h1_idx + 3)
+    tops = _chan_fractal_extremes_after(klines, h1_idx + 3, "top")
     for h2_idx in tops:
         if _f(klines[h2_idx], "high") > h1 * (1 + tol):
             continue
@@ -225,32 +235,20 @@ def _stall_entry_idx(direction: str, klines: list, second: dict, params: dict) -
 
 def _entry_near_second(direction: str, klines: list, second: dict, entry: float, sl: float, params: dict) -> bool:
     max_bars = int(params.get("max_signal_bars_after_second", 2))
-    max_r = float(params.get("max_entry_distance_r", 0.3))
-    max_pct = float(params.get("max_entry_distance_pct", 0.5)) / 100.0
-    midpoint_filter = bool(params.get("missed_midpoint_filter", True))
-
+    max_leg_ratio = float(params.get("max_entry_leg_ratio", 0.5))
     if direction == "long":
         second_idx = int(second.get("L2_idx", len(klines) - 1))
-        second_price = float(second["L2"])
-        midpoint = (float(second["L1"]) + float(second["H1"])) / 2.0
-        missed_midpoint = entry >= midpoint
+        leg = abs(float(second["H1"]) - float(second["L1"]))
+        detached = entry - float(second["L2"])
     else:
         second_idx = int(second.get("H2_idx", len(klines) - 1))
-        second_price = float(second["H2"])
-        midpoint = (float(second["H1"]) + float(second["L1"])) / 2.0
-        missed_midpoint = entry <= midpoint
+        leg = abs(float(second["H1"]) - float(second["L1"]))
+        detached = float(second["H2"]) - entry
 
     freshness_idx = int(second.get("stall_idx", len(klines) - 1))
     if freshness_idx - second_idx > max_bars:
         return False
-    if midpoint_filter and missed_midpoint:
-        return False
-
-    distance = abs(entry - second_price)
-    risk = abs(entry - sl)
-    near_by_r = risk > 0 and distance <= max_r * risk
-    near_by_pct = second_price > 0 and distance / second_price <= max_pct
-    return near_by_r or near_by_pct
+    return leg > 0 and detached <= max_leg_ratio * leg
 
 
 def _tp_for(klines: list, direction: str, entry: float, sl: float, params: dict) -> tuple[float, float]:
@@ -259,7 +257,7 @@ def _tp_for(klines: list, direction: str, entry: float, sl: float, params: dict)
         rr = float(params.get("tp_rr_long", 2.0))
         tp = entry + rr * risk
     else:
-        rr = float(params.get("tp_rr_short", 0.8))
+        rr = float(params.get("tp_rr_short", 2.0))
         tp = entry - rr * risk
     return tp, rr
 
@@ -308,7 +306,7 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         second["entry_time"] = int(klines[entry_idx]["open_time"])
         direction = "long"
         entry = _f(klines[entry_idx], "close")
-        sl = second["L2"] * (1 - float(params.get("stop_buffer_pct", 0.3)) / 100.0)
+        sl = second["L2"] * (1 - float(params.get("stop_buffer_pct", 0.0)) / 100.0)
         if sl >= entry:
             return None
         if not _entry_near_second(direction, klines, second, entry, sl, params):
@@ -329,7 +327,7 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         second["entry_time"] = int(klines[entry_idx]["open_time"])
         direction = "short"
         entry = _f(klines[entry_idx], "close")
-        sl = second["H2"] * (1 + float(params.get("stop_buffer_pct", 0.3)) / 100.0)
+        sl = second["H2"] * (1 + float(params.get("stop_buffer_pct", 0.0)) / 100.0)
         if sl <= entry:
             return None
         if not _entry_near_second(direction, klines, second, entry, sl, params):

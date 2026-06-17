@@ -86,6 +86,7 @@ function dispType(type, dir, state, extraStr) {
   return typeLabel(type, dir, state) + dual;
 }
 let signalCache = {};
+let deepLinkedSignalOpened = false;
 function sigType(s) {
   try { return JSON.parse(s.extra || '{}').type || ''; } catch (e) { return ''; }
 }
@@ -109,10 +110,18 @@ async function loadSignals() {
       <td>${fmtP(s.entry)}</td><td class="red">${fmtP(s.sl)}</td><td class="green">${fmtP(s.tp)}</td>
       <td><b>${s.rr}</b></td><td>${s.vol_ratio}x</td><td>${s.status}</td>
     </tr>`).join('');
+  maybeOpenSignalFromUrl();
 }
 function openChartFromSignal(id) {
   const s = signalCache[id];
   if (s) openChart(s.symbol, s.tf, {entry: s.entry, sl: s.sl, tp: s.tp, extra: s.extra});
+}
+function maybeOpenSignalFromUrl() {
+  if (deepLinkedSignalOpened) return;
+  const id = Number(new URLSearchParams(location.search).get('signal') || 0);
+  if (!id || !signalCache[id]) return;
+  deepLinkedSignalOpened = true;
+  openChartFromSignal(id);
 }
 
 // ---------- 交易 ----------
@@ -436,7 +445,7 @@ function closeModal() { $('modal').classList.remove('show'); _chartCtx = null; i
 // ---------- 设置 ----------
 const SETTING_LABELS = {
   'mode': '运行模式', 'trade_direction': '交易方向',
-  'live.auto_trade': '自动下单(免确认)', 'live.fixed_margin_u': '单笔保证金U(×杠杆)', 'live.fixed_notional_u': '单笔名义额U',
+  'live.auto_trade': '自动下单(免确认)', 'live.fixed_margin_pct': '单笔保证金%(×杠杆)', 'live.fixed_margin_u': '单笔保证金U(×杠杆)', 'live.fixed_notional_u': '单笔名义额U',
   'live.max_positions': '实盘最大持仓', 'live.max_loss_pct': '亏损熔断%',
   'chan.bi_min_bars': '一笔最少合并K', 'chan.stall_max_gap': '停顿窗口(根)',
   'chan.fractal_vol_mult': '底分型放量倍数', 'chan.fractal_vol_ma': '放量均量回看(根)',

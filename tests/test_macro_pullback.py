@@ -34,17 +34,15 @@ def cfg(**overrides):
         "reclaim_body_pct": 80,
         "min_leg_pct": 1.0,
         "second_tolerance_pct": 0.2,
-        "stop_buffer_pct": 0.3,
+        "stop_buffer_pct": 0.0,
         "max_signal_bars_after_second": 2,
-        "max_entry_distance_r": 0.3,
-        "max_entry_distance_pct": 0.5,
-        "missed_midpoint_filter": True,
+        "max_entry_leg_ratio": 0.5,
         "min_effective_bars_between": 5,
         "wyckoff_fractal_window": 5,
         "cooldown_bars": 12,
         "min_rr": 1.5,
         "tp_rr_long": 2.0,
-        "tp_rr_short": 0.8,
+        "tp_rr_short": 2.0,
         "tp_lookback": 30,
         "vp_bins": 12,
         "account_equity": 1000,
@@ -220,7 +218,7 @@ def sweep_before_true_l1_then_second_buy():
 
 def below_down_leg_midpoint_sell():
     vals = list(utad_then_second_sell())
-    vals[-1] = k(102, 102.5, 99.0, 99.8, 110, t=len(vals) - 1)
+    vals[-1] = k(102, 102.5, 93.5, 94.0, 110, t=len(vals) - 1)
     return vals
 
 
@@ -301,7 +299,7 @@ def test_detect_second_sell_requires_prior_high_volume_utad():
     assert markers[2]["time"] == sig.extra["structure"]["H2_time"]
     assert sig.tp < sig.entry < sig.sl
     risk = sig.sl - sig.entry
-    assert abs((sig.entry - sig.tp) / risk - 0.8) < 0.01
+    assert abs((sig.entry - sig.tp) / risk - 2.0) < 0.01
 
 
 def test_second_buy_requires_stall_after_l2_confirmation():
@@ -328,7 +326,7 @@ def test_sweep_can_appear_within_five_bars_before_true_l1():
     series = sweep_before_true_l1_then_second_buy()
     sig = detect_macro_pullback(
         "HUSDT", "long", series, series,
-        cfg(reclaim_bars=5, max_entry_distance_pct=1.5, min_effective_bars_between=4, missed_midpoint_filter=False),
+        cfg(reclaim_bars=5, min_effective_bars_between=4),
     )
     assert sig is not None
     assert sig.extra["wyckoff"]["sweep_idx"] == 5
@@ -340,12 +338,15 @@ def test_second_sell_must_trigger_soon_after_h2_confirmation():
     assert sig is None
 
 
-def test_second_sell_rejects_entry_too_far_from_h2():
-    sig = detect_macro_pullback("SOLUSDT", "short", far_from_second_sell(), far_from_second_sell(), cfg())
-    assert sig is None
+def test_second_sell_allows_entry_far_from_h2_when_stall_confirms():
+    sig = detect_macro_pullback(
+        "SOLUSDT", "short", far_from_second_sell(), far_from_second_sell(),
+        cfg(max_entry_leg_ratio=2.0),
+    )
+    assert sig is not None
 
 
-def test_second_sell_rejects_price_below_down_leg_midpoint():
+def test_second_sell_rejects_entry_detached_too_far_from_h2_structure():
     sig = detect_macro_pullback("SOLUSDT", "short", below_down_leg_midpoint_sell(), below_down_leg_midpoint_sell(), cfg())
     assert sig is None
 
@@ -376,11 +377,12 @@ class MiniCfg:
             "macro_pullback.wyckoff_fractal_window": 5,
             "macro_pullback.min_leg_pct": 1.0,
             "macro_pullback.second_tolerance_pct": 0.2,
-            "macro_pullback.stop_buffer_pct": 0.3,
+            "macro_pullback.stop_buffer_pct": 0.0,
+            "macro_pullback.max_entry_leg_ratio": 0.5,
             "macro_pullback.cooldown_bars": 12,
             "macro_pullback.min_rr": 1.5,
             "macro_pullback.tp_rr_long": 2.0,
-            "macro_pullback.tp_rr_short": 0.8,
+            "macro_pullback.tp_rr_short": 2.0,
             "macro_pullback.tp_lookback": 30,
             "macro_pullback.vp_bins": 12,
             "risk.account_equity": 1000,

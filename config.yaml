@@ -8,10 +8,15 @@
 mode: paper            # paper=模拟盘(验证模式是否赚钱) / live=真实下单
 trade_direction: both  # both=多空都做 / long=只做多 / short=只做空(只对该方向信号开仓/推送)
 
+web:
+  public_url: "http://76.13.182.175:8488"
+
 # ---- 自动交易(live) ----
 live:
   auto_trade: false      # true=信号直接下单(免Telegram二次确认); false=仍需TG手动二次确认
-  fixed_notional_u: 10   # 单笔固定名义额(U), 0=用风险算法
+  fixed_margin_pct: 10   # 单笔保证金占账户本金%, 名义额=本金×该比例×杠杆
+  fixed_margin_u: 0      # 单笔固定保证金(U), >0时优先于fixed_margin_pct
+  fixed_notional_u: 0    # 单笔固定名义额(U), 0=用风险算法
   max_positions: 10      # 实盘最大同时持仓数(达到不再自动开新仓)
   max_loss_pct: 50       # 余额相对本金亏损达此%→熔断, 停止自动交易
 strategy: chan_bi      # chan_bi=缠论笔+停顿K(当前) / spring_v4=破位+底分型 / chan_v1=旧
@@ -35,16 +40,14 @@ macro_pullback:
   wyckoff_fractal_window: 5   # 爆量K允许出现在真正L1/H1分型前后N根内
   min_leg_pct: 0.8
   second_tolerance_pct: 0.2
-  stop_buffer_pct: 0.3
+  stop_buffer_pct: 0.0
   max_signal_bars_after_second: 2   # 二买/二卖只在第二分型确认后最多2根K内触发
-  max_entry_distance_r: 0.3         # 入场价距离第二分型不超过0.3R
-  max_entry_distance_pct: 0.5       # 或不超过第二分型价0.5%
-  missed_midpoint_filter: true      # 跌破/涨过前一段中位后视为错过, 不追
+  max_entry_leg_ratio: 0.5          # 入场相对L2/H2脱离不超过前一段振幅50%, 中位线只参考不一票否决
   min_effective_bars_between: 5     # H1/L1/H2两两之间至少5根去包含后的有效K
   cooldown_bars: 12
   min_rr: 1.5
   tp_rr_long: 2.0          # 回测最佳: 二买做多用2R
-  tp_rr_short: 0.8         # 回测最佳: 二卖做空用0.8R(仍偏弱, 先降低止盈)
+  tp_rr_short: 2.0         # 多空统一先用2R止盈
   tp_lookback: 100
   vp_bins: 50
 
