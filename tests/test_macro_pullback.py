@@ -41,7 +41,6 @@ def cfg(**overrides):
         "missed_midpoint_filter": True,
         "min_effective_bars_between": 5,
         "wyckoff_fractal_window": 5,
-        "min_second_hold_ratio": 0.35,
         "cooldown_bars": 12,
         "min_rr": 1.5,
         "tp_rr_long": 2.0,
@@ -219,30 +218,6 @@ def sweep_before_true_l1_then_second_buy():
     return [k(*row, t=i) for i, row in enumerate(vals)]
 
 
-def second_buy_inside_prior_center():
-    vals = [
-        (103, 104, 102, 103, 100),
-        (102, 103, 101, 102, 100),
-        (101, 102, 100, 101, 100),
-        (100, 101, 99, 100, 100),
-        (99, 100, 98, 99, 100),
-        (99, 100, 94, 95, 360),
-        (95, 101, 95, 99, 130),
-        (99, 103, 97, 102, 140),
-        (102, 105, 99, 104, 130),
-        (104, 107, 101, 106, 100),
-        (106, 106, 102, 104, 100),
-        (104, 105, 101, 102, 95),
-        (102, 104, 100.5, 101, 90),
-        (101, 103, 99.0, 99.6, 90),
-        (99.6, 101, 98.2, 99.0, 90),  # L2 is only a weak higher low inside the old center
-        (99.0, 99.45, 98.5, 99.2, 110),
-        (99.2, 99.7, 99.1, 99.6, 110),
-        (99.6, 99.9, 99.3, 99.7, 110),
-    ]
-    return [k(*row, t=i) for i, row in enumerate(vals)]
-
-
 def below_down_leg_midpoint_sell():
     vals = list(utad_then_second_sell())
     vals[-1] = k(102, 102.5, 99.0, 99.8, 110, t=len(vals) - 1)
@@ -360,11 +335,6 @@ def test_sweep_can_appear_within_five_bars_before_true_l1():
     assert sig.extra["wyckoff"]["idx"] == 8
 
 
-def test_second_buy_inside_prior_center_is_filtered():
-    series = second_buy_inside_prior_center()
-    assert detect_macro_pullback("HYPEUSDT", "long", series, series, cfg(max_entry_distance_pct=1.5)) is None
-
-
 def test_second_sell_must_trigger_soon_after_h2_confirmation():
     sig = detect_macro_pullback("SOLUSDT", "short", late_after_second_sell(), late_after_second_sell(), cfg())
     assert sig is None
@@ -406,7 +376,6 @@ class MiniCfg:
             "macro_pullback.wyckoff_fractal_window": 5,
             "macro_pullback.min_leg_pct": 1.0,
             "macro_pullback.second_tolerance_pct": 0.2,
-            "macro_pullback.min_second_hold_ratio": 0.35,
             "macro_pullback.stop_buffer_pct": 0.3,
             "macro_pullback.cooldown_bars": 12,
             "macro_pullback.min_rr": 1.5,

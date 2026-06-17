@@ -121,7 +121,7 @@ def _macro_params():
         "enabled", "exclusive", "timeframes", "structure_tf", "trigger_tf", "context_tf",
         "vol_ma", "vol_mult", "lookback", "reclaim_bars", "reclaim_tolerance_pct",
         "reclaim_body_pct", "wyckoff_fractal_window",
-        "min_leg_pct", "second_tolerance_pct", "min_second_hold_ratio", "stop_buffer_pct", "cooldown_bars",
+        "min_leg_pct", "second_tolerance_pct", "stop_buffer_pct", "cooldown_bars",
         "max_signal_bars_after_second", "max_entry_distance_r", "max_entry_distance_pct",
         "missed_midpoint_filter", "min_effective_bars_between",
         "min_rr", "tp_rr_long", "tp_rr_short", "tp_lookback", "vp_bins",
@@ -179,7 +179,6 @@ def scan_macro_pullback(C):
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
-    min_hold = float(params.get("min_second_hold_ratio", 0.35))
     stop_buf = float(params.get("stop_buffer_pct", 0.3)) / 100.0
     out = []
     for sym, k5 in C("5m").items():
@@ -244,8 +243,6 @@ def scan_macro_pullback(C):
                 if (leg_high - l1) / max(l1, 1e-12) < min_leg:
                     continue
                 l2 = _f(k5[l2_idx], "low")
-                if (l2 - l1) / max(leg_high - l1, 1e-12) < min_hold:
-                    continue
                 right_idx, stall_idx, entry_idx = l2_idx + 1, l2_idx + 2, l2_idx + 3
                 if entry_idx >= len(k5):
                     continue
@@ -278,8 +275,6 @@ def scan_macro_pullback(C):
                 if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
                     continue
                 h2 = _f(k5[h2_idx], "high")
-                if (h1 - h2) / max(h1 - leg_low, 1e-12) < min_hold:
-                    continue
                 right_idx, stall_idx, entry_idx = h2_idx + 1, h2_idx + 2, h2_idx + 3
                 if entry_idx >= len(k5):
                     continue
@@ -382,7 +377,6 @@ META = {
             "本地缓存回测默认多空双向扫描，不访问服务器。",
             "爆量扫低/扫高 K 可以在真正 L1/H1 分型前后 5 根内。",
             "L1/H1 必须是真正的缠论合并 K 底/顶分型，后续不能被新低/新高破坏。",
-            "L2/H2 必须相对 L1-H1/H1-L1 守住至少 35%，过滤前中枢内的无意义二买/二卖。",
             "L2/H2 确认后等停顿 K，真实入场在停顿后的下一根 K。",
         ]},
 }

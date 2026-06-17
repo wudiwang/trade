@@ -157,7 +157,6 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
-    min_hold = float(params.get("min_second_hold_ratio", 0.35))
     bottoms = _bottoms_after(klines, l1_idx + 3)
     for l2_idx in bottoms:
         if _f(klines[l2_idx], "low") < l1 * (1 - tol):
@@ -169,9 +168,6 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
         if _effective_bar_count(klines, leg_high_idx, l2_idx) < min_bars:
             continue
         if (leg_high - l1) / max(l1, 1e-12) < min_leg:
-            continue
-        hold_ratio = (_f(klines[l2_idx], "low") - l1) / max(leg_high - l1, 1e-12)
-        if hold_ratio < min_hold:
             continue
         return {"L1": l1, "H1": leg_high, "L2": _f(klines[l2_idx], "low"),
                 "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"]),
@@ -185,7 +181,6 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
     min_leg = float(params.get("min_leg_pct", 0.8)) / 100.0
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
-    min_hold = float(params.get("min_second_hold_ratio", 0.35))
     tops = _tops_after(klines, h1_idx + 3)
     for h2_idx in tops:
         if _f(klines[h2_idx], "high") > h1 * (1 + tol):
@@ -197,9 +192,6 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
         if _effective_bar_count(klines, leg_low_idx, h2_idx) < min_bars:
             continue
         if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
-            continue
-        hold_ratio = (h1 - _f(klines[h2_idx], "high")) / max(h1 - leg_low, 1e-12)
-        if hold_ratio < min_hold:
             continue
         return {"H1": h1, "L1": leg_low, "H2": _f(klines[h2_idx], "high"),
                 "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"]),
