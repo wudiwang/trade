@@ -27,17 +27,7 @@ class PaperBroker:
         if (isinstance(s.extra, dict) and s.extra.get("path") == "威科夫"
                 and self.cfg.get("wyckoff.confirm_only", True)):
             return
-        # paper 模式不设仓位上限：每个信号都开模拟单、都跟踪胜负，统计才完整(验证策略用)。
-        # 仓位上限只在 live 实盘起作用(真钱风控)。
-        live = self.cfg.mode == "live"
         for tr in tracks:
-            if live:
-                open_cnt = self.db.one(
-                    "SELECT COUNT(*) c FROM paper_trades WHERE result='open' AND track=?", (tr,)
-                )["c"]
-                if open_cnt >= self.cfg.get("risk.max_positions", 5):
-                    log.info("track %s 已满仓(%d)，跳过 %s", tr, open_cnt, s.symbol)
-                    continue
             self.db.execute(
                 "INSERT INTO paper_trades (signal_id, symbol, tf, direction, track, entry, sl, tp, qty, opened_at) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?)",
