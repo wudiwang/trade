@@ -15,6 +15,8 @@ def main():
     db = DB(cfg.db_path)
     for table in TABLES:
         db.execute(f"DELETE FROM {table}")
+    for table in TABLES:
+        db.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
     db.log("info", "reset", "cleared paper data and signal anchors for macro_pullback rollout")
     print("cleared: " + ", ".join(TABLES))
 
