@@ -61,6 +61,16 @@
 
 ---
 
+## 1.5 架构待办：两段式漏斗的「做空 screener」（高优先，见 DOCTRINE 第九节）
+
+- [ ] **做空过度上涨币（见顶反转 screener）** — `short_screener`
+  - 思路：Stage1 全市场筛「涨得最凶/见顶迹象」候选池 → Stage2 只在候选上跑卖点引擎，出信号才空。
+  - **Stage1 筛选因子**：24h/7d 涨幅 top N；价格离 20/50MA 乖离 z-score 极高(抛物线)；放量滞涨(climax volume)；OI暴增 + funding 极高正值(多头拥挤)；RSI 超买 / 离 VWAP 极远。
+  - **Stage2 卖点触发**：chan_bi 一卖/二卖；顶背驰；创新高失败(假突破回落=sweep&reclaim 做空镜像)；跌破启动位/微观结构；放量长上影拒绝。
+  - **铁律(必须实现为硬约束)**：① 大盘 gate——BTC 强多时禁用/极小仓；② 必须等 Stage2 确认，不裸空强势；③ 硬止损(顶之上)+小仓+分批，不扛单；④ funding 既是燃料也是持仓成本。
+  - 复用：`squeeze.py` 是其镜像(做多)，可参照结构写 `short_screener`；候选注入现有 `universe` / Playbook 流程。
+  - 【数据】OI(`open_interest_hist`)、funding 已有；涨幅/乖离用现有 K 线即可。
+
 ## 2. 进行中的实验
 - [ ] **缠论 × 威科夫 双重确认对比**：缠论信号「与威科夫重叠 vs 不重叠」的胜率/期望R，跑 7 天 + 14 天。
   （2026-06-14 起，威科夫已改为「确认型」不单独开仓 → 见 paper.py / config `confirm_only`。）
