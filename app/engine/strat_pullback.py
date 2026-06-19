@@ -7,16 +7,20 @@
   止损 = B2 底分型最低；止盈 = T2 反弹高点。
 做空·二卖：镜像(上涨笔→回调笔→再涨不破新高→顶分型卖；止损=顶分型高，止盈=回调低)。
 
-与现有 chan_bi 策略完全独立，不复用其分型质量/放量/停顿/背驰过滤——
-只看「三笔结构 + 不破新低/高 + 浅回调 + 分型」这一套。
+与现有 chan_bi 策略完全独立。过滤项(用户 2026-06-16 增量)：
+- 入场分型(多=底分型/空=顶分型)前2根任一放量 ≥ vol_mult×前vol_ma根均量(默认2倍, 可配)；
+- 做空二卖额外要求顶分型后出现「停顿K」才触发(多头二买仍免停顿)。
 """
-from .chan_bi import build_bi
+from .chan_bi import build_bi, front_vol_ratio, stall_idx
 
 
-def detect_pullback_2nd(klines: list, min_merged: int = 5, pullback_max: float = 0.5):
+def detect_pullback_2nd(klines: list, min_merged: int = 5, pullback_max: float = 0.5,
+                        vol_ma: int = 10, vol_mult: float = 2.0,
+                        require_stall_short: bool = True, stall_max_gap: int = 3):
     """在给定窗口末端检测一个二买/二卖结构。返回 dict 或 None。
-    dict: direction/entry/sl/tp/retrace/struct_anchor/fx_anchor/prior_extreme。
-    entry = 窗口最后一根K收盘(=形成后最新K买入)。"""
+    dict: direction/entry/sl/tp/retrace/struct_anchor/fx_anchor/prior_extreme/vol_ratio。
+    多头 entry = 窗口最后一根K收盘(形成后最新K买入)；
+    空头 entry = 停顿K收盘(顶分型后停顿才触发)。"""
     merged, seq = build_bi(klines, min_merged)
     if len(seq) < 4:
         return None
@@ -34,11 +38,14 @@ def detect_pullback_2nd(klines: list, min_merged: int = 5, pullback_max: float =
         drop = T2.extreme_price - B2.extreme_price    # 回调幅度
         if up <= 0 or drop <= 0 or drop > pullback_max * up:
             return None
+        vr = front_vol_ratio(klines, merged, B2, vol_ma)   # 底分型放量倍数
+        if vr < vol_mult:
+            return None
         sl, tp = B2.extreme_price, T2.extreme_price
         if not (sl < entry < tp):
             return None
         return {"direction": "long", "entry": entry, "sl": sl, "tp": tp,
-                "retrace": round(drop / up, 3),
+                "retrace": round(drop / up, 3), "vol_ratio": round(vr, 2),
                 "struct_anchor": int(T2.open_time), "fx_anchor": int(B2.open_time),
                 "prior_extreme": B1.extreme_price}
 
@@ -53,11 +60,16 @@ def detect_pullback_2nd(klines: list, min_merged: int = 5, pullback_max: float =
         rise = T2.extreme_price - B2.extreme_price    # 再次上涨幅度
         if down <= 0 or rise <= 0 or rise > pullback_max * down:
             return None
+        vr = front_vol_ratio(klines, merged, T2, vol_ma)   # 顶分型放量倍数
+        if vr < vol_mult:
+            return None
+        if require_stall_short and stall_idx(klines, merged, T2, stall_max_gap) is None:
+            return None                               # 顶分型后必须停顿才触发
         sl, tp = T2.extreme_price, B2.extreme_price
         if not (tp < entry < sl):
             return None
         return {"direction": "short", "entry": entry, "sl": sl, "tp": tp,
-                "retrace": round(rise / down, 3),
+                "retrace": round(rise / down, 3), "vol_ratio": round(vr, 2),
                 "struct_anchor": int(B2.open_time), "fx_anchor": int(T2.open_time),
                 "prior_extreme": T1.extreme_price}
 
@@ -91,13 +103,16 @@ def _settle(s: dict, series: list, opens: list, entry_idx: int):
             break
 
 
-def _walk_symbol(sym: str, series: list, min_merged: int, pullback_max: float, window: int = 160):
+def _walk_symbol(sym: str, series: list, min_merged: int, pullback_max: float,
+                 vol_ma: int, vol_mult: float, require_stall_short: bool,
+                 stall_max_gap: int, window: int = 160):
     n = len(series)
     seen = set()
     sigs = []
     for i in range(60, n):
         win = series[max(0, i - window): i + 1]
-        sig = detect_pullback_2nd(win, min_merged, pullback_max)
+        sig = detect_pullback_2nd(win, min_merged, pullback_max, vol_ma, vol_mult,
+                                  require_stall_short, stall_max_gap)
         if not sig:
             continue
         key = (sig["direction"], sig["struct_anchor"])
@@ -138,6 +153,8 @@ def _bucket(rows: list):
 
 async def run_pullback_backtest(rest, symbols: list, days: int = 7,
                                 min_merged: int = 5, pullback_max: float = 0.5,
+                                vol_ma: int = 10, vol_mult: float = 2.0,
+                                require_stall_short: bool = True, stall_max_gap: int = 3,
                                 progress=None) -> dict:
     from .backtest import fetch_series
     import time as _t
@@ -153,7 +170,8 @@ async def run_pullback_backtest(rest, symbols: list, days: int = 7,
             except Exception:
                 series = []
         if len(series) >= 80:
-            sigs = await asyncio.to_thread(_walk_symbol, sym, series, min_merged, pullback_max)
+            sigs = await asyncio.to_thread(_walk_symbol, sym, series, min_merged, pullback_max,
+                                           vol_ma, vol_mult, require_stall_short, stall_max_gap)
             all_sigs.extend(sigs)
         done[0] += 1
         if progress and done[0] % 10 == 0:
@@ -163,6 +181,7 @@ async def run_pullback_backtest(rest, symbols: list, days: int = 7,
     by_dir = _bucket(all_sigs)
     total = _bucket([dict(s, direction="all") for s in all_sigs]).get("all", {})
     return {"period_days": days, "symbols": len(symbols), "pullback_max": pullback_max,
+            "vol_mult": vol_mult, "require_stall_short": require_stall_short,
             "min_merged": min_merged, "elapsed_s": round(_t.time() - t0, 1),
             "total": total, "by_direction": by_dir,
             "n_signals": len(all_sigs),

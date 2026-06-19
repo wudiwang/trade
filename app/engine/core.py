@@ -411,7 +411,7 @@ class Engine:
             "ws_last_msg_age_s": round(time.time() - self.ws.last_msg_at, 1) if self.ws.last_msg_at else None,
             "last_eval_ms": round(self.last_eval_ms, 1),
             "mode": self.cfg.mode,
-            "tracks": {t: self.paper.stats(t) for t in ("buy1", "buy2")},
+            "tracks": {t: self.paper.stats(t) for t in ("buy1", "buy2", "second_buy", "second_sell")},
             "macro": self.signal_engine.macro_view,
             "squeeze": sorted(self.squeeze.values(), key=lambda x: -x.get("oi_change_pct", 0)),
             "funnel": dict(self.signal_engine.funnel),

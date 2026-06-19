@@ -19,7 +19,12 @@ function toast(msg) {
 async function logout() { await fetch('/api/logout', {method: 'POST'}); location.href = '/login.html'; }
 
 // ---------- 状态与统计 ----------
-const TRACK_NAMES = {buy1: '🧪模拟·一买', buy2: '🧪模拟·二买'};
+const TRACK_NAMES = {
+  buy1: '🧪模拟·一买',
+  buy2: '🧪模拟·二买',
+  second_buy: '🟢 二买',
+  second_sell: '🔴 二卖',
+};
 async function loadStatus() {
   const s = await api('/api/status');
   if (s.error) { $('stat-cards').innerHTML = '<div class="card"><h3>引擎</h3><div class="big red">未运行</div></div>'; return; }
@@ -48,10 +53,12 @@ async function loadStatus() {
 }
 
 // ---------- 信号 ----------
-const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', chan: '分型'};
+const TYPE_TAG = {buy1: '✅一买', buy2: '🔁二买', second_buy: '🟢二买', second_sell: '🔴二卖', chan: '分型'};
 // 生命周期(方案A): try=试买/试卖, ok=一买/一卖(确认), fail=一买✗(失败)
 function typeLabel(type, dir, state) {
   if (state === 'try') return dir === 'short' ? '试卖' : '试买';
+  if (type === 'second_sell') return state === 'fail' ? '二卖✗' : '二卖';
+  if (type === 'second_buy') return state === 'fail' ? '二买✗' : '二买';
   const base = dir === 'short'
     ? (type === 'buy1' ? '一卖' : type === 'buy2' ? '二卖' : (TYPE_TAG[type] || type))
     : (type === 'buy1' ? '一买' : type === 'buy2' ? '二买' : (TYPE_TAG[type] || type));
@@ -126,7 +133,6 @@ async function loadTrades() {
       <td>${t.pnl_r == null ? '–' : t.pnl_r.toFixed(2)}</td>
       <td>${fmtT(t.opened_at)}</td>
     </tr>`).join('') || '<tr><td colspan="12" class="muted">暂无记录</td></tr>';
-  loadEquity();
 }
 function openChartFromTrade(id) {
   const t = tradeCache[id];
@@ -342,7 +348,8 @@ async function renderChart(symbol, tf, ref) {
   for (const s of d.signals.filter(x => x.status !== 'error')) {
     let ex = {};
     try { ex = JSON.parse(s.extra || '{}'); } catch (e) {}
-    const et = snap(s.created_at);
+    const entryTime = ex.structure && ex.structure.entry_time ? Math.floor(Number(ex.structure.entry_time) / 1000) : s.created_at;
+    const et = snap(entryTime);
     if (et != null) markers.push({
       time: et, position: s.direction === 'long' ? 'belowBar' : 'aboveBar',
       color: '#ffd700',                                   // 买入点统一黄色, 醒目区分入场位置
@@ -376,6 +383,34 @@ async function renderChart(symbol, tf, ref) {
     if (ex.breakdown && ex.breakdown.time) {
       const bt = snap(Math.floor(ex.breakdown.time / 1000));
       if (bt != null) markers.push({time: bt, position: 'aboveBar', color: '#f1c40f', shape: 'circle', text: '破位K'});
+    }
+    if (Array.isArray(ex.markers)) {
+      for (const m of ex.markers) {
+        const rawTime = Number(m.time || 0);
+        const mt = rawTime ? snap(Math.floor(rawTime / 1000)) : null;
+        if (mt == null) continue;
+        const isSweep = m.key === 'volume_sweep';
+        const text = isSweep && m.vol_ratio != null ? `${m.label} ${m.vol_ratio}x #${s.id}` : `${m.label} #${s.id}`;
+        const position = m.position || (s.direction === 'long' ? 'belowBar' : 'aboveBar');
+        const color = isSweep ? '#ff7043' : '#4f8ef7';
+        markers.push({
+          time: mt,
+          position,
+          color,
+          shape: isSweep ? 'square' : 'circle',
+          text,
+        });
+        if (m.price != null) {
+          cs.createPriceLine({
+            price: Number(m.price),
+            color,
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: text,
+          });
+        }
+      }
     }
     if (ex.main_k && ex.main_k.time) {
       const mt = snap(Math.floor(ex.main_k.time / 1000));
@@ -536,11 +571,57 @@ async function loadBtcChart() {
 }
 
 // ---------- 启动 ----------
-loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadTfStats(); loadPlaybooks(); loadSettings(); loadPositions(); loadLiveStats(); loadAutoSwitch(); loadBtcChart(); connectWS();
+function removeLegacySummaryPanels() {
+  ['t-playbooks', 'bt-result', 't-tfstats', 'equity-chart'].forEach(id => {
+    const el = $(id);
+    const panel = el ? el.closest('.panel') : null;
+    if (panel) panel.remove();
+  });
+}
+
+async function loadStrategyStatus() {
+  const s = await api('/api/status');
+  if (s.error) {
+    $('stat-cards').innerHTML = '<div class="card"><h3>引擎</h3><div class="big red">未运行</div></div>';
+    return;
+  }
+  $('st-mode').textContent = s.mode === 'paper' ? 'PAPER' : 'LIVE';
+  $('st-symbols').textContent = `${s.symbols} 币种`;
+  $('st-ws').textContent = s.ws_conns > 0 ? `WS OK (${s.ws_last_msg_age_s ?? '?'}s)` : 'WS OFF';
+  const h = Math.floor(s.uptime_s / 3600), m = Math.floor(s.uptime_s % 3600 / 60);
+  $('st-uptime').textContent = `运行 ${h}h${m}m`;
+
+  let cards = `<div class="card"><h3>引擎</h3>
+    <div class="big ${s.ws_conns > 0 ? '' : 'red'}">${s.ws_conns > 0 ? '正常' : '异常'}</div>
+    <div class="sub">评估 ${s.last_eval_ms}ms · 累计预位 ${(s.funnel || {}).breakdown || 0} 次</div></div>`;
+
+  const strategyStats = await api('/api/strategy_stats');
+  if (!strategyStats.length) {
+    cards += `<div class="card"><h3>策略模拟盘</h3>
+      <div class="big">+0 U</div>
+      <div class="sub">0平 / 0持 · 胜率0% · 期望0R</div></div>`;
+  }
+  for (const t of strategyStats) {
+    const pnl = Number(t.total_pnl || 0);
+    const cls = pnl > 0 ? 'green' : pnl < 0 ? 'red' : '';
+    cards += `<div class="card"><h3>${t.strategy}</h3>
+      <div class="big ${cls}">${pnl >= 0 ? '+' : ''}${pnl} U</div>
+      <div class="sub">${t.closed}平 / ${t.open}持 · 胜率${t.win_rate}% · 期望${t.expectancy_r}R</div></div>`;
+  }
+  $('stat-cards').innerHTML = cards;
+
+  const sq = s.squeeze || [];
+  $('squeeze-chips').innerHTML = sq.length ? sq.map(c => `
+    <span class="pill ${c.strong ? 'gold' : ''}" style="cursor:pointer" onclick="openChart('${c.symbol}','15m')"
+      title="OI ${c.oi_change_pct}% · 费率${((c.funding||0)*100).toFixed(3)}% · 价格位${Math.round(c.pos*100)}%">
+      ${c.strong ? 'HOT' : 'WARN'} ${c.symbol} OI${c.oi_change_pct >= 0 ? '+' : ''}${c.oi_change_pct}%
+    </span>`).join('') : '<span class="muted">暂无（行情平静时正常）</span>';
+}
+loadStatus = loadStrategyStatus;
+
+removeLegacySummaryPanels();
+loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadSettings(); loadPositions(); loadAutoSwitch(); loadBtcChart(); connectWS();
 setInterval(loadStatus, 15000);
 setInterval(loadAutoSwitch, 20000);
 setInterval(loadPositions, 15000);
-setInterval(loadLiveStats, 30000);
 setInterval(loadBtcChart, 60000);
-setInterval(loadTfStats, 60000);
-setInterval(loadPlaybooks, 30000);
