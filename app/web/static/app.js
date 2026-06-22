@@ -476,22 +476,31 @@ async function toggleAuto() {
   toast(r.ok ? ('✅ 自动交易已' + (turnOn ? '开启' : '关闭')) : '❌ ' + (r.error || '失败'));
   loadAutoSwitch();
 }
+// 🔴 线上配置项: 直接影响实盘下单金额/杠杆/风控的参数, 单独分组醒目展示
+const LIVE_KEYS = ['mode', 'trade_direction', 'live.auto_trade', 'risk.account_equity', 'risk.leverage',
+  'live.fixed_margin_pct', 'live.fixed_margin_u', 'live.fixed_notional_u', 'live.max_positions', 'live.max_loss_pct'];
+function renderField(k, v) {
+  const label = SETTING_LABELS[k] || k;
+  if (k === 'mode') return `<label>${label}<select data-k="${k}">
+    <option value="paper" ${v === 'paper' ? 'selected' : ''}>paper 模拟</option>
+    <option value="live" ${v === 'live' ? 'selected' : ''}>live 实盘</option></select></label>`;
+  if (k === 'trade_direction') return `<label>${label}<select data-k="${k}">
+    <option value="both" ${v === 'both' ? 'selected' : ''}>全部(多空)</option>
+    <option value="long" ${v === 'long' ? 'selected' : ''}>只做多</option>
+    <option value="short" ${v === 'short' ? 'selected' : ''}>只做空</option></select></label>`;
+  if (BOOL_SETTINGS.includes(k)) return `<label>${label}<select data-k="${k}">
+    <option value="true" ${v ? 'selected' : ''}>开</option>
+    <option value="false" ${!v ? 'selected' : ''}>关</option></select></label>`;
+  return `<label>${label}<input data-k="${k}" value="${v}"></label>`;
+}
 async function loadSettings() {
   const s = await api('/api/settings');
-  $('settings').innerHTML = Object.entries(s).map(([k, v]) => {
-    const label = SETTING_LABELS[k] || k;
-    if (k === 'mode') return `<label>${label}<select data-k="${k}">
-      <option value="paper" ${v === 'paper' ? 'selected' : ''}>paper 模拟</option>
-      <option value="live" ${v === 'live' ? 'selected' : ''}>live 实盘</option></select></label>`;
-    if (k === 'trade_direction') return `<label>${label}<select data-k="${k}">
-      <option value="both" ${v === 'both' ? 'selected' : ''}>全部(多空)</option>
-      <option value="long" ${v === 'long' ? 'selected' : ''}>只做多</option>
-      <option value="short" ${v === 'short' ? 'selected' : ''}>只做空</option></select></label>`;
-    if (BOOL_SETTINGS.includes(k)) return `<label>${label}<select data-k="${k}">
-      <option value="true" ${v ? 'selected' : ''}>开</option>
-      <option value="false" ${!v ? 'selected' : ''}>关</option></select></label>`;
-    return `<label>${label}<input data-k="${k}" value="${v}"></label>`;
-  }).join('');
+  const title = (t, c) => `<div style="flex-basis:100%;width:100%;font-weight:600;color:${c};margin:8px 0 2px">${t}</div>`;
+  const live = LIVE_KEYS.filter(k => k in s).map(k => renderField(k, s[k])).join('');
+  const other = Object.entries(s).filter(([k]) => !LIVE_KEYS.includes(k)).map(([k, v]) => renderField(k, v)).join('');
+  $('settings').innerHTML =
+    title('🔴 线上配置项 · 改完点「保存并热生效」立即生效(影响实盘下单)', '#f0883e') + live +
+    title('🧪 策略 / 回测参数', '#8b949e') + other;
 }
 async function saveSettings() {
   const body = {};

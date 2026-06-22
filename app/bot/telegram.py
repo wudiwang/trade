@@ -19,21 +19,66 @@ def fmt_price(p: float) -> str:
     return f"{p:.6g}"
 
 
-def signal_card(sid: int, s: dict, mode: str, chart_url: str | None = None) -> str:
+def compute_order(cfg, entry: float, direction: str, sl: float, tp: float) -> dict:
+    """按线上下单公式(与 trader.py 一致)预估本单名义额/保证金/杠杆/预期盈亏(U)。"""
+    lev = float(cfg.get("risk.leverage", 5) or 5)
+    margin = float(cfg.get("live.fixed_margin_u", 0) or 0)
+    margin_pct = float(cfg.get("live.fixed_margin_pct", 0) or 0)
+    fixed = float(cfg.get("live.fixed_notional_u", 0) or 0)
+    equity = float(cfg.get("risk.account_equity", 0) or 0)
+    if margin > 0:
+        margin_used, notional = margin, margin * lev
+    elif margin_pct > 0 and equity > 0:
+        margin_used = equity * margin_pct / 100.0
+        notional = margin_used * lev
+    elif fixed > 0:
+        notional = fixed
+        margin_used = fixed / lev if lev else fixed
+    else:
+        notional = margin_used = 0.0           # 风险算法: 名义额由 suggested_qty 决定, 不预估
+    profit = loss = 0.0
+    if notional > 0 and entry > 0:
+        if direction == "long":
+            profit, loss = notional * (tp - entry) / entry, notional * (entry - sl) / entry
+        else:
+            profit, loss = notional * (entry - tp) / entry, notional * (sl - entry) / entry
+    return {"notional": notional, "margin": margin_used, "lev": lev,
+            "profit": profit, "loss": loss, "equity": equity}
+
+
+def signal_card(sid: int, s: dict, mode: str, chart_url: str | None = None,
+                order: dict | None = None, acct: dict | None = None) -> str:
     d = "做多 🟢" if s["direction"] == "long" else "做空 🔴"
     star = "⭐强信号" if s["strength"] == "strong" else ""
+    mode_tag = f"{mode} ⚠️真实下单" if mode == "live" else mode
     lines = [
         f"📊 <b>#{sid} {s['symbol']} {s['tf']} {d}</b> {star}",
-        f"级别: {'主信号 RR≥5' if s['kind'] == 'primary' else '次级 RR≥2.5'}   模式: {mode}",
+        f"级别: {'主信号 RR≥5' if s['kind'] == 'primary' else '次级 RR≥2.5'}   模式: {mode_tag}",
         "",
-        f"入场: <code>{fmt_price(s['entry'])}</code>",
-        f"止损: <code>{fmt_price(s['sl'])}</code>",
-        f"止盈: <code>{fmt_price(s['tp'])}</code>(密集成交区)",
+        f"入场: <code>{fmt_price(s['entry'])}</code>   止损: <code>{fmt_price(s['sl'])}</code>   止盈: <code>{fmt_price(s['tp'])}</code>",
         f"盈亏比: <b>{s['rr']}</b>   量能: {s['vol_ratio']}x均量",
-        f"建议仓位: <code>{s['suggested_qty']:.6g}</code> 张 (风险 {s['risk_usdt']} U)",
-        "",
-        f"依据: {s['reason']}",
     ]
+    if order and order["notional"] > 0:
+        lines += [
+            "",
+            f"💵 本单: 名义 <b>{order['notional']:.0f}U</b> / 保证金 {order['margin']:.1f}U / 杠杆 {order['lev']:.0f}x",
+            f"   预期盈利: <b>+{order['profit']:.2f}U</b> (价到止盈)",
+            f"   预期亏损: <b>−{order['loss']:.2f}U</b> (价到止损)",
+        ]
+    else:
+        lines.append(f"建议仓位: <code>{s['suggested_qty']:.6g}</code> 张 (风险 {s['risk_usdt']} U)")
+    if acct is not None:
+        ps = acct.get("positions", [])
+        if ps:
+            txt = " · ".join(
+                f"{p['symbol'].replace('USDT','')} {'多' if float(p['positionAmt'])>0 else '空'} {float(p['unRealizedProfit']):+.1f}U"
+                for p in ps[:5])
+            lines += ["", f"📦 当前持仓: {len(ps)}个  {txt}"]
+        else:
+            lines += ["", "📦 当前持仓: 无"]
+        eq = order.get("equity", 0) if order else 0
+        lines.append(f"💰 可用保证金: {acct.get('avail', 0):.1f}U" + (f" / 本金 {eq:.0f}U" if eq else ""))
+    lines += ["", f"依据: {s['reason']}"]
     if chart_url:
         lines += ["", f"图形: {chart_url}"]
     return "\n".join(lines)
@@ -65,6 +110,20 @@ class TgBot:
                 log.warning("tg %s failed: %s", method, data)
             return data
 
+    async def _account_snapshot(self) -> dict | None:
+        """拉币安当前持仓 + 可用保证金(仅 live 且有 trader 时)。失败返回 None,不阻塞推送。"""
+        rest = getattr(self.trader, "rest", None) if self.trader else None
+        if not rest:
+            return None
+        try:
+            pos = await rest.position_risk()
+            live = [p for p in pos if abs(float(p.get("positionAmt", 0) or 0)) > 0]
+            acct = await rest.account_info()
+            return {"positions": live, "avail": float(acct.get("availableBalance", 0) or 0)}
+        except Exception as e:
+            log.warning("account snapshot failed: %s", e)
+            return None
+
     # ---------- 推送 ----------
     async def on_signal(self, sid: int, sig) -> None:
         """engine.signal_subscribers 回调。只推主信号（primary）。"""
@@ -74,6 +133,8 @@ class TgBot:
         if s.get("kind") != "primary":
             return
         chart_url = self._chart_url(sid)
+        order = compute_order(self.cfg, float(s["entry"]), s["direction"], float(s["sl"]), float(s["tp"]))
+        acct = await self._account_snapshot()
         buttons = [[
             {"text": "✅ 确认买入", "callback_data": f"c:{sid}"},
             {"text": "❌ 忽略", "callback_data": f"i:{sid}"},
@@ -82,7 +143,8 @@ class TgBot:
             buttons.append([{"text": "📈 查看图形", "url": chart_url}])
         kb = {"inline_keyboard": buttons}
         r = await self.api(
-            "sendMessage", chat_id=self.chat_id, text=signal_card(sid, s, self.cfg.mode, chart_url),
+            "sendMessage", chat_id=self.chat_id,
+            text=signal_card(sid, s, self.cfg.mode, chart_url, order, acct),
             parse_mode="HTML", reply_markup=kb,
         )
         if r.get("ok"):
