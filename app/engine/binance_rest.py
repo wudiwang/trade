@@ -78,9 +78,18 @@ class BinanceRest:
         return out
 
     async def ticker_24h(self) -> dict[str, float]:
-        """symbol -> 24h 成交额(USDT)。"""
+        """symbol -> 24h 成交额(USDT)。容错: 跳过缺 symbol/quoteVolume 的异常条目, 避免整体崩溃。"""
         data = await self._get("/fapi/v1/ticker/24hr")
-        return {d["symbol"]: float(d["quoteVolume"]) for d in data}
+        out: dict[str, float] = {}
+        for d in data:
+            sym, qv = d.get("symbol"), d.get("quoteVolume")
+            if sym is None or qv is None:
+                continue
+            try:
+                out[sym] = float(qv)
+            except (TypeError, ValueError):
+                continue
+        return out
 
     async def klines(self, symbol: str, interval: str, limit: int = 500,
                      start_time: int | None = None) -> list[tuple]:
