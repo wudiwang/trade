@@ -1,0 +1,22 @@
+{
+ "factors": [
+  {
+   "feat": "dist_ma20_al",
+   "op": "<=",
+   "thr": -0.12146
+  },
+  {
+   "feat": "rsi_room",
+   "op": "<=",
+   "thr": 58.8
+  },
+  {
+   "feat": "wick_al",
+   "op": "<=",
+   "thr": 0.31579
+  }
+ ],
+ "tried": [],
+ "iter": 4,
+ "done": true
+}
