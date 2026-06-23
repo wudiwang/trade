@@ -1,0 +1,22 @@
+{
+ "factors": [
+  {
+   "feat": "dist_ma20_al",
+   "op": "<=",
+   "thr": -3.534
+  },
+  {
+   "feat": "mom20_al",
+   "op": ">=",
+   "thr": -6.3603
+  },
+  {
+   "feat": "mom20_al",
+   "op": ">=",
+   "thr": -5.69038
+  }
+ ],
+ "tried": [],
+ "iter": 4,
+ "done": true
+}

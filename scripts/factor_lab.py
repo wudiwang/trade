@@ -185,8 +185,9 @@ def cmd_iterate(strat):
         print(f"KEEP 因子#{len(kept)}: {best['fac']['feat']} {best['fac']['op']} {best['fac']['thr']} | holdout {base_hold['exp']}→{best['mho']['exp']}R (n {base_hold['n']}→{best['mho']['n']})")
     else:
         state["tried"].append(state["iter"])
-        log.append("⚠ 本轮未找到能在holdout上提升期望的因子(诚实记录, 不硬塞)。")
-        print("NO-GAIN: 本轮没找到样本外能提升的因子。")
+        state["done"] = True   # 找不到更多稳健因子=优化到头, 标done换下一个(不硬凑3个)
+        log.append(f"⚠ 未找到更多能在holdout提升的因子, 优化到此为止(共{len(kept)}个因子)。")
+        print(f"NO-GAIN: 没有更多样本外有效因子, {strat} 优化结束(共{len(kept)}因子)。")
     json.dump(state, open(STATE_PATH(strat), "w"), ensure_ascii=False, indent=1)
     with open(os.path.join(OPT_DIR, f"{strat}.md"), "a", encoding="utf-8") as fp:
         fp.write("\n".join(log) + "\n")
