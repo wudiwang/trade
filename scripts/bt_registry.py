@@ -382,6 +382,49 @@ SCANS = {"smallbig": scan_smallbig, "pullback": scan_pullback,
          "deepbase": scan_deepbase, "reversal": scan_reversal,
          "macro_pullback": scan_macro_pullback}
 
+# 经典战法批量挂载(scripts/strat_classic.py, 用户 2026-06-23)
+try:
+    import strat_classic as _classic
+    SCANS.update(_classic.CLASSIC_SCANS)
+    META.update(_classic.CLASSIC_META)
+except Exception as _e:  # noqa
+    import sys as _sys
+    print(f"[registry] strat_classic 挂载失败: {_e}", file=_sys.stderr)
+
+
+def cache_status(days=30, ref_symbol="BTCUSDT"):
+    """本地数据新鲜度:各级别最新K线时间 + 各策略信号JSON生成时间。供看图器顶栏显示。"""
+    now = time.time()
+    out = {"days": days, "klines": {}, "signals": {}}
+    for tf in ("5m", "15m", "1h"):
+        p = os.path.join(CACHE, f"{ref_symbol}_{tf}_{days}d.json")
+        if not os.path.exists(p):
+            cand = glob.glob(os.path.join(CACHE, f"*_{tf}_{days}d.json"))
+            p = cand[0] if cand else None
+        if p and os.path.exists(p):
+            try:
+                k = json.load(open(p))
+                last = int(k[-1]["open_time"]) // 1000 if k else 0
+                out["klines"][tf] = {"last_open": last, "bars": len(k),
+                                     "age_min": round((now - last) / 60, 1) if last else None,
+                                     "symbol": os.path.basename(p)[: -len(f"_{tf}_{days}d.json")]}
+            except Exception:
+                out["klines"][tf] = None
+        else:
+            out["klines"][tf] = None
+    for n in SCANS:
+        p = os.path.join(CACHE, f"sig_{n}_{days}d.json")
+        if os.path.exists(p):
+            try:
+                cnt = len(json.load(open(p)))
+            except Exception:
+                cnt = None
+            mt = int(os.path.getmtime(p))
+            out["signals"][n] = {"generated": mt, "age_min": round((now - mt) / 60, 1), "count": cnt}
+        else:
+            out["signals"][n] = None
+    return out
+
 
 def score(strat, days=30, spans=(7, 14, 30), fee_pct_side=0.045, n_samples=8):
     """单策略成绩单:1周/2周/1月 × 多空,含扣费后净期望 + 代表性样本。供策略研究Agent判断。"""
