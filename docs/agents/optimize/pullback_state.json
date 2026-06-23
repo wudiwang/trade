@@ -1,0 +1,22 @@
+{
+ "factors": [
+  {
+   "feat": "mom5_al",
+   "op": ">=",
+   "thr": 0.21095
+  },
+  {
+   "feat": "atr_pct",
+   "op": ">=",
+   "thr": 0.00552
+  },
+  {
+   "feat": "mom5_al",
+   "op": "<=",
+   "thr": 0.63892
+  }
+ ],
+ "tried": [],
+ "iter": 4,
+ "done": true
+}

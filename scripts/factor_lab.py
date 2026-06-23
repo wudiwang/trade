@@ -195,6 +195,71 @@ def cmd_iterate(strat):
     return state
 
 
+def _discover(train_rows, n=3, min_val=40):
+    """只用训练段发现因子(内部再切训练/验证), 返回因子列表。测试段绝不参与。"""
+    tr_all = sorted(train_rows, key=lambda r: r["t"])
+    cut = tr_all[int(0.7 * len(tr_all))]["t"]
+    tr = [r for r in tr_all if r["t"] < cut]
+    va = [r for r in tr_all if r["t"] >= cut]
+    factors = []
+    for _ in range(n):
+        base_va = _metrics(_apply(va, factors))["exp"]
+        base_tr = _metrics(_apply(tr, factors))["exp"]
+        best = None
+        for feat in FEATURES:
+            cur = _apply(tr, factors)
+            if len(cur) < MIN_TRAIN:
+                continue
+            vals = sorted(r["f"][feat] for r in cur)
+            for q in (0.2, 0.3, 0.4, 0.5, 0.6, 0.7):
+                thr = vals[int(q * len(vals))]
+                for op in (">=", "<="):
+                    fac = {"feat": feat, "op": op, "thr": round(thr, 5)}
+                    t2 = _apply(_apply(tr, factors), [fac]); v2 = _apply(_apply(va, factors), [fac])
+                    if len(t2) < MIN_TRAIN or len(v2) < min_val:
+                        continue
+                    lift = _metrics(v2)["exp"] - base_va
+                    if lift > 0 and _metrics(t2)["exp"] - base_tr > 0:
+                        sc = lift
+                        if not best or sc > best["sc"]:
+                            best = {"fac": fac, "sc": sc}
+        if not best:
+            break
+        factors.append(best["fac"])
+    return factors
+
+
+def cmd_walkforward(strat, n_windows=4):
+    rows = sorted((json.loads(x) for x in open(FEAT_PATH(strat), encoding="utf-8")), key=lambda r: r["t"])
+    tmin, tmax = rows[0]["t"], rows[-1]["t"]
+    span = tmax - tmin
+    test_start = tmin + 0.40 * span          # 前40%最少训练, 后60%切成 n_windows 个"未来测试窗"
+    wlen = (tmax - test_start) / n_windows
+    print(f"=== {strat} walk-forward({n_windows}个未来窗, 测试段从未参与因子发现) ===")
+    import time as _t
+    deltas, feat_hits = [], {}
+    for w in range(n_windows):
+        ws, we = test_start + w * wlen, test_start + (w + 1) * wlen
+        train = [r for r in rows if r["t"] < ws]
+        test = [r for r in rows if ws <= r["t"] < we]
+        if len(train) < 200 or len(test) < 30:
+            print(f"  窗{w+1}: 样本不足跳过"); continue
+        facs = _discover(train, 3)
+        base, opt = _metrics(test), _metrics(_apply(test, facs))
+        d = round(opt["exp"] - base["exp"], 3)
+        deltas.append(d)
+        for f in facs:
+            feat_hits[f["feat"]] = feat_hits.get(f["feat"], 0) + 1
+        wd = f"{_t.strftime('%m-%d', _t.gmtime(ws))}~{_t.strftime('%m-%d', _t.gmtime(we))}"
+        print(f"  窗{w+1}({wd}): 基线{base['exp']}R(n{base['n']}) → 优化{opt['exp']}R(n{opt['n']})  Δ{'+' if d>=0 else ''}{d}R  因子{[f['feat'] for f in facs]}")
+    if deltas:
+        pos = sum(1 for d in deltas if d > 0)
+        print(f"  >> {len(deltas)}个未来窗中 {pos}个改善, 平均Δ {round(sum(deltas)/len(deltas),3)}R")
+        print(f"  >> 特征稳定性(被挑中次数): {dict(sorted(feat_hits.items(), key=lambda x:-x[1]))}")
+        verdict = "稳健(多窗一致改善+特征稳定)" if pos >= len(deltas) - 1 and max(feat_hits.values(), default=0) >= len(deltas) - 1 else ("部分有效" if pos > len(deltas) / 2 else "不稳健/疑似单窗运气")
+        print(f"  >> 判定: {verdict}")
+
+
 # 整夜 campaign: 逐个策略做"3因子优化", 一次调用推进一个未完成的策略。
 CAMPAIGN = ["macro_pullback", "smallbig", "reversal", "deepbase", "pullback"]
 
@@ -219,12 +284,14 @@ def cmd_campaign():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["build", "iterate", "campaign"])
+    ap.add_argument("cmd", choices=["build", "iterate", "campaign", "walkforward"])
     ap.add_argument("strat", nargs="?")
     a = ap.parse_args()
     if a.cmd == "build":
         cmd_build(a.strat)
     elif a.cmd == "iterate":
         cmd_iterate(a.strat)
+    elif a.cmd == "walkforward":
+        cmd_walkforward(a.strat)
     else:
         cmd_campaign()
