@@ -410,6 +410,16 @@ META["macro_pullback_15m"] = {"label": "BTC手动二买卖·15m", "tf": "15m",
               "近7天回测: 383买卖点, 胜率34.8%, 扣费后-0.14R"]}
 
 
+# 假突破跌回(用户 2026-07-01)
+try:
+    import strat_falsebreak as _fb
+    SCANS.update(_fb.SCANS)
+    META.update(_fb.META)
+except Exception as _e:  # noqa
+    import sys as _sys
+    print(f"[registry] strat_falsebreak 挂载失败: {_e}", file=_sys.stderr)
+
+
 def cache_status(days=30, ref_symbol="BTCUSDT"):
     """本地数据新鲜度:各级别最新K线时间 + 各策略信号JSON生成时间。供看图器顶栏显示。"""
     now = time.time()
