@@ -12,6 +12,8 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)   # 让 scan_macro_pullback 里的 from app.engine... 能解析
 CACHE = os.path.join(ROOT, ".btcache")
 _MODS = {}
 _CACHE_MEM = {}
@@ -38,6 +40,8 @@ def cache_loader(days):
         out = {}
         for f in glob.glob(os.path.join(CACHE, f"*{tag}")):
             sym = os.path.basename(f)[: -len(tag)]
+            if sym.startswith("sig_"):   # 排除信号JSON(如 sig_macro_pullback_15m_30d.json), 别当K线读
+                continue
             try:
                 out[sym] = json.load(open(f))
             except Exception:
@@ -390,6 +394,20 @@ try:
 except Exception as _e:  # noqa
     import sys as _sys
     print(f"[registry] strat_classic 挂载失败: {_e}", file=_sys.stderr)
+
+
+# macro_pullback 的15m级别变体(用户 2026-06-26: 在15m上跑同一套二买二卖)
+def scan_macro_pullback_15m(C):
+    out = scan_macro_pullback(lambda tf: C("15m"))   # 把15m喂给5m硬编码的scan
+    for s in out:
+        s["strat"], s["tf"] = "macro_pullback_15m", "15m"
+    return out
+
+
+SCANS["macro_pullback_15m"] = scan_macro_pullback_15m
+META["macro_pullback_15m"] = {"label": "BTC手动二买卖·15m", "tf": "15m",
+    "logic": ["线上 macro_pullback 策略在15m级别跑", "结构+触发都在15m, 二买/二卖",
+              "近7天回测: 383买卖点, 胜率34.8%, 扣费后-0.14R"]}
 
 
 def cache_status(days=30, ref_symbol="BTCUSDT"):

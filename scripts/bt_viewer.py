@@ -46,6 +46,10 @@ DETAIL = {
     "macro_pullback": {"desc": "BTC大趋势下的山寨二买/二卖(威科夫弹簧/UTAD触发)",
                        "idea": "大盘方向+山寨结构二买二卖, 弹簧/UTAD确认入场",
                        "updated": "2026-06-19", "code": "app/engine/macro_pullback.py", "doc": ""},
+    "macro_pullback_15m": {"desc": "线上 macro_pullback 策略·15分钟级别",
+                           "idea": "同一套二买二卖, 结构+触发都在15m(噪音少于5m)",
+                           "updated": "2026-06-26", "code": "app/engine/macro_pullback.py",
+                           "doc": "近7天: 383点/34.8%胜/扣费-0.14R(仍负)"},
 }
 app = FastAPI()
 
@@ -173,7 +177,8 @@ def api_signals():
         {"id": s["id"], "strat": s.get("strat"), "symbol": s["symbol"], "dir": s["direction"],
          "stage": s.get("stage"), "t": s["created_at"], "entry": s["entry"], "sl": s["sl"],
          "tp": s["tp"], "result": s.get("result"), "pnl_r": s.get("pnl_r"),
-         "climaxX": s.get("climaxX"), "movePct": s.get("movePct"), "anchor": s.get("anchor")}
+         "climaxX": s.get("climaxX"), "movePct": s.get("movePct"), "anchor": s.get("anchor"),
+         "extra": s.get("extra"), "vol_ratio": s.get("vol_ratio")}
         for s in SIGNALS])
 
 
@@ -329,8 +334,26 @@ async function renderSig(s, tf){
  PL(s.entry,'#58a6ff','入场');PL(s.sl,'#f85149','止损');PL(s.tp,'#3fb950','止盈');   // 切级别后价位线保留
  const times=kl.map(k=>k.t);
  const mk=[];
- if(s.anchor)mk.push({time:snap(times,Math.floor(s.anchor/1000)),position:'belowBar',color:'#d29922',shape:'circle',text:'锚'+(s.climaxX?(' '+s.climaxX+'x'):'')});
- mk.push({time:snap(times,s.t),position:s.dir==='long'?'belowBar':'aboveBar',color:s.dir==='long'?'#3fb950':'#f85149',shape:s.dir==='long'?'arrowUp':'arrowDown',text:(s.dir==='long'?'买':'卖')+(s.result==='tp'?'✓':s.result==='sl'?'✗':'')});
+ // macro二买二卖: 用 extra.structure 画 爆量K/H1H2(或L1L2)分型 + 二买二卖入场(照线上)
+ let ex={}; try{ ex=typeof s.extra==='string'?JSON.parse(s.extra):(s.extra||{}); }catch(e){}
+ const st=ex.structure;
+ const res=s.result==='tp'?'✓':s.result==='sl'?'✗':'';
+ if(st && (st.H1!=null || st.L1!=null)){
+   const long=s.dir==='long', above='aboveBar', below='belowBar', pos=long?below:above;
+   const PLd=(p,c,t)=>{if(p!=null)lines.push(candle.createPriceLine({price:p,color:c,lineWidth:1,lineStyle:3,axisLabelVisible:true,title:t}));};
+   if(long){ // 二买: L1底分型 / L2底分型 / 爆量K@L1 / 买入
+     if(st.L1_time){ mk.push({time:snap(times,Math.floor(st.L1_time/1000)),position:below,color:'#ff7043',shape:'square',text:`爆量K${s.vol_ratio?(' '+s.vol_ratio+'x'):''}`}); mk.push({time:snap(times,Math.floor(st.L1_time/1000)),position:below,color:'#4f8ef7',shape:'circle',text:'L1底分型'}); PLd(st.L1,'#4f8ef7','L1底'); }
+     if(st.L2_time){ mk.push({time:snap(times,Math.floor(st.L2_time/1000)),position:below,color:'#4f8ef7',shape:'circle',text:'L2底分型'}); PLd(st.L2,'#4f8ef7','L2底'); }
+   } else { // 二卖: H1顶分型 / H2顶分型 / 爆量K@H1 / 卖出
+     if(st.H1_time){ mk.push({time:snap(times,Math.floor(st.H1_time/1000)),position:above,color:'#ff7043',shape:'square',text:`爆量K${s.vol_ratio?(' '+s.vol_ratio+'x'):''}`}); mk.push({time:snap(times,Math.floor(st.H1_time/1000)),position:above,color:'#4f8ef7',shape:'circle',text:'H1顶分型'}); PLd(st.H1,'#4f8ef7','H1顶'); }
+     if(st.H2_time){ mk.push({time:snap(times,Math.floor(st.H2_time/1000)),position:above,color:'#4f8ef7',shape:'circle',text:'H2顶分型'}); PLd(st.H2,'#4f8ef7','H2顶'); }
+   }
+   const et=st.entry_time?Math.floor(st.entry_time/1000):s.t;
+   mk.push({time:snap(times,et),position:pos,color:'#ffd700',shape:long?'arrowUp':'arrowDown',text:(long?'二买':'二卖')+res});
+ } else {
+   if(s.anchor)mk.push({time:snap(times,Math.floor(s.anchor/1000)),position:'belowBar',color:'#d29922',shape:'circle',text:'锚'+(s.climaxX?(' '+s.climaxX+'x'):'')});
+   mk.push({time:snap(times,s.t),position:s.dir==='long'?'belowBar':'aboveBar',color:s.dir==='long'?'#3fb950':'#f85149',shape:s.dir==='long'?'arrowUp':'arrowDown',text:(s.dir==='long'?'买':'卖')+res});
+ }
  candle.setMarkers(mk.sort((a,b)=>a.time-b.time));
  chart.timeScale().fitContent();
  const m=META[s.strat]||{};

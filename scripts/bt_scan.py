@@ -22,7 +22,7 @@ import bt_registry as R
 
 CACHE = R.CACHE
 FIELDS = ("strat", "symbol", "direction", "stage", "created_at", "entry", "sl", "tp",
-          "result", "pnl_r", "climaxX", "movePct", "anchor")
+          "result", "pnl_r", "climaxX", "movePct", "anchor", "extra", "vol_ratio")
 
 
 def main():
@@ -30,6 +30,7 @@ def main():
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--strats", default="")
     a = ap.parse_args()
+    os.makedirs(CACHE, exist_ok=True)
     names = [x for x in a.strats.split(",") if x] or list(R.SCANS)
     C = R.cache_loader(a.days)
     for n in names:
