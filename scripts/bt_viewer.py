@@ -203,6 +203,7 @@ def index():
 
 
 HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>回测看图器</title>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
@@ -221,6 +222,17 @@ HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
  .badge{padding:1px 6px;border-radius:4px;background:#30363d;font-size:11px}
  select{background:#161b22;color:#d6dae0;border:1px solid #30363d;border-radius:5px;padding:3px 6px;margin:2px}
  .muted{color:#8b949e}
+ /* ---- 手机竖屏: 上信号列表 / 下K线图, 单列堆叠 ---- */
+ @media (max-width:820px){
+   body{flex-direction:column;height:100vh}
+   #left{width:100%;height:38vh;border-right:none;border-bottom:2px solid #30363d;flex:none}
+   #right{flex:1;min-height:0}
+   #logic{max-height:26vh}
+   th,td{padding:8px 8px;font-size:13px}
+   tr.row{min-height:40px}
+   select{font-size:15px;padding:6px 8px}
+   #left::after{content:'↑列表 · ↓K线图';display:block;text-align:center;color:#6e7681;font-size:11px;padding:4px}
+ }
 </style></head><body>
 <div id=left>
  <div style="padding:8px 12px;position:sticky;top:0;background:#0e1116;z-index:2">
