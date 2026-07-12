@@ -6,10 +6,13 @@ research/
 
 供 bt_viewer 的 /ideas 页面读取。纯本地文件, 无数据库 —— 归档就是往这些目录里加文件。
 """
+import base64
 import glob
 import html
+import json
 import os
 import re
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESEARCH = os.path.join(ROOT, "research")
@@ -145,3 +148,200 @@ def asset_path(rel):
     if not p.startswith(os.path.normpath(RESEARCH)) or not os.path.exists(p):
         return None
     return p
+
+
+# ---------------------------------------------------------------------------
+# 研究闭环: 策略迭代 → 回测记录 → 标注 → 据标注迭代下一版
+# 设计见 docs/knowledge/idea_lab.md
+# ---------------------------------------------------------------------------
+
+def idea_dir(slug):
+    """按 slug 定位灵感目录(拒绝路径穿越)。"""
+    d = os.path.normpath(os.path.join(RESEARCH, "ideas", slug))
+    if not d.startswith(os.path.normpath(os.path.join(RESEARCH, "ideas"))) or not os.path.isdir(d):
+        return None
+    return d
+
+
+def _vnum(name):
+    m = re.match(r"v(\d+)", name)
+    return int(m.group(1)) if m else 0
+
+
+def load_versions(slug):
+    """策略迭代版本: strategy/v1.md, v2.md … 新的在前。"""
+    d = idea_dir(slug)
+    if not d:
+        return []
+    out = []
+    for f in glob.glob(os.path.join(d, "strategy", "v*.md")):
+        name = os.path.basename(f)[:-3]
+        meta, body = parse_front(open(f, encoding="utf-8").read())
+        out.append({
+            "v": name, "n": _vnum(name),
+            "title": meta.get("title", name),
+            "scanner": meta.get("scanner", ""),        # 可执行策略名; 空 = 跑不了回测
+            "date": meta.get("date", ""),
+            "based_on": meta.get("based_on", ""),      # 从哪一版演化而来
+            "why": meta.get("why", ""),                # 为什么有这一版(通常来自上一版的标注)
+            "body_html": md2html(body, f"ideas/{slug}"),
+        })
+    return sorted(out, key=lambda x: -x["n"])
+
+
+def save_version(slug, title, scanner, why="", body="", based_on=""):
+    """新建策略迭代版本 → strategy/vN.md。
+
+    scanner = bt_registry.SCANS 里的可执行策略名。没有 scanner 的版本只是文字, 跑不了回测 ——
+    这是"策略迭代"和"随手记想法"的分界线。
+    """
+    d = idea_dir(slug)
+    if not d:
+        return None
+    p = os.path.join(d, "strategy")
+    os.makedirs(p, exist_ok=True)
+    n = max([_vnum(os.path.basename(f)[:-3]) for f in glob.glob(os.path.join(p, "v*.md"))] or [0]) + 1
+    v = f"v{n}"
+    txt = (f"---\ntitle: {title}\nscanner: {scanner}\ndate: {time.strftime('%Y-%m-%d')}\n"
+           f"based_on: {based_on or (f'v{n-1}' if n > 1 else '')}\nwhy: {why}\n---\n\n{body}\n")
+    open(os.path.join(p, f"{v}.md"), "w", encoding="utf-8").write(txt)
+    return v
+
+
+def write_backtest(slug, payload):
+    """一次回测的结果 → backtests/<version>_<month>.json (同版本同月份覆盖重跑)。"""
+    d = idea_dir(slug)
+    if not d:
+        return None
+    p = os.path.join(d, "backtests")
+    os.makedirs(p, exist_ok=True)
+    bid = f"{payload['version']}_{payload['range']}"
+    payload["id"] = bid
+    json.dump(payload, open(os.path.join(p, f"{bid}.json"), "w", encoding="utf-8"),
+              ensure_ascii=False, indent=1)
+    return bid
+
+
+def load_backtests(slug):
+    """回测记录: backtests/<v>_<range>.json。顶部是期望/笔数/结论建议, 下面是触发信号。"""
+    d = idea_dir(slug)
+    if not d:
+        return []
+    out = []
+    for f in sorted(glob.glob(os.path.join(d, "backtests", "*.json")), reverse=True):
+        try:
+            j = json.load(open(f, encoding="utf-8"))
+        except Exception:
+            continue
+        bid = os.path.basename(f)[:-5]
+        ann = load_annotations(slug, bid)
+        j["id"] = bid
+        j["n_annotated"] = len(ann)
+        j["annotations"] = ann
+        out.append(j)
+    return out
+
+
+def load_annotations(slug, bt_id):
+    """标注记录(追加式, 同一信号以最后一条为准)。绑定回测=绑定策略版本, 一经生成不随新版本改变。"""
+    d = idea_dir(slug)
+    if not d:
+        return {}
+    f = os.path.join(d, "annotations", f"{bt_id}.jsonl")
+    if not os.path.exists(f):
+        return {}
+    out = {}
+    for ln in open(f, encoding="utf-8"):
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            r = json.loads(ln)
+            out[str(r["sig"])] = r
+        except Exception:
+            pass
+    return out
+
+
+def save_annotation(slug, bt_id, sig, verdict, reason=""):
+    """verdict: ok(符合要求) | bad(不准, 需优化筛选语句)。reason 是以后改规则的依据。"""
+    d = idea_dir(slug)
+    if not d:
+        return None
+    if verdict not in ("ok", "bad"):
+        return None
+    if verdict == "bad" and not reason.strip():
+        return None          # 标"不准"必须说明该改哪条 —— 否则这条标注对下一版没用
+    p = os.path.join(d, "annotations")
+    os.makedirs(p, exist_ok=True)
+    rec = {"sig": sig, "verdict": verdict, "reason": reason.strip(),
+           "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with open(os.path.join(p, f"{bt_id}.jsonl"), "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return rec
+
+
+def load_charts(slug):
+    """原始图清单。每张图记 symbol + center(那一刻的unix秒) → 右侧才画得出对应的动态K线。
+
+    没进清单的老图(手工放进 charts/ 的)也列出来, 只是没有 symbol/center, 右侧画不了图。
+    """
+    d = idea_dir(slug)
+    if not d:
+        return []
+    man = {}
+    f = os.path.join(d, "charts", "manifest.json")
+    if os.path.exists(f):
+        try:
+            man = {r["file"]: r for r in json.load(open(f, encoding="utf-8"))}
+        except Exception:
+            man = {}
+    out = []
+    for c in sorted(glob.glob(os.path.join(d, "charts", "*"))):
+        name = os.path.basename(c)
+        if name == "manifest.json":
+            continue
+        r = dict(man.get(name, {}))
+        r["file"] = name
+        r["path"] = f"ideas/{slug}/charts/{name}"
+        out.append(r)
+    return out
+
+
+def save_chart(slug, data_b64, symbol="", tf="5m", center=0, note=""):
+    """原始图上传(粘贴/选文件) + 记进 manifest。
+
+    注意: 不做图像识别 —— symbol/时间由用户给出, 不猜。见 docs/knowledge/idea_lab.md。
+    """
+    d = idea_dir(slug)
+    if not d:
+        return None
+    m = re.match(r"data:image/(png|jpeg|jpg|webp);base64,(.+)$", data_b64 or "", re.S)
+    if not m:
+        return None
+    ext = "jpg" if m.group(1) in ("jpeg", "jpg") else m.group(1)
+    try:
+        raw = base64.b64decode(m.group(2))
+    except Exception:
+        return None
+    if len(raw) > 12 * 1024 * 1024:
+        return None
+    p = os.path.join(d, "charts")
+    os.makedirs(p, exist_ok=True)
+    stamp = time.strftime("%Y-%m-%d_%H%M%S")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "", (symbol or "").upper())
+    fname = "_".join(x for x in [stamp, safe, tf] if x) + f".{ext}"
+    open(os.path.join(p, fname), "wb").write(raw)
+
+    f = os.path.join(p, "manifest.json")
+    rows = []
+    if os.path.exists(f):
+        try:
+            rows = json.load(open(f, encoding="utf-8"))
+        except Exception:
+            rows = []
+    rows.append({"file": fname, "symbol": safe, "tf": tf or "5m",
+                 "center": int(center or 0), "note": (note or "").strip(),
+                 "at": time.strftime("%Y-%m-%d %H:%M:%S")})
+    json.dump(rows, open(f, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    return f"ideas/{slug}/charts/{fname}"

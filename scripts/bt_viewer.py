@@ -12,6 +12,7 @@ import base64
 import bisect
 import json
 import os
+import re
 import secrets
 import socket
 import sys
@@ -222,22 +223,239 @@ def research_asset(p: str):
     return FileResponse(path)
 
 
+# ---- 研究闭环: 策略迭代 → 回测记录 → 标注 (设计见 docs/knowledge/idea_lab.md) ----
+
+@app.get("/api/idea/{slug}")
+def api_idea(slug: str):
+    import idea_lib
+    if not idea_lib.idea_dir(slug):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    idea = next((x for x in idea_lib.load_ideas() if x["slug"] == slug), None)
+    return JSONResponse({
+        "idea": idea,
+        "charts": idea_lib.load_charts(slug),
+        "versions": idea_lib.load_versions(slug),
+        "backtests": idea_lib.load_backtests(slug),
+    })
+
+
+@app.post("/api/idea/{slug}/chart")
+async def api_idea_chart(slug: str, request: Request):
+    """原始图上传(粘贴或选文件)。symbol/tf 由用户给, 不做图像识别。"""
+    import idea_lib
+    b = await request.json()
+    rel = idea_lib.save_chart(slug, b.get("data", ""), b.get("symbol", ""),
+                              b.get("tf", "5m"), b.get("center", 0), b.get("note", ""))
+    if not rel:
+        return JSONResponse({"error": "保存失败(灵感不存在/不是图片/超过12MB)"}, status_code=400)
+    return {"ok": True, "path": rel}
+
+
+@app.get("/api/scanners")
+def api_scanners():
+    """可执行策略(能被一键回测跑起来的) + 缓存实际覆盖的月份 —— 别让用户选一个跑不出数据的月份。"""
+    return JSONResponse({
+        "scanners": [{"name": k, "label": (R.META.get(k) or {}).get("label", k),
+                      "tf": trig_tf(k)} for k in sorted(R.SCANS)],
+        "coverage": _coverage(),
+    })
+
+
+def _coverage():
+    """每个月实际能跑到什么数据 —— 别让用户选一个跑不出东西的月份还不知道为什么。
+
+    30d 档: 663 币, 只覆盖最近30天(所以"当月/上月"往往只有半个月);
+    365d 档: 只有 50 个币有一年数据。
+    """
+    import datetime as dt
+    now = dt.datetime.now()
+    c30 = now - dt.timedelta(days=30)          # 30d 缓存的起点
+    months = []
+    y, m = now.year, now.month
+    for _ in range(13):
+        ms = dt.datetime(y, m, 1)
+        me = dt.datetime(y + (m == 12), (m % 12) + 1, 1)
+        ov_s, ov_e = max(ms, c30), min(me, now)          # 与30d缓存的交集
+        ov_days = max(0, (ov_e - ov_s).days)
+        full = ov_days >= (me - ms).days - 1
+        if ov_days <= 0:
+            months.append({"m": f"{y:04d}-{m:02d}", "src": "365d", "symbols": 50,
+                           "note": "只有50个币有一年数据"})
+        elif full:
+            months.append({"m": f"{y:04d}-{m:02d}", "src": "30d", "symbols": 663, "note": ""})
+        else:
+            months.append({"m": f"{y:04d}-{m:02d}", "src": "30d", "symbols": 663,
+                           "note": f"仅 {ov_s:%m-%d}~{ov_e:%m-%d} 有数据"})
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    return {"months": months, "cache_30d_from": c30.strftime("%Y-%m-%d")}
+
+
+JOBS = {}
+
+
+def _run_backtest(job, slug, version, scanner, month):
+    """后台跑: 扫描(约30s) → 按月过滤 → 算扣费后期望 → 写 backtests/<v>_<month>.json。"""
+    import datetime as dt
+    import math
+    import statistics
+    import idea_lib
+    try:
+        y, mo = int(month[:4]), int(month[5:7])
+        ms = dt.datetime(y, mo, 1)
+        me = dt.datetime(y + (mo == 12), (mo % 12) + 1, 1)
+        t0, t1 = int(ms.timestamp()), int(me.timestamp())
+        # 和 _coverage() 必须用同一套判断 —— 否则界面标"663币"、实际却跑50币的档, 结果对不上
+        days = 30 if me > (dt.datetime.now() - dt.timedelta(days=30)) else 365
+
+        JOBS[job] = {"state": "running", "msg": f"加载缓存({days}d)…"}
+        C = R.cache_loader(days)
+        JOBS[job] = {"state": "running", "msg": f"扫描 {scanner} …(全量约30秒)"}
+        rows = R.SCANS[scanner](C)
+
+        JOBS[job] = {"state": "running", "msg": "结算与统计…"}
+        FEE = 0.045                                   # 每边手续费%, 与 bt_registry.score 一致
+        sigs, nets = [], []
+        for s in rows:
+            t = s["created_at"]
+            if not (t0 <= t < t1):
+                continue
+            net = None
+            if s.get("result") in ("tp", "sl"):
+                risk = abs(s["entry"] - s["sl"]) or 1e-9
+                cost = 2 * (FEE / 100.0) * s["entry"] / risk
+                net = s["pnl_r"] - cost
+                nets.append(net)
+            sigs.append({"id": len(sigs), "symbol": s["symbol"], "t": t,
+                         "dir": s["direction"], "tf": trig_tf(scanner),
+                         "entry": s["entry"], "sl": s["sl"], "tp": s["tp"],
+                         "result": s.get("result"), "pnl_r": s.get("pnl_r"),
+                         "net_r": round(net, 3) if net is not None else None})
+
+        n_closed = len(nets)
+        wins = sum(1 for s in sigs if s.get("result") == "tp")
+        exp_net = round(sum(nets) / n_closed, 4) if n_closed else None
+        tstat = None
+        if n_closed > 1:
+            sd = statistics.stdev(nets)
+            if sd > 0:
+                tstat = round((sum(nets) / n_closed) / (sd / math.sqrt(n_closed)), 2)
+
+        win_rate = round(wins / n_closed * 100, 1) if n_closed else None
+        if not sigs:
+            verdict = f"这个月没有触发信号。{'(该月只有50个币有数据)' if days == 365 else ''}"
+        elif exp_net is None:
+            verdict = f"{len(sigs)} 个信号, 但都还没结算(持仓中), 无法评估。"
+        elif win_rate is not None and win_rate >= 90:
+            # 幸存者偏差护栏: 正常机械策略胜率 30~50%。90%+ 说明这批信号不是一次真实的
+            # 样本外扫描, 而是"挑出来的赢单"(如 online_regress = 线上盈利单原样回看)。
+            # 对只由赢家组成的样本算期望, 必然为正 —— 这个数字没有意义, 不能拿去决策。
+            verdict = (f"⚠ 胜率 {win_rate}% —— 这不是随机样本。扣费后期望 {exp_net:+.3f}R "
+                       f"(t={tstat}) 是**幸存者偏差**的产物, 不能当作边际证据。"
+                       f"这批信号八成是'挑出来的赢单'而非一次真实的样本外扫描。")
+        else:
+            good = exp_net > 0 and (tstat or 0) > 2
+            verdict = (f"扣费后期望 {exp_net:+.3f}R/单 (n={n_closed}, t={tstat}, 胜率{win_rate}%). "
+                       + ("统计上站得住(t>2)。" if good
+                          else ("为正但样本不足以坐实(t≤2), 别急着上线。" if exp_net > 0
+                                else "为负 —— 这一版没有边际。")))
+
+        payload = {"version": version, "scanner": scanner, "range": month,
+                   "days_src": f"{days}d", "symbols": 663 if days == 30 else 50,
+                   "n": len(sigs), "n_closed": n_closed,
+                   "win_rate": round(wins / n_closed * 100, 1) if n_closed else None,
+                   "exp_r": exp_net, "tstat": tstat, "fee_pct_side": FEE,
+                   "verdict": verdict,
+                   "truncated": len(sigs) > 300,
+                   "signals": sigs[:300],           # 页面只画前300张; 不静默截断, truncated 会标出来
+                   "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        bid = idea_lib.write_backtest(slug, payload)
+        JOBS[job] = {"state": "done", "msg": verdict, "bt_id": bid}
+    except Exception as e:
+        JOBS[job] = {"state": "error", "msg": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/idea/{slug}/version")
+async def api_idea_version(slug: str, request: Request):
+    import idea_lib
+    b = await request.json()
+    if b.get("scanner") and b["scanner"] not in R.SCANS:
+        return JSONResponse({"error": "未知策略"}, status_code=400)
+    v = idea_lib.save_version(slug, b.get("title", ""), b.get("scanner", ""),
+                              b.get("why", ""), b.get("body", ""))
+    if not v:
+        return JSONResponse({"error": "保存失败"}, status_code=400)
+    return {"ok": True, "v": v}
+
+
+@app.post("/api/idea/{slug}/backtest")
+async def api_idea_backtest(slug: str, request: Request):
+    import threading
+    import idea_lib
+    b = await request.json()
+    version, month = b.get("version", ""), b.get("month", "")
+    v = next((x for x in idea_lib.load_versions(slug) if x["v"] == version), None)
+    if not v:
+        return JSONResponse({"error": "版本不存在"}, status_code=400)
+    if not v.get("scanner") or v["scanner"] not in R.SCANS:
+        return JSONResponse({"error": f"{version} 没有可执行的 scanner —— 规则还只是文字, "
+                                      f"要先让 Claude 把它写成代码并注册进 bt_registry.SCANS"},
+                            status_code=400)
+    if not re.match(r"^\d{4}-\d{2}$", month or ""):
+        return JSONResponse({"error": "月份格式应为 YYYY-MM"}, status_code=400)
+    job = f"{slug}:{version}:{month}"
+    if JOBS.get(job, {}).get("state") == "running":
+        return {"ok": True, "job": job}
+    JOBS[job] = {"state": "running", "msg": "排队中…"}
+    threading.Thread(target=_run_backtest, args=(job, slug, version, v["scanner"], month),
+                     daemon=True).start()
+    return {"ok": True, "job": job}
+
+
+@app.get("/api/job")
+def api_job(id: str):
+    return JSONResponse(JOBS.get(id) or {"state": "unknown"})
+
+
+@app.post("/api/idea/{slug}/annotate")
+async def api_idea_annotate(slug: str, request: Request):
+    """回测标注: 符合(ok) / 不准(bad, 必须写明该改哪条筛选语句)。绑定到该次回测=该策略版本。"""
+    import idea_lib
+    b = await request.json()
+    rec = idea_lib.save_annotation(slug, b.get("bt_id", ""), b.get("sig"),
+                                   b.get("verdict", ""), b.get("reason", ""))
+    if not rec:
+        return JSONResponse({"error": "标注失败(标'不准'必须写理由 —— 它是下一版改规则的依据)"},
+                            status_code=400)
+    return {"ok": True, "rec": rec}
+
+
+def trig_tf(strat):
+    """这条信号是几分钟级别触发的。META 里 tf 形如 5m / 15m / 15m+1h(第一个才是触发级别,
+    后面的是过滤用的大级别)。"""
+    tf = str((R.META.get(strat) or {}).get("tf", "") or "")
+    return tf.split("+")[0].strip() or "5m"
+
+
 def _row(s):
     return {"id": s["id"], "strat": s.get("strat"), "symbol": s["symbol"], "dir": s["direction"],
             "stage": s.get("stage"), "t": s["created_at"], "entry": s["entry"], "sl": s["sl"],
             "tp": s["tp"], "result": s.get("result"), "pnl_r": s.get("pnl_r"),
             "climaxX": s.get("climaxX"), "movePct": s.get("movePct"), "anchor": s.get("anchor"),
-            "extra": s.get("extra"), "vol_ratio": s.get("vol_ratio")}
+            "extra": s.get("extra"), "vol_ratio": s.get("vol_ratio"),
+            "tf": trig_tf(s.get("strat"))}
 
 
 @app.get("/api/signals")
-def api_signals(strat: str = "", dir: str = "", result: str = "", limit: int = 800):
+def api_signals(strat: str = "", dir: str = "", result: str = "", tf: str = "", limit: int = 800):
     """服务端过滤+截断: 全量是 200 万+ 条(~500MB), 整包下发会把浏览器(尤其手机)打死。
-    只回最新 limit 条 + 命中总数。"""
+    只回最新 limit 条 + 命中总数。tf = 按触发级别筛(5m/15m/1h)。"""
     hit = [s for s in SIGNALS
            if (not strat or s.get("strat") == strat)
            and (not dir or s.get("direction") == dir)
-           and (not result or s.get("result") == result)]
+           and (not result or s.get("result") == result)
+           and (not tf or trig_tf(s.get("strat")) == tf)]
     limit = max(1, min(limit, 3000))
     return JSONResponse({"total": len(hit), "rows": [_row(s) for s in hit[::-1][:limit]]})
 
@@ -303,6 +521,11 @@ HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
  tr.row{cursor:pointer} tr.row:hover{background:#1c2530} tr.sel{background:#243447!important}
  .tp{color:#3fb950}.sl{color:#f85149}.long{color:#3fb950}.short{color:#f85149}
  .badge{padding:1px 6px;border-radius:4px;background:#30363d;font-size:11px}
+ /* 触发级别: 一眼看出这条信号是几分钟级别打出来的 */
+ .tfb{padding:1px 5px;border-radius:4px;font-size:10px;border:1px solid #30363d;color:#8b949e}
+ .tfb.tf-5m{color:#58a6ff;border-color:#1f4b7a}
+ .tfb.tf-15m{color:#d29922;border-color:#5c4813}
+ .tfb.tf-1h{color:#bc8cff;border-color:#4c3a75}
  select{background:#161b22;color:#d6dae0;border:1px solid #30363d;border-radius:5px;padding:3px 6px;margin:2px}
  .muted{color:#8b949e}
  /* ---- 手机竖屏: K线图占满全屏; 信号列表=顶部下拉抽屉; 策略思路=可折叠 ---- */
@@ -350,6 +573,7 @@ HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
   <a href="/agents" target="_blank" style="float:right;color:#58a6ff;text-decoration:none">🤖 Agent工作台</a><br>
   <select id=fstrat onchange=render()></select>
   <select id=fdir onchange=render()><option value="">全方向</option><option value=long>多</option><option value=short>空</option></select>
+  <select id=ftf onchange=render()><option value="">全级别</option><option value=5m>5m触发</option><option value=15m>15m触发</option><option value=1h>1h触发</option></select>
   <select id=fres onchange=render()><option value="">全结果</option><option value=tp>盈✓</option><option value=sl>损✗</option><option value=open>持仓</option></select>
  </div>
  <table><thead><tr><th>时间</th><th>策略</th><th>币</th><th>向</th><th>结果</th></tr></thead><tbody id=rows></tbody></table>
@@ -430,9 +654,10 @@ async function load(){
 }
 const LIMIT=800;   // 服务端也回最新 LIMIT 条(全量 200万+ 条, 整包下发会打死浏览器)
 async function render(){
- const fs=document.getElementById('fstrat').value, fd=document.getElementById('fdir').value, fr=document.getElementById('fres').value;
+ const fs=document.getElementById('fstrat').value, fd=document.getElementById('fdir').value,
+       fr=document.getElementById('fres').value, ft=document.getElementById('ftf').value;
  document.getElementById('cnt').textContent='加载中…';
- const q=new URLSearchParams({strat:fs,dir:fd,result:fr,limit:LIMIT});
+ const q=new URLSearchParams({strat:fs,dir:fd,result:fr,tf:ft,limit:LIMIT});
  let r; try{ r=await (await fetch('/api/signals?'+q)).json(); }
  catch(e){ document.getElementById('cnt').textContent='加载失败'; return; }
  ALL=r.rows||[];
@@ -441,7 +666,8 @@ async function render(){
  document.getElementById('mcnt').textContent =
    r.total>=10000 ? `(${(r.total/10000).toFixed(1)}万)` : `(${r.total})`;
  document.getElementById('rows').innerHTML=ALL.map(s=>`<tr class=row data-id=${s.id} onclick=show(${s.id})>
-  <td>${fmt(s.t)}</td><td><span class=badge>${(META[s.strat]||{}).label||s.strat}</span>${s.stage?(' '+s.stage):''}</td>
+  <td>${fmt(s.t)}</td>
+  <td><span class=badge>${(META[s.strat]||{}).label||s.strat}</span> <span class="tfb tf-${s.tf}">${s.tf}</span>${s.stage?(' '+s.stage):''}</td>
   <td><b>${s.symbol}</b></td><td class=${s.dir}>${s.dir==='long'?'多':'空'}</td>
   <td class="${s.result}">${s.result==='tp'?'✓':s.result==='sl'?'✗':'⏳'}</td></tr>`).join('');
 }
@@ -452,9 +678,12 @@ function closeDrawer(){document.body.classList.remove('drawer');}
 function toggleLogic(){if(isMobile())document.body.classList.toggle('logicopen');}
 function ensureChart(){
  if(chart)return;
- chart=LightweightCharts.createChart(document.getElementById('chart'),{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#30363d'}});
+ chart=LightweightCharts.createChart(document.getElementById('chart'),{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},timeScale:{timeVisible:true,secondsVisible:false},
+   // K线只占上 72%, 给成交量腾出下面一整条 —— 原来两者叠在一起, 量柱糊在K线里看不清
+   rightPriceScale:{borderColor:'#30363d',scaleMargins:{top:0.06,bottom:0.28}}});
  candle=chart.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',borderVisible:false});
- vol=chart.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'',scaleMargins:{top:0.82,bottom:0}});
+ vol=chart.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol'});
+ chart.priceScale('vol').applyOptions({scaleMargins:{top:0.78,bottom:0.02}});   // 成交量独占下 20%
  new ResizeObserver(()=>chart.applyOptions({width:document.getElementById('chart').clientWidth,height:document.getElementById('chart').clientHeight})).observe(document.getElementById('chart'));
 }
 let curSig=null;
@@ -507,7 +736,7 @@ async function renderSig(s, tf){
  const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(s.entry||1))+4));
  candle.applyOptions({priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
  candle.setData(kl.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
- vol.setData(kl.map(k=>({time:k.t,value:k.v,color:k.c>=k.o?'#26443055':'#5c252855'})));
+ vol.setData(kl.map(k=>({time:k.t,value:k.v,color:k.c>=k.o?'#2ea043cc':'#f85149aa'})));
  lines.forEach(l=>candle.removePriceLine(l)); lines=[];
  let ex={}; try{ ex=typeof s.extra==='string'?JSON.parse(s.extra):(s.extra||{}); }catch(e){}
  const st=ex.structure;
@@ -547,10 +776,12 @@ async function renderSig(s, tf){
  candle.setMarkers(mk.sort((a,b)=>a.time-b.time));
  chart.timeScale().fitContent();
  const m=META[s.strat]||{};
- document.getElementById('tfsw').innerHTML=['5m','15m','1h'].map(x=>`<button onclick="switchTf('${x}')" style="padding:2px 8px;margin-right:3px;border:1px solid #30363d;border-radius:4px;background:${x===tf?'#243447':'#161b22'};color:#d6dae0">${x}</button>`).join('');
+ // 触发级别标出来: 带★的那个才是这条信号真正被打出来的级别, 其余是你换着眼睛看
+ document.getElementById('tfsw').innerHTML=['5m','15m','1h'].map(x=>`<button onclick="switchTf('${x}')" title="${x===s.tf?'这条信号的触发级别':'仅切换视图'}" style="padding:2px 8px;margin-right:3px;border:1px solid ${x===s.tf?'#1f4b7a':'#30363d'};border-radius:4px;background:${x===tf?'#243447':'#161b22'};color:#d6dae0">${x}${x===s.tf?' ★':''}</button>`).join('')
+   +`<span class=muted style="margin-left:6px;font-size:11px">★=触发级别</span>`;
  document.getElementById('savebtn').style.display='inline-block';
  document.getElementById('labelbar').style.display='block'; showLabelState(s);
- document.getElementById('title').innerHTML=`<b>${s.symbol}</b> · <span class=badge>${m.label||s.strat}</span> · ${s.dir==='long'?'做多':'做空'} · ${fmt(s.t)}`;
+ document.getElementById('title').innerHTML=`<b>${s.symbol}</b> · <span class=badge>${m.label||s.strat}</span> <span class="tfb tf-${s.tf}">${s.tf}触发</span> · ${s.dir==='long'?'做多':'做空'} · ${fmt(s.t)}`;
  const px=v=>v==null?'-':(+v).toFixed(dig);   // 别把 37.41857142857143 原样吐出来, 手机上一行能撑成三行
  document.getElementById('info').textContent=`入场${px(s.entry)} 止损${px(s.sl)} 止盈${px(s.tp)} 结果:${s.result==='tp'?'止盈':s.result==='sl'?'止损':'持仓'}${s.pnl_r!=null?(' '+s.pnl_r+'R'):''}`+(s.movePct?` 跌幅${s.movePct}%`:'');
  const d=DETAIL[s.strat]||{};
@@ -573,68 +804,411 @@ if(isMobile()){                       // 手机首屏: 直接把信号抽屉拉�
 IDEAS_HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>灵感库 · 研究档案</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
- :root{--bg:#0e1116;--surface:#161b22;--line:#262d36;--ink:#d6dae0;--muted:#8b949e;--accent:#58a6ff;--warn:#d29922}
+ :root{--bg:#0e1116;--surface:#161b22;--line:#262d36;--ink:#d6dae0;--muted:#8b949e;--accent:#58a6ff;--warn:#d29922;--ok:#3fb950;--bad:#f85149}
  *{box-sizing:border-box}
- body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
- .wrap{max-width:900px;margin:0 auto;padding:16px 14px 60px}
- h1{font:600 20px/1.3 system-ui;margin:0 0 2px} a{color:var(--accent)}
- .sub{color:var(--muted);font-size:13px;margin-bottom:14px}
- .tabs{display:flex;gap:8px;margin:12px 0 16px;flex-wrap:wrap}
- .tabs button{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);
-   padding:7px 14px;border-radius:999px;font-size:14px;cursor:pointer}
+ body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+      display:flex;height:100vh;height:100dvh}
+ a{color:var(--accent)}
+ /* ---- 左: 灵感列表 ---- */
+ #left{width:340px;flex:none;border-right:1px solid var(--line);overflow:auto;padding:14px}
+ h1{font:600 17px/1.3 system-ui;margin:0 0 2px}
+ .sub{color:var(--muted);font-size:12px;margin-bottom:12px}
+ .tabs{display:flex;gap:6px;margin-bottom:12px}
+ .tabs button{flex:1;border:1px solid var(--line);background:var(--surface);color:var(--ink);
+   padding:6px 10px;border-radius:999px;font-size:13px;cursor:pointer}
  .tabs button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#06121f;font-weight:600}
- .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}
- .card>summary{list-style:none;cursor:pointer;padding:13px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
- .card>summary::-webkit-details-marker{display:none}
- .card[open]>summary{border-bottom:1px solid var(--line)}
- .t{font-weight:600;flex:1;min-width:60%}
- .pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+ .item{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+       margin-bottom:8px;cursor:pointer}
+ .item:hover{border-color:#3d4754}
+ .item[aria-selected=true]{border-color:var(--accent);background:#132033}
+ .t{font-weight:600;font-size:14px}
+ .meta{color:var(--muted);font-size:11.5px;margin-top:3px}
+ .pill{font-size:10.5px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
  .pill.s-灵感{color:var(--warn);border-color:#5c4813}
- .pill.s-回测中{color:var(--accent);border-color:#1f4b7a}
- .pill.s-已证伪{color:#f85149;border-color:#6e2725}
- .pill.s-已验证,.pill.s-已被数据坐实{color:#3fb950;border-color:#1f5c33}
- .meta{width:100%;color:var(--muted);font-size:12px}
- .body{padding:4px 14px 16px}
+ .pill.s-立项,.pill.s-回测中{color:var(--accent);border-color:#1f4b7a}
+ .pill.s-已证伪{color:var(--bad);border-color:#6e2725}
+ .pill.s-已验证,.pill.s-上线{color:var(--ok);border-color:#1f5c33}
+ /* ---- 右: 研究档案(四模块) ---- */
+ #right{flex:1;display:flex;flex-direction:column;min-width:0}
+ #nav{display:flex;gap:4px;padding:12px 16px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+ #nav button{border:none;background:none;color:var(--muted);padding:8px 14px;font-size:14px;cursor:pointer;
+   border-bottom:2px solid transparent;margin-bottom:-1px}
+ #nav button[aria-pressed=true]{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+ #nav .n{font-size:11px;color:var(--muted);background:var(--surface);border-radius:999px;padding:0 6px;margin-left:4px}
+ #pane{flex:1;overflow:auto;padding:16px}
+ .empty{color:var(--muted);padding:40px;text-align:center}
+ .box{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+ .box h3{margin:0 0 10px;font-size:14px}
+ /* markdown 正文 */
  .body img{max-width:100%;border-radius:8px;border:1px solid var(--line);margin:8px 0}
- .body h2,.body h3{font-size:15px;margin:16px 0 6px}
- .body h4{font-size:14px;margin:14px 0 4px;color:var(--muted)}
- .body table{width:100%;border-collapse:collapse;font-size:13px;display:block;overflow-x:auto}
+ .body h2,.body h3{font-size:14.5px;margin:16px 0 6px}
+ .body h4{font-size:13.5px;margin:14px 0 4px;color:var(--muted)}
+ .body table{width:100%;border-collapse:collapse;font-size:12.5px;display:block;overflow-x:auto}
  .body th,.body td{border:1px solid var(--line);padding:5px 8px;text-align:left}
  .body pre{background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;font-size:12px}
  .body code{background:#0d1117;padding:1px 5px;border-radius:4px;font-size:12.5px}
  .body blockquote{margin:8px 0;padding:8px 12px;border-left:3px solid var(--warn);background:#1c1a12;color:#e3d9b8}
  .body ul{padding-left:20px} .body hr{border:none;border-top:1px solid var(--line);margin:14px 0}
- .tl{margin-top:14px;border-top:1px dashed var(--line);padding-top:8px}
- .tl>summary{cursor:pointer;color:var(--accent);font-size:13px}
- .empty{color:var(--muted);padding:20px;text-align:center}
-</style></head><body><div class=wrap>
+ /* 原始图: 左静态图 / 右动态K线 */
+ .pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+ .pair .cap{color:var(--muted);font-size:12px;margin-bottom:6px}
+ .pair img{width:100%;border-radius:8px;border:1px solid var(--line);cursor:zoom-in}
+ .chartbox{height:340px;border:1px solid var(--line);border-radius:8px;background:#0e1116}
+ .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+ .thumbs img{height:56px;border-radius:6px;border:1px solid var(--line);cursor:pointer;opacity:.6}
+ .thumbs img[aria-selected=true]{opacity:1;border-color:var(--accent)}
+ /* 表单 */
+ input,select,textarea{background:#0d1117;color:var(--ink);border:1px solid var(--line);border-radius:6px;
+   padding:6px 8px;font:13px system-ui}
+ button.act{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:6px;
+   padding:6px 12px;font-size:13px;cursor:pointer}
+ button.act:hover{border-color:#3d4754}
+ button.ok{color:var(--ok);border-color:#1f5c33}
+ button.bad{color:var(--bad);border-color:#6e2725}
+ .drop{border:1.5px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--muted);
+   font-size:13px;margin-bottom:10px}
+ .drop.hot{border-color:var(--accent);color:var(--accent)}
+ .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+ /* 回测记录 */
+ .kpi{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px}
+ .kpi div{font-size:12px;color:var(--muted)}
+ .kpi b{display:block;font-size:19px;color:var(--ink);font-weight:600}
+ .kpi b.pos{color:var(--ok)} .kpi b.neg{color:var(--bad)}
+ .verdict{background:#131a24;border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;
+   font-size:13px;margin-bottom:12px;color:#c9d4e0}
+ .sig{border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden}
+ .sig>summary{list-style:none;cursor:pointer;padding:9px 12px;display:flex;gap:8px;align-items:center;font-size:13px}
+ .sig>summary::-webkit-details-marker{display:none}
+ .sig[open]>summary{border-bottom:1px solid var(--line)}
+ .sig .st{margin-left:auto;font-size:11px}
+ .st.ok{color:var(--ok)} .st.bad{color:var(--bad)} .st.none{color:var(--muted)}
+ @media (max-width:900px){
+   body{flex-direction:column}
+   #left{width:100%;height:34dvh;border-right:none;border-bottom:1px solid var(--line)}
+   .pair{grid-template-columns:1fr}
+ }
+</style></head><body>
+<div id=left>
  <h1>💡 灵感库 · 研究档案</h1>
- <div class=sub>每个灵感 = 一张原始图 + 当时的想法 + 之后完整的验证链路。<a href="/">← 回信号</a></div>
+ <div class=sub>原始图 → 策略迭代 → 回测记录 → 结论。<a href="/">← 回信号</a></div>
  <div class=tabs>
   <button id=t-idea aria-pressed=true onclick="tab('idea')">交易策略</button>
   <button id=t-principle aria-pressed=false onclick="tab('principle')">交易准则</button>
  </div>
  <div id=list></div>
 </div>
+<div id=right>
+ <div id=nav></div>
+ <div id=pane><div class=empty>← 左边选一条灵感</div></div>
+</div>
 <script>
-let D={ideas:[],principles:[]}, cur='idea';
-function tab(k){cur=k;['idea','principle'].forEach(x=>document.getElementById('t-'+x).setAttribute('aria-pressed',String(x===k)));render();}
-function card(r){
- const charts=(r.charts||[]).map(c=>`<img src="/research/asset?p=${encodeURIComponent(c)}" alt="原图">`).join('');
- const tl=r.timeline_html?`<details class=tl><summary>📜 研究链路（${r.steps} 步）</summary><div class=body>${r.timeline_html}</div></details>`:'';
- return `<details class=card>
-  <summary><span class=t>${r.id?('#'+r.id+' '):''}${r.title}</span>
-   <span class="pill s-${r.status}">${r.status}</span>
-   <span class=meta>${r.date||''}${r.symbol?(' · '+r.symbol):''}${(r.tags||[]).length?(' · '+r.tags.join(' / ')):''}</span></summary>
-  <div class=body>${charts}${r.body_html}${tl}</div></details>`;
-}
-function render(){
+let D={ideas:[],principles:[]}, cur='idea', SEL=null, DET=null, MOD='origin';
+let chart, candle, curChartSym='', curChartTf='5m', curChartCenter=0;
+let SCANNERS=[], COVERAGE={months:[]};
+
+const MODULES=[['origin','原始图'],['iter','策略迭代'],['bt','回测记录'],['concl','结论']];
+
+function tab(k){cur=k;['idea','principle'].forEach(x=>document.getElementById('t-'+x).setAttribute('aria-pressed',String(x===k)));renderList();}
+
+function renderList(){
  const rows=cur==='idea'?D.ideas:D.principles;
- document.getElementById('list').innerHTML=rows.length?rows.map(card).join('')
-   :'<div class=empty>还没有内容。跟 Claude 说「把这个存进灵感库」即可归档。</div>';
+ document.getElementById('list').innerHTML = rows.length ? rows.map(r=>`
+  <div class=item aria-selected="${SEL===r.slug}" onclick="pick('${r.slug}','${r.kind}')">
+   <div class=t>${r.id?('#'+r.id+' '):''}${r.title}</div>
+   <div class=meta><span class="pill s-${r.status}">${r.status}</span>
+    ${r.date||''}${r.symbol?(' · '+r.symbol):''}${(r.tags||[]).length?(' · '+r.tags.join(' / ')):''}</div>
+  </div>`).join('') : '<div class=empty>还没有内容。</div>';
 }
-fetch('/api/ideas').then(r=>r.json()).then(d=>{D=d;render();});
+
+async function pick(slug, kind){
+ SEL=slug; renderList();
+ if(kind==='principle'){
+   const p=D.principles.find(x=>x.slug===slug);
+   document.getElementById('nav').innerHTML='';
+   document.getElementById('pane').innerHTML=`<div class="box body">${p.body_html}</div>`;
+   return;
+ }
+ document.getElementById('pane').innerHTML='<div class=empty>加载中…</div>';
+ DET=await (await fetch('/api/idea/'+slug)).json();
+ MOD='origin'; renderNav(); renderPane();
+}
+
+function renderNav(){
+ const n={origin:(DET.charts||[]).length, iter:(DET.versions||[]).length, bt:(DET.backtests||[]).length, concl:0};
+ document.getElementById('nav').innerHTML=MODULES.map(([k,label])=>
+   `<button aria-pressed="${MOD===k}" onclick="go('${k}')">${label}${n[k]?`<span class=n>${n[k]}</span>`:''}</button>`).join('');
+}
+function go(k){ MOD=k; renderNav(); renderPane(); }
+
+function renderPane(){
+ const p=document.getElementById('pane');
+ if(MOD==='origin') p.innerHTML=viewOrigin();
+ else if(MOD==='iter') p.innerHTML=viewIter();
+ else if(MOD==='bt') p.innerHTML=viewBt();
+ else p.innerHTML=viewConcl();
+ if(MOD==='origin'){ const c=(DET.charts||[]).find(x=>x.symbol&&x.center); if(c) showChart(c.symbol,c.tf||'5m',c.center); }
+}
+
+/* ---------- ① 原始图: 左上传的静态图 / 右可切周期的动态K线 ---------- */
+function viewOrigin(){
+ const cs=DET.charts||[], i=DET.idea||{};
+ const thumbs=cs.map((c,ix)=>`<img src="/research/asset?p=${encodeURIComponent(c.path)}"
+    aria-selected="${ix===0}" onclick="selThumb(${ix})" title="${c.note||c.file}">`).join('');
+ const first=cs[0];
+ const canDraw=first&&first.symbol&&first.center;
+ return `
+ <div class=box>
+  <h3>📤 上传原始图</h3>
+  <div class=drop id=drop>把图拖进来 / 直接 Ctrl+V 粘贴 / <label style="color:var(--accent);cursor:pointer">选文件<input type=file accept="image/*" hidden id=fpick></label></div>
+  <div class=row>
+   <input id=usym placeholder="币种 如 EDGEUSDT" value="${i.symbol||''}" style="width:150px">
+   <select id=utf><option>5m</option><option>15m</option><option>1h</option></select>
+   <input id=utime type="datetime-local" title="这张图对应的时间(右侧据此画K线)">
+   <input id=unote placeholder="备注(可选)" style="flex:1;min-width:120px">
+   <button class=act onclick="doUpload()">上传</button>
+  </div>
+  <div class=meta id=upmsg>币种和时间要你来填 —— 从截图反推是哪个币哪一刻属于图像识别, 做不到, 不猜。</div>
+ </div>
+ <div class=box>
+  <h3>🖼 左: 你的原始图　|　右: 同一时刻的动态K线</h3>
+  ${cs.length?`<div class=thumbs id=thumbs>${thumbs}</div>`:'<div class=meta>还没有图。</div>'}
+  <div class=pair>
+   <div><div class=cap id=capL>原始图(静态)</div>
+        <div id=staticimg>${first?`<img src="/research/asset?p=${encodeURIComponent(first.path)}" onclick="window.open(this.src)">`:'<div class=meta>—</div>'}</div></div>
+   <div><div class=cap>动态K线 ${['5m','15m','1h'].map(t=>`<button class=act style="padding:2px 8px;margin-left:4px" onclick="switchTf('${t}')">${t}</button>`).join('')}</div>
+        <div class=chartbox id=chartbox></div>
+        <div class=meta id=chartmsg>${canDraw?'':'这张图没记 币种+时间, 画不出对应K线 —— 重新上传时填上即可。'}</div></div>
+  </div>
+ </div>`;
+}
+
+function selThumb(ix){
+ const c=(DET.charts||[])[ix]; if(!c) return;
+ document.querySelectorAll('#thumbs img').forEach((im,j)=>im.setAttribute('aria-selected',String(j===ix)));
+ document.getElementById('staticimg').innerHTML=`<img src="/research/asset?p=${encodeURIComponent(c.path)}" onclick="window.open(this.src)">`;
+ document.getElementById('capL').textContent=`原始图 · ${c.symbol||'?'} ${c.note?('· '+c.note):''}`;
+ if(c.symbol&&c.center){ document.getElementById('chartmsg').textContent=''; showChart(c.symbol,c.tf||'5m',c.center); }
+ else document.getElementById('chartmsg').textContent='这张图没记 币种+时间, 画不出对应K线。';
+}
+
+function ensureChart(el){
+ if(chart&&chart._el===el) return;
+ el.innerHTML='';
+ chart=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
+   grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
+   timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#30363d'}});
+ chart._el=el;
+ candle=chart.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',borderVisible:false});
+ new ResizeObserver(()=>chart.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
+}
+async function showChart(sym,tf,center){
+ const el=document.getElementById('chartbox'); if(!el) return;
+ curChartSym=sym; curChartTf=tf; curChartCenter=center;
+ ensureChart(el);
+ const kl=await (await fetch(`/api/klines?symbol=${sym}&center=${center}&span=120&tf=${tf}`)).json();
+ const msg=document.getElementById('chartmsg');
+ if(!kl.length){ if(msg) msg.textContent=`缓存里没有 ${sym} 的 ${tf} K线(只存了近30天)。`; return; }
+ if(msg) msg.textContent=`${sym} · ${tf} · ${new Date(center*1000).toLocaleString('zh-CN')}`;
+ const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(kl[0].c||1))+4));
+ candle.applyOptions({priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
+ candle.setData(kl.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
+ chart.timeScale().fitContent();
+}
+function switchTf(t){ if(curChartSym) showChart(curChartSym,t,curChartCenter); }
+
+/* 上传: 粘贴 / 拖拽 / 选文件 */
+let PENDING=null;
+function armUpload(){
+ document.addEventListener('paste',e=>{
+   if(MOD!=='origin'||!SEL) return;
+   const it=[...(e.clipboardData||{}).items||[]].find(x=>x.type.startsWith('image/'));
+   if(!it) return;
+   readImg(it.getAsFile());
+ });
+ document.addEventListener('dragover',e=>{const d=document.getElementById('drop'); if(d){e.preventDefault();d.classList.add('hot');}});
+ document.addEventListener('dragleave',()=>{const d=document.getElementById('drop'); if(d)d.classList.remove('hot');});
+ document.addEventListener('drop',e=>{
+   const d=document.getElementById('drop'); if(!d) return;
+   e.preventDefault(); d.classList.remove('hot');
+   const f=[...e.dataTransfer.files].find(x=>x.type.startsWith('image/'));
+   if(f) readImg(f);
+ });
+ document.addEventListener('change',e=>{ if(e.target.id==='fpick'&&e.target.files[0]) readImg(e.target.files[0]); });
+}
+function readImg(file){
+ const r=new FileReader();
+ r.onload=()=>{ PENDING=r.result;
+   const d=document.getElementById('drop');
+   if(d){ d.innerHTML=`已选好图 (${Math.round(file.size/1024)}KB) —— 填上币种+时间后点「上传」`; d.classList.add('hot'); }
+ };
+ r.readAsDataURL(file);
+}
+async function doUpload(){
+ const msg=document.getElementById('upmsg');
+ if(!PENDING){ msg.textContent='还没选图(拖进来/Ctrl+V/选文件)。'; return; }
+ const sym=document.getElementById('usym').value.trim();
+ const tv=document.getElementById('utime').value;
+ if(!sym||!tv){ msg.textContent='币种和时间都要填 —— 右侧动态K线靠它们定位。'; return; }
+ const body={data:PENDING, symbol:sym, tf:document.getElementById('utf').value,
+             center:Math.floor(new Date(tv).getTime()/1000), note:document.getElementById('unote').value.trim()};
+ const r=await (await fetch(`/api/idea/${SEL}/chart`,{method:'POST',headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify(body)})).json();
+ if(!r.ok){ msg.textContent='上传失败: '+(r.error||'?'); return; }
+ PENDING=null;
+ DET=await (await fetch('/api/idea/'+SEL)).json();
+ renderNav(); renderPane();
+}
+
+/* ---------- ② 策略迭代 ---------- */
+function viewIter(){
+ const vs=DET.versions||[];
+ const form=`<div class=box>
+   <h3>➕ 新建版本</h3>
+   <div class=row>
+    <input id=vtitle placeholder="这一版叫什么(如: 止损放FVG下沿)" style="flex:1;min-width:180px">
+    <select id=vscan><option value="">选可执行策略(scanner)</option>${
+      SCANNERS.map(s=>`<option value="${s.name}">${s.label} · ${s.tf} · ${s.name}</option>`).join('')}</select>
+   </div>
+   <div class=row><input id=vwhy placeholder="为什么要有这一版?(通常来自上一版的标注)" style="flex:1"></div>
+   <div class=row><textarea id=vbody rows=4 placeholder="规则说明(markdown)" style="width:100%"></textarea></div>
+   <div class=row><button class=act onclick=newVersion()>创建</button>
+     <span class=meta id=vmsg>没选 scanner 的版本只是文字, 跑不了回测 —— 要能跑, 规则得先由 Claude 写成代码并注册进 bt_registry.SCANS。</span></div>
+  </div>`;
+ if(!vs.length) return form+`<div class=box><h3>🧬 策略迭代</h3>
+   <div class=meta>还没有版本。流程: 原始图+你的感悟 → Claude 写出 <b>v1</b> → 选月份跑回测 →
+   你逐张标注 → Claude 据标注迭代出 <b>v2</b> → 循环。</div></div>`;
+ return form+vs.map(v=>`<div class=box>
+   <h3>🧬 ${v.v} · ${v.title} <span class=meta style="font-weight:400">${v.date||''}</span>
+     ${v.scanner?`<span class=pill>${v.scanner}</span>`:'<span class=pill style="color:var(--warn)">无scanner·跑不了回测</span>'}</h3>
+   ${v.based_on?`<div class=meta>由 ${v.based_on} 演化而来</div>`:''}
+   ${v.why?`<div class=verdict>为什么有这一版: ${v.why}</div>`:''}
+   <div class=body>${v.body_html}</div></div>`).join('');
+}
+async function newVersion(){
+ const m=document.getElementById('vmsg');
+ const title=document.getElementById('vtitle').value.trim();
+ if(!title){ m.textContent='起个名字。'; return; }
+ const body={title, scanner:document.getElementById('vscan').value,
+             why:document.getElementById('vwhy').value.trim(),
+             body:document.getElementById('vbody').value};
+ const r=await (await fetch(`/api/idea/${SEL}/version`,{method:'POST',
+   headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+ if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
+ DET=await (await fetch('/api/idea/'+SEL)).json(); renderNav(); renderPane();
+}
+
+/* ---------- ③ 回测记录 (顶部期望/笔数/结论建议, 下面逐个触发点位) ---------- */
+function viewBt(){
+ const bs=DET.backtests||[], vs=(DET.versions||[]).filter(v=>v.scanner);
+ const run=`<div class=box>
+   <h3>▶ 跑回测</h3>
+   <div class=row>
+    <select id=bver>${vs.length?vs.map(v=>`<option value="${v.v}">${v.v} · ${v.title} (${v.scanner})</option>`).join('')
+                              :'<option value="">还没有可执行的版本</option>'}</select>
+    <select id=bmon>${(COVERAGE.months||[]).map(m=>
+       `<option value="${m.m}">${m.m} · ${m.symbols}币${m.note?(' · '+m.note):''}</option>`).join('')}</select>
+    <button class=act onclick=runBt() ${vs.length?'':'disabled'}>跑</button>
+    <span class=meta id=bmsg>回测按<b>月</b>跑。缓存只有近30天全量(663币); 更早的月份只有50个币有一年数据 —— 已标在选项里。</span>
+   </div></div>`;
+ if(!bs.length) return run+`<div class=box><h3>📊 回测记录</h3><div class=meta>还没有回测。</div></div>`;
+ return run+bs.map(b=>{
+   const ann=b.annotations||{}, sigs=b.signals||[];
+   const exp=b.exp_r, pos=exp>0;
+   return `<div class=box>
+    <h3>📊 ${b.id} <span class=meta style="font-weight:400">策略 ${b.version||'?'} · ${b.range||'?'} ·
+      ${b.symbols||'?'}币 · 手续费${b.fee_pct_side||0.045}%/边 · ${b.at||''}</span></h3>
+    <div class=kpi>
+     <div>扣费后期望<b class="${pos?'pos':'neg'}">${exp==null?'—':(exp>0?'+':'')+exp+'R'}</b></div>
+     <div>笔数<b>${b.n||sigs.length}</b></div>
+     <div>胜率<b>${b.win_rate!=null?b.win_rate+'%':'—'}</b></div>
+     <div>t值<b class="${(b.tstat||0)>2?'pos':''}">${b.tstat!=null?b.tstat:'—'}</b></div>
+     <div>已标注<b>${Object.keys(ann).length}/${sigs.length}</b></div>
+    </div>
+    ${b.verdict?`<div class=verdict><b>结论与建议</b>: ${b.verdict}</div>`:''}
+    ${b.truncated?`<div class=meta style="color:var(--warn)">⚠ 共 ${b.n} 个信号, 页面只画前 300 张。</div>`:''}
+    ${sigs.length?sigs.map((s,ix)=>sigRow(b,s,ix,ann)).join(''):'<div class=meta>这次回测没有触发信号。</div>'}
+   </div>`;
+ }).join('');
+}
+async function runBt(){
+ const m=document.getElementById('bmsg');
+ const version=document.getElementById('bver').value, month=document.getElementById('bmon').value;
+ if(!version){ m.textContent='先去「策略迭代」建一个带 scanner 的版本。'; return; }
+ const r=await (await fetch(`/api/idea/${SEL}/backtest`,{method:'POST',
+   headers:{'Content-Type':'application/json'},body:JSON.stringify({version,month})})).json();
+ if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
+ m.textContent='回测已启动…';
+ const poll=setInterval(async()=>{
+   const j=await (await fetch('/api/job?id='+encodeURIComponent(r.job))).json();
+   m.textContent=(j.state==='running'?'⏳ ':(j.state==='error'?'❌ ':'✅ '))+(j.msg||j.state);
+   if(j.state==='done'||j.state==='error'){
+     clearInterval(poll);
+     if(j.state==='done'){ DET=await (await fetch('/api/idea/'+SEL)).json(); renderNav(); renderPane(); }
+   }
+ },1500);
+}
+function sigRow(b,s,ix,ann){
+ const key=String(s.id!=null?s.id:ix), a=ann[key];
+ const st=a?(a.verdict==='ok'?`<span class="st ok">✓ 符合</span>`
+            :`<span class="st bad">✗ 不准 · ${a.reason}</span>`):`<span class="st none">未标注</span>`;
+ return `<details class=sig>
+  <summary onclick="setTimeout(()=>drawSig('${b.id}','${key}','${s.symbol}',${s.t},'${s.tf||'5m'}'),50)">
+   <b>${s.symbol}</b> <span class=meta>${new Date(s.t*1000).toLocaleString('zh-CN')}</span>
+   ${s.result?`<span class=meta>· ${s.result==='tp'?'盈':'损'}${s.pnl_r!=null?(' '+s.pnl_r+'R'):''}</span>`:''}
+   ${st}</summary>
+  <div style="padding:10px 12px">
+   <div class=chartbox id="c_${b.id}_${key}" style="height:300px"></div>
+   <div class=row style="margin-top:10px">
+    <button class="act ok" onclick="annot('${b.id}','${key}','ok')">👍 符合要求</button>
+    <button class="act bad" onclick="annot('${b.id}','${key}','bad')">👎 不准</button>
+    <input id="r_${b.id}_${key}" placeholder="不准的话: 该改哪条筛选语句?" style="flex:1;min-width:200px">
+    <span class=meta id="m_${b.id}_${key}"></span>
+   </div>
+  </div></details>`;
+}
+async function drawSig(bid,key,sym,t,tf){
+ const el=document.getElementById(`c_${bid}_${key}`); if(!el||el._done) return;
+ const kl=await (await fetch(`/api/klines?symbol=${sym}&center=${t}&span=120&tf=${tf}`)).json();
+ if(!kl.length){ el.innerHTML='<div class=meta style="padding:16px">缓存里没有这个币的K线。</div>'; return; }
+ const c=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
+   grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
+   timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#30363d'}});
+ const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(kl[0].c||1))+4));
+ const s=c.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',
+   borderVisible:false,priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
+ s.setData(kl.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
+ s.setMarkers([{time:t,position:'belowBar',color:'#58a6ff',shape:'arrowUp',text:'触发'}]);
+ c.timeScale().fitContent();
+ new ResizeObserver(()=>c.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
+ el._done=true;
+}
+async function annot(bid,key,verdict){
+ const reason=document.getElementById(`r_${bid}_${key}`).value.trim();
+ const m=document.getElementById(`m_${bid}_${key}`);
+ if(verdict==='bad'&&!reason){ m.textContent='标「不准」必须写明该改哪条 —— 它是下一版改规则的依据。'; return; }
+ const r=await (await fetch(`/api/idea/${SEL}/annotate`,{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({bt_id:bid,sig:key,verdict,reason})})).json();
+ if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
+ m.textContent='已记录';
+ DET=await (await fetch('/api/idea/'+SEL)).json();
+}
+
+/* ---------- ④ 结论 ---------- */
+function viewConcl(){
+ const i=DET.idea||{};
+ return `<div class=box>
+   <h3>🏁 结论 <span class="pill s-${i.status}">${i.status}</span></h3>
+   <div class=meta>状态流转: 灵感 → 立项 → 回测中 → 已验证 / 已证伪 → 上线</div>
+  </div>
+  <div class="box body"><h3>💡 原始想法与假设</h3>${i.body_html||''}</div>
+  ${i.timeline_html?`<div class="box body"><h3>📜 研究链路（${i.steps} 步）</h3>${i.timeline_html}</div>`:''}`;
+}
+
+armUpload();
+fetch('/api/scanners').then(r=>r.json()).then(d=>{SCANNERS=d.scanners||[];COVERAGE=d.coverage||{months:[]};});
+fetch('/api/ideas').then(r=>r.json()).then(d=>{D=d;renderList();});
 </script></body></html>"""
 
 
