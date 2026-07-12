@@ -251,6 +251,41 @@ async def api_idea_chart(slug: str, request: Request):
     return {"ok": True, "path": rel}
 
 
+@app.get("/api/live")
+def api_live():
+    """线上实盘系统【真实打出】的最近N笔信号(从 VPS 的 signals/paper_trades 拉的),
+    不是本地扫出来的模拟信号。"""
+    import live_sync
+    d = live_sync.load()
+    if not d:
+        return JSONResponse({"rows": [], "msg": "还没同步过 —— 点「刷新」从 VPS 拉。"})
+    # 本地K线缓存的最新时刻: 比它更新的线上信号画不出K线, 要如实告诉用户而不是给张空图
+    d["kline_until"] = _kline_latest()
+    return JSONResponse(d)
+
+
+@lru_cache(maxsize=1)
+def _kline_latest():
+    k = _klines_of("BTCUSDT", "5m", DAYS) or []
+    return int(k[-1]["open_time"]) // 1000 if k else 0
+
+
+@app.post("/api/live/refresh")
+def api_live_refresh():
+    import threading
+    import live_sync
+    job = "live:refresh"
+    if JOBS.get(job, {}).get("state") == "running":
+        return {"ok": True, "job": job}
+    JOBS[job] = {"state": "running", "msg": "SSH 连 VPS 拉取中…"}
+
+    def run():
+        ok, msg = live_sync.pull(50)
+        JOBS[job] = {"state": "done" if ok else "error", "msg": msg}
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True, "job": job}
+
+
 @app.get("/api/scanners")
 def api_scanners():
     """可执行策略(能被一键回测跑起来的) + 缓存实际覆盖的月份 —— 别让用户选一个跑不出数据的月份。"""
@@ -884,6 +919,10 @@ IDEAS_HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
  .sig[open]>summary{border-bottom:1px solid var(--line)}
  .sig .st{margin-left:auto;font-size:11px}
  .st.ok{color:var(--ok)} .st.bad{color:var(--bad)} .st.none{color:var(--muted)}
+ .tfb{padding:1px 5px;border-radius:4px;font-size:10px;border:1px solid var(--line);color:var(--muted)}
+ .tfb.tf-5m{color:var(--accent);border-color:#1f4b7a}
+ .tfb.tf-15m{color:var(--warn);border-color:#5c4813}
+ .tfb.tf-1h{color:#bc8cff;border-color:#4c3a75}
  @media (max-width:900px){
    body{flex-direction:column}
    #left{width:100%;height:34dvh;border-right:none;border-bottom:1px solid var(--line)}
@@ -896,6 +935,7 @@ IDEAS_HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
  <div class=tabs>
   <button id=t-idea aria-pressed=true onclick="tab('idea')">交易策略</button>
   <button id=t-principle aria-pressed=false onclick="tab('principle')">交易准则</button>
+  <button id=t-live aria-pressed=false onclick="tab('live')">🔴 线上</button>
  </div>
  <div id=list></div>
 </div>
@@ -910,9 +950,19 @@ let SCANNERS=[], COVERAGE={months:[]};
 
 const MODULES=[['origin','原始图'],['iter','策略迭代'],['bt','回测记录'],['concl','结论']];
 
-function tab(k){cur=k;['idea','principle'].forEach(x=>document.getElementById('t-'+x).setAttribute('aria-pressed',String(x===k)));renderList();}
+function tab(k){
+ cur=k;['idea','principle','live'].forEach(x=>document.getElementById('t-'+x).setAttribute('aria-pressed',String(x===k)));
+ if(k==='live'){ renderList(); showLive(); return; }
+ renderList();
+}
 
 function renderList(){
+ if(cur==='live'){
+   document.getElementById('list').innerHTML=
+     `<div class=item aria-selected=true><div class=t>🔴 线上策略 · 实盘触发</div>
+      <div class=meta>VPS 上 live 系统真实推送过的单子(非本地模拟)</div></div>`;
+   return;
+ }
  const rows=cur==='idea'?D.ideas:D.principles;
  document.getElementById('list').innerHTML = rows.length ? rows.map(r=>`
   <div class=item aria-selected="${SEL===r.slug}" onclick="pick('${r.slug}','${r.kind}')">
@@ -920,6 +970,85 @@ function renderList(){
    <div class=meta><span class="pill s-${r.status}">${r.status}</span>
     ${r.date||''}${r.symbol?(' · '+r.symbol):''}${(r.tags||[]).length?(' · '+r.tags.join(' / ')):''}</div>
   </div>`).join('') : '<div class=empty>还没有内容。</div>';
+}
+
+/* ---------- 🔴 线上策略: 实盘真实打出的最近50笔 ---------- */
+let LIVE=null;
+async function showLive(){
+ SEL=null;
+ document.getElementById('nav').innerHTML='';
+ document.getElementById('pane').innerHTML='<div class=empty>加载中…</div>';
+ LIVE=await (await fetch('/api/live')).json();
+ renderLive();
+}
+function renderLive(){
+ const d=LIVE||{}, rows=d.rows||[];
+ const age=d.synced_at?Math.round((Date.now()/1000-d.synced_at)/60):null;
+ const head=`<div class=box>
+   <h3>🔴 线上策略 · 实盘触发
+     <span class=meta style="font-weight:400">${d.synced_at?`同步于 ${age} 分钟前`:'未同步'}</span>
+     <button class=act style="float:right" onclick=refreshLive()>刷新</button></h3>
+   <div class=kpi>
+    <div>线上累计信号<b>${d.total??'—'}</b></div>
+    <div>已结算<b>${d.n_closed??'—'}</b></div>
+    <div>胜率<b>${d.win_rate!=null?d.win_rate+'%':'—'}</b></div>
+    <div>期望(未扣费)<b class="${(d.exp_r||0)>0?'pos':'neg'}">${d.exp_r!=null?(d.exp_r>0?'+':'')+d.exp_r+'R':'—'}</b></div>
+   </div>
+   <div class=verdict>⚠ 期望是<b>扣手续费前</b>的(paper 结算不含费)。按往返 0.045%/边 折算, 实际还要再差一截 ——
+     这与「机械策略扣费后全负」的既有结论一致, 别把这里的数字当成正边际。</div>
+   <div class=meta id=lmsg></div></div>`;
+ if(!rows.length) return void(document.getElementById('pane').innerHTML=head+
+   `<div class=box><div class=meta>${d.msg||'没有信号。'}</div></div>`);
+ const cut=d.kline_until||0;
+ const list=rows.map((r,ix)=>{
+   const res=r.result==='tp'?'<span class="st ok">✓ 止盈</span>'
+            :r.result==='sl'?'<span class="st bad">✗ 止损</span>'
+            :'<span class="st none">⏳ 持仓</span>';
+   const stale=cut&&r.created_at>cut;
+   return `<details class=sig>
+    <summary onclick="setTimeout(()=>drawLive(${ix},${stale?1:0}),50)">
+     <b>${r.symbol}</b> <span class="tfb tf-${r.tf}">${r.tf}</span>
+     <span class="${r.direction==='long'?'':''}" style="color:${r.direction==='long'?'#3fb950':'#f85149'}">${r.direction==='long'?'多':'空'}</span>
+     <span class=meta>${new Date(r.created_at*1000).toLocaleString('zh-CN')}</span>
+     <span class=meta>· ${r.track||'-'}</span>
+     ${r.pnl_r!=null?`<span class=meta>· ${r.pnl_r>0?'+':''}${r.pnl_r}R</span>`:''}
+     ${res}</summary>
+    <div style="padding:10px 12px">
+     <div class=meta>入场 ${r.entry} · 止损 ${r.sl} · 止盈 ${r.tp} · RR ${r.rr}${r.reason?(' · '+r.reason):''}</div>
+     <div class=chartbox id="lc_${ix}" style="height:300px;margin-top:8px"></div>
+    </div></details>`;
+ }).join('');
+ document.getElementById('pane').innerHTML=head+`<div class=box><h3>最近 ${rows.length} 笔触发</h3>${list}</div>`;
+}
+async function refreshLive(){
+ const m=document.getElementById('lmsg'); m.textContent='⏳ SSH 拉取中…';
+ const r=await (await fetch('/api/live/refresh',{method:'POST'})).json();
+ const poll=setInterval(async()=>{
+   const j=await (await fetch('/api/job?id='+encodeURIComponent(r.job))).json();
+   m.textContent=(j.state==='running'?'⏳ ':(j.state==='error'?'❌ ':'✅ '))+(j.msg||'');
+   if(j.state!=='running'){ clearInterval(poll); if(j.state==='done') showLive(); }
+ },1500);
+}
+async function drawLive(ix, stale){
+ const el=document.getElementById('lc_'+ix); if(!el||el._done) return;
+ const r=LIVE.rows[ix];
+ el._done=true;
+ if(stale){ el.innerHTML=`<div class=meta style="padding:16px">这条信号(${new Date(r.created_at*1000).toLocaleString('zh-CN')})比本地K线缓存还新<br>缓存只到 ${new Date((LIVE.kline_until||0)*1000).toLocaleString('zh-CN')} —— 跑一次 bt_refresh 才画得出。</div>`; return; }
+ const kl=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=120&tf=${r.tf}`)).json();
+ if(!kl.length){ el.innerHTML='<div class=meta style="padding:16px">本地缓存里没有这个币的K线。</div>'; return; }
+ const c=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
+   grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
+   timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#30363d'}});
+ const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(r.entry||1))+4));
+ const s=c.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',
+   borderVisible:false,priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
+ s.setData(kl.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
+ [['入场',r.entry,'#58a6ff'],['止损',r.sl,'#f85149'],['止盈',r.tp,'#3fb950']].forEach(([t,p,col])=>{
+   if(p) s.createPriceLine({price:p,color:col,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:t}); });
+ s.setMarkers([{time:r.created_at,position:r.direction==='long'?'belowBar':'aboveBar',
+   color:'#d29922',shape:r.direction==='long'?'arrowUp':'arrowDown',text:'触发'}]);
+ c.timeScale().fitContent();
+ new ResizeObserver(()=>c.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
 }
 
 async function pick(slug, kind){
