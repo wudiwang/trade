@@ -16,6 +16,7 @@ import secrets
 import socket
 import sys
 import time
+from functools import lru_cache
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bt_registry as R
@@ -247,10 +248,26 @@ def api_signal(sid: int):
     return JSONResponse(_row(s) if s else {}, status_code=200 if s else 404)
 
 
+@lru_cache(maxsize=64)
+def _klines_of(symbol: str, tf: str, days: int):
+    """只读这一个币的缓存文件。
+
+    不要用 R.cache_loader(): 它会 glob 出全部 2263 个币的 *_5m_30d.json 逐个 json.load
+    进内存(2.7G 磁盘 -> 进程 RSS 4G+), 于是"重启后第一次点信号"要干等几十秒且界面无提示,
+    看起来就像点了没反应。看图一次只需要一个币。
+    """
+    p = os.path.join(R.CACHE, f"{symbol}_{tf}_{days}d.json")
+    if not os.path.exists(p):
+        return None
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return None
+
+
 @app.get("/api/klines")
 def api_klines(symbol: str, center: int, span: int = 120, tf: str = "5m"):
-    C = R.cache_loader(DAYS)
-    k = C(tf).get(symbol) or C("5m").get(symbol)
+    k = _klines_of(symbol, tf, DAYS) or _klines_of(symbol, "5m", DAYS)
     if not k:
         return JSONResponse([])
     times = [int(b["open_time"]) // 1000 for b in k]
@@ -481,7 +498,11 @@ async function saveCase(){
 }
 async function renderSig(s, tf){
  ensureChart();
- const kl=await (await fetch(`/api/klines?symbol=${s.symbol}&center=${s.t}&span=120&tf=${tf}`)).json();
+ document.getElementById('title').textContent=`${s.symbol} 加载中…`;   // 别让用户对着空白猜是不是点坏了
+ let kl;
+ try{ kl=await (await fetch(`/api/klines?symbol=${s.symbol}&center=${s.t}&span=120&tf=${tf}`)).json(); }
+ catch(e){ document.getElementById('title').textContent=`${s.symbol} K线加载失败`; return; }
+ if(!kl.length){ document.getElementById('title').textContent=`${s.symbol} 无K线数据(缓存里没这个币?)`; return; }
  // 按币价定小数位(低价币否则全显示成 0.00, 没法复核)
  const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(s.entry||1))+4));
  candle.applyOptions({priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
