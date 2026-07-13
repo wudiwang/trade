@@ -420,6 +420,35 @@ except Exception as _e:  # noqa
     print(f"[registry] strat_falsebreak 挂载失败: {_e}", file=_sys.stderr)
 
 
+# FVG二买二卖 + 止损放一买 + 1:3(用户 2026-07-11)
+try:
+    import strat_macrofvg as _mf
+    SCANS.update(_mf.SCANS)
+    META.update(_mf.META)
+except Exception as _e:  # noqa
+    import sys as _sys
+    print(f"[registry] strat_macrofvg 挂载失败: {_e}", file=_sys.stderr)
+
+
+# 线上策略回归(用户 2026-07-12): 线上那波"翻红"的盈利单原样回看, 不是新策略。
+# 信号由 scripts/online_regress.py 从VPS导出, 这里只读JSON(不重新扫描)。
+def scan_online_regress(C):
+    p = os.path.join(CACHE, "sig_online_regress_30d.json")
+    return json.load(open(p)) if os.path.exists(p) else []
+
+
+SCANS["online_regress"] = scan_online_regress
+META["online_regress"] = {"label": "线上策略回归", "tf": "15m", "logic": [
+    "不是新策略: 这是线上 macro_pullback 在 07-06~07-10 真实打出的【盈利单】原样回看。",
+    "背景: 这波把纸面从 -60R 拉回 -24R, 你在控制台看到的'翻正'就是它们。",
+    "但整体仍是负的: 全期611单毛-38R, 扣手续费后 -154R(单均-0.252R)。",
+    "查证结论: 这批赢单没有共同形态特征(爆量/回调深度/FVG 均不显著),",
+    "  真正的共同点是【时间扎堆】——37个做空赢单里15个挤在 07-07 05:00~09:00 四小时内,",
+    "  本质是一两次山寨集体瀑布同时触发, 不是37个独立的赌注。",
+    "此页用途: 用眼睛复核这批单的形态, 判断它到底是可复制的模式, 还是一次相关性事件。",
+]}
+
+
 def cache_status(days=30, ref_symbol="BTCUSDT"):
     """本地数据新鲜度:各级别最新K线时间 + 各策略信号JSON生成时间。供看图器顶栏显示。"""
     now = time.time()

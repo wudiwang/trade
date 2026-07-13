@@ -233,6 +233,7 @@ def api_idea(slug: str):
     idea = next((x for x in idea_lib.load_ideas() if x["slug"] == slug), None)
     return JSONResponse({
         "idea": idea,
+        "desc": idea_lib.load_desc(slug),
         "charts": idea_lib.load_charts(slug),
         "versions": idea_lib.load_versions(slug),
         "backtests": idea_lib.load_backtests(slug),
@@ -402,7 +403,10 @@ def _run_backtest(job, slug, version, scanner, month):
         JOBS[job] = {"state": "running", "msg": f"加载缓存({days}d)…"}
         C = R.cache_loader(days)
         JOBS[job] = {"state": "running", "msg": f"扫描 {scanner} …(全量约30秒)"}
-        rows = R.SCANS[scanner](C)
+        fn = _resolve_scanner(scanner)          # 内置策略 或 灵感目录里 Claude 生成的
+        if fn is None:
+            raise RuntimeError(f"找不到 scanner: {scanner}")
+        rows = fn(C)
 
         JOBS[job] = {"state": "running", "msg": "结算与统计…"}
         FEE = 0.045                                   # 每边手续费%, 与 bt_registry.score 一致
@@ -488,9 +492,9 @@ async def api_idea_backtest(slug: str, request: Request):
     v = next((x for x in idea_lib.load_versions(slug) if x["v"] == version), None)
     if not v:
         return JSONResponse({"error": "版本不存在"}, status_code=400)
-    if not v.get("scanner") or v["scanner"] not in R.SCANS:
-        return JSONResponse({"error": f"{version} 没有可执行的 scanner —— 规则还只是文字, "
-                                      f"要先让 Claude 把它写成代码并注册进 bt_registry.SCANS"},
+    if not v.get("scanner") or _resolve_scanner(v["scanner"]) is None:
+        return JSONResponse({"error": f"{version} 没有可执行的代码 —— 先在「原始图」里写下点位描述, "
+                                      f"然后点「① 转成筛选条件」→「② 生成策略代码」。"},
                             status_code=400)
     if not re.match(r"^\d{4}-\d{2}$", month or ""):
         return JSONResponse({"error": "月份格式应为 YYYY-MM"}, status_code=400)
@@ -506,6 +510,152 @@ async def api_idea_backtest(slug: str, request: Request):
 @app.get("/api/job")
 def api_job(id: str):
     return JSONResponse(JOBS.get(id) or {"state": "unknown"})
+
+
+def _load_idea_scanner(name):
+    """把灵感目录里 Claude 生成的 strategy/vN.py 装成一个可回测的 scanner。
+
+    name 形如 idea:<slug>:v2。代码是【被执行】的 —— 所以只在用户明确点「跑回测」时才走到这里,
+    生成的时候只写文件、在页面上全文展示, 不碰。
+    """
+    import idea_lib
+    if not name.startswith("idea:"):
+        return None
+    try:
+        _, slug, v = name.split(":", 2)
+    except ValueError:
+        return None
+    d = idea_lib.idea_dir(slug)
+    if not d:
+        return None
+    p = os.path.join(d, "strategy", f"{v}.py")
+    if not os.path.exists(p):
+        return None
+    ns = {"__name__": f"idea_{slug}_{v}"}
+    src = open(p, encoding="utf-8").read()
+    exec(compile(src, p, "exec"), ns)          # noqa: S102 —— 用户自己机器上、自己点的按钮
+    fn = ns.get("scan")
+    return fn if callable(fn) else None
+
+
+def _resolve_scanner(name):
+    """先查内置 SCANS, 再查灵感目录里生成的。"""
+    if name in R.SCANS:
+        return R.SCANS[name]
+    return _load_idea_scanner(name)
+
+
+@app.post("/api/idea/{slug}/desc")
+async def api_idea_desc(slug: str, request: Request):
+    """保存用户对这个点位的自然语言描述。"""
+    import idea_lib
+    b = await request.json()
+    if not idea_lib.save_desc(slug, b.get("text", "")):
+        return JSONResponse({"error": "灵感不存在"}, status_code=404)
+    return {"ok": True}
+
+
+@app.post("/api/idea/{slug}/spec")
+async def api_idea_spec(slug: str, request: Request):
+    """① 自然语言 → 结构化筛选条件(调本机 claude -p)。"""
+    import threading
+    import claude_gen
+    import idea_lib
+    b = await request.json()
+    note = (b.get("text") or idea_lib.load_desc(slug)).strip()
+    if not note:
+        return JSONResponse({"error": "先写下你对这个点位的描述。"}, status_code=400)
+    idea_lib.save_desc(slug, note)
+    idea = next((x for x in idea_lib.load_ideas() if x["slug"] == slug), {}) or {}
+    job = f"spec:{slug}"
+    if JOBS.get(job, {}).get("state") == "running":
+        return {"ok": True, "job": job}
+    JOBS[job] = {"state": "running", "msg": "本机 Claude 正在把你的描述拆成筛选条件…"}
+
+    def run():
+        ok, out, js = claude_gen.spec(note, idea.get("symbol", ""), b.get("tf", "5m"))
+        if not ok:
+            JOBS[job] = {"state": "error", "msg": out}
+            return
+        d = idea_lib.idea_dir(slug)
+        os.makedirs(os.path.join(d, "strategy"), exist_ok=True)
+        json.dump(js, open(os.path.join(d, "strategy", "spec.json"), "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+        JOBS[job] = {"state": "done", "msg": "筛选条件已生成", "spec": js}
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/idea/{slug}/codegen")
+async def api_idea_codegen(slug: str, request: Request):
+    """② 筛选条件 → Python 代码 + 优化后的文字版 → 落进「策略迭代」的首版。"""
+    import threading
+    import claude_gen
+    import idea_lib
+    b = await request.json()
+    d = idea_lib.idea_dir(slug)
+    if not d:
+        return JSONResponse({"error": "灵感不存在"}, status_code=404)
+    sp = os.path.join(d, "strategy", "spec.json")
+    if not os.path.exists(sp):
+        return JSONResponse({"error": "先点「① 转成筛选条件」。"}, status_code=400)
+    spec_js = json.load(open(sp, encoding="utf-8"))
+    note = idea_lib.load_desc(slug)
+    tf = b.get("tf", "5m")
+    idea = next((x for x in idea_lib.load_ideas() if x["slug"] == slug), {}) or {}
+    job = f"codegen:{slug}"
+    if JOBS.get(job, {}).get("state") == "running":
+        return {"ok": True, "job": job}
+    JOBS[job] = {"state": "running", "msg": "本机 Claude 正在写策略代码…(约1分钟)"}
+
+    def run():
+        vnum = idea_lib.next_vnum(slug)
+        ok, msg, r = claude_gen.codegen(note, spec_js, slug, vnum, idea.get("symbol", ""), tf)
+        if not ok:
+            JOBS[job] = {"state": "error", "msg": msg}
+            return
+        v = idea_lib.save_generated(slug, vnum, r["title"], r["py"], r["md"],
+                                    why="据原始描述生成的首版")
+        JOBS[job] = {"state": "done", "msg": f"已生成 {v} —— 代码在「策略迭代」里, 看过再跑", "v": v}
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True, "job": job}
+
+
+@app.post("/api/idea/{slug}/iterate")
+async def api_idea_iterate(slug: str, request: Request):
+    """③ 据盲测标注 → 二次生成(下一版)。"""
+    import threading
+    import claude_gen
+    import idea_lib
+    b = await request.json()
+    bt_id = b.get("bt_id", "")
+    ann = list(idea_lib.load_annotations(slug, bt_id).values())
+    if len(ann) < 5:
+        return JSONResponse({"error": f"只判了 {len(ann)} 笔 —— 样本太少, 归纳不出规律。"
+                                      f"建议至少 20 笔。"}, status_code=400)
+    vs = idea_lib.load_versions(slug)
+    cur = next((v for v in vs if bt_id.startswith(v["v"] + "_")), vs[0] if vs else None)
+    if not cur or not cur.get("code"):
+        return JSONResponse({"error": "找不到这次回测对应版本的代码。"}, status_code=400)
+    note = idea_lib.load_desc(slug)
+    job = f"iterate:{slug}"
+    if JOBS.get(job, {}).get("state") == "running":
+        return {"ok": True, "job": job}
+    JOBS[job] = {"state": "running", "msg": f"本机 Claude 正在读你那 {len(ann)} 笔判断, 迭代下一版…"}
+
+    def run():
+        vnum = idea_lib.next_vnum(slug)
+        ok, msg, r = claude_gen.iterate(note, cur["code"], cur["body_html"], ann, vnum)
+        if not ok:
+            JOBS[job] = {"state": "error", "msg": msg}
+            return
+        v = idea_lib.save_generated(slug, vnum, r["title"], r["py"], r["md"],
+                                    why=r.get("why", ""), based_on=cur["v"])
+        JOBS[job] = {"state": "done", "v": v,
+                     "msg": f"已生成 {v}（基于 {cur['v']} + 你那 {len(ann)} 笔盲测判断）—— "
+                            f"去「回测记录」用它重跑, 看图形通过率涨没涨"}
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True, "job": job}
 
 
 @app.post("/api/idea/{slug}/summary")
@@ -1286,7 +1436,72 @@ function viewOrigin(){
         <div class=chartbox id=chartbox></div>
         <div class=meta id=chartmsg>${canDraw?'':'这张图没记 币种+时间, 画不出对应K线 —— 重新上传时填上即可。'}</div></div>
   </div>
+ </div>
+
+ <!-- 点位描述 → 本机 Claude → 筛选条件 → Python 代码 → 首版策略 -->
+ <div class=box>
+  <h3>✍️ 这个点位, 你看到了什么</h3>
+  <div class=meta style="margin-bottom:8px">用大白话写清楚"我要的入场点长什么样"。
+   写完点下面的按钮, <b>本机的 Claude</b> 会把它拆成可判定的筛选条件, 再写成能回测的 Python 代码,
+   自动放进「策略迭代」的首版。</div>
+  <textarea id=edesc rows=6 style="width:100%;background:#0d1117;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;font:14px/1.6 system-ui"
+    placeholder="例: 持续下跌的趋势, 最后放量向下砸的时候价格被拉回; 之后尝试再创新低但创不了, 然后价格开始往回走, 把那条向下打穿的K线吞没, 又回到前面。">${(DET.desc||'').replace(/</g,'&lt;')}</textarea>
+  <div class=row style="margin-top:10px">
+   <select id=etf><option value=5m>5m</option><option value=15m>15m</option><option value=1h>1h</option><option value=1m>1m</option></select>
+   <button class=act onclick=genSpec()>① 转成筛选条件</button>
+   <button class=act onclick=genCode()>② 生成策略代码 → 首版</button>
+   <span class=meta id=genmsg></span>
+  </div>
+  <div id=specbox></div>
  </div>`;
+}
+
+/* ① 自然语言 → 筛选条件(调本机 claude -p) */
+async function genSpec(){
+ const m=document.getElementById('genmsg');
+ const text=document.getElementById('edesc').value.trim();
+ if(!text){ m.textContent='先写下你看到了什么。'; return; }
+ m.textContent='⏳ 本机 Claude 正在拆解…';
+ const r=await (await fetch(`/api/idea/${SEL}/spec`,{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({text, tf:document.getElementById('etf').value})})).json();
+ if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
+ pollJob(r.job, m, j=>{ if(j.spec) showSpec(j.spec); });
+}
+function showSpec(sp){
+ const box=document.getElementById('specbox');
+ const rows=(sp.conditions||[]).map(c=>`<tr>
+   <td><b>${c.id}</b></td><td>${c['用户的话']||''}</td><td>${c['量化定义']||''}</td>
+   <td>${JSON.stringify(c['参数']||{})}</td>
+   <td style="color:${c['把握度']==='高'?'var(--ok)':c['把握度']==='低'?'var(--bad)':'var(--warn)'}">${c['把握度']||''}</td>
+   <td style="color:var(--warn)">${c['待用户拍板']||''}</td></tr>`).join('');
+ box.innerHTML=`<div class=box style="margin-top:12px">
+   <h3>🔍 筛选条件 · ${sp.name||''} <span class=meta style="font-weight:400">${sp.direction||''}</span></h3>
+   <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+    <tr><th>#</th><th>你的话</th><th>量化定义</th><th>参数</th><th>把握度</th><th>待你拍板</th></tr>${rows}</table>
+   <div class=meta style="margin-top:8px">入场: ${sp.entry||'-'}<br>止损: ${sp.sl||'-'}<br>止盈: ${sp.tp||'-'}</div>
+   ${(sp['疑问']||[]).length?`<div class=verdict style="margin-top:10px"><b>必须由你拍板的问题</b>:<br>
+     ${sp['疑问'].map((q,i)=>`${i+1}. ${q}`).join('<br>')}</div>`:''}
+  </div>`;
+}
+/* ② 筛选条件 → Python 代码 → 首版策略 */
+async function genCode(){
+ const m=document.getElementById('genmsg');
+ m.textContent='⏳ 本机 Claude 正在写代码…(约1分钟)';
+ const r=await (await fetch(`/api/idea/${SEL}/codegen`,{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({tf:document.getElementById('etf').value})})).json();
+ if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
+ pollJob(r.job, m, async j=>{
+   DET=await (await fetch('/api/idea/'+SEL)).json();
+   MOD='iter'; renderNav(); renderPane();
+ });
+}
+/* 统一的任务轮询 */
+function pollJob(job, msgEl, onDone){
+ const t=setInterval(async()=>{
+   const j=await (await fetch('/api/job?id='+encodeURIComponent(job))).json();
+   msgEl.textContent=(j.state==='running'?'⏳ ':(j.state==='error'?'❌ ':'✅ '))+(j.msg||j.state);
+   if(j.state!=='running'){ clearInterval(t); if(j.state==='done'&&onDone) onDone(j); }
+ },2000);
 }
 
 function selThumb(ix){
@@ -1446,10 +1661,15 @@ function viewIter(){
    你逐张标注 → Claude 据标注迭代出 <b>v2</b> → 循环。</div></div>`;
  return form+vs.map(v=>`<div class=box>
    <h3>🧬 ${v.v} · ${v.title} <span class=meta style="font-weight:400">${v.date||''}</span>
-     ${v.scanner?`<span class=pill>${v.scanner}</span>`:'<span class=pill style="color:var(--warn)">无scanner·跑不了回测</span>'}</h3>
+     ${v.scanner?`<span class=pill>可回测</span>`:'<span class=pill style="color:var(--warn)">无代码·跑不了回测</span>'}</h3>
    ${v.based_on?`<div class=meta>由 ${v.based_on} 演化而来</div>`:''}
    ${v.why?`<div class=verdict>为什么有这一版: ${v.why}</div>`:''}
-   <div class=body>${v.body_html}</div></div>`).join('');
+   <div class=body>${v.body_html}</div>
+   ${v.code?`<details style="margin-top:10px">
+     <summary style="cursor:pointer;color:var(--accent);font-size:13px">📄 看代码 (${v.v}.py) —— 跑之前请过一眼, 这是要在你机器上执行的</summary>
+     <pre style="background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;margin-top:8px"><code>${v.code.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</code></pre>
+    </details>`:''}
+  </div>`).join('');
 }
 async function newVersion(){
  const m=document.getElementById('vmsg');
@@ -1495,7 +1715,10 @@ function viewBt(){
     </div>
     <div class=meta id="prog_${b.id}"></div>
     <div class=row style="margin-top:8px">
-      <button class=act onclick="summarize('${b.id}')">🧾 汇总不满意理由 → 下一版改哪条</button>
+      <button class=act onclick="summarize('${b.id}')">🧾 汇总不满意理由</button>
+      <button class=act onclick="iterate('${b.id}')" style="border-color:var(--accent);color:var(--accent)"
+        ${vals.length>=5?'':'disabled'}>🔁 二次生成 → 据我这 ${vals.length} 笔判断写下一版</button>
+      <span class=meta id="itmsg_${b.id}">${vals.length<20?`建议判满 20 笔再生成(现在 ${vals.length} 笔, 少于5笔不给点)`:''}</span>
     </div>
     <div id="sum_${b.id}"></div>
 
@@ -1652,6 +1875,19 @@ function renderProgress(bid){
  const ok=vals.filter(a=>a.verdict==='ok').length;
  el.innerHTML=`已盲测 <b>${vals.length}</b>/${(b.signals||[]).length} · 符合 <b>${ok}</b> ·
    <b>图形通过率 ${vals.length?Math.round(ok/vals.length*100):0}%</b>`;
+}
+
+/* 🔁 二次生成: 把你的盲测判断喂给本机 Claude, 让它写出下一版 */
+async function iterate(bid){
+ const m=document.getElementById('itmsg_'+bid);
+ m.textContent='⏳ 本机 Claude 正在读你的判断…';
+ const r=await (await fetch(`/api/idea/${SEL}/iterate`,{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({bt_id:bid})})).json();
+ if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
+ pollJob(r.job, m, async j=>{
+   DET=await (await fetch('/api/idea/'+SEL)).json();
+   MOD='iter'; renderNav(); renderPane();
+ });
 }
 
 /* 汇总不满意理由 → 下一版改哪条规则 */

@@ -168,6 +168,50 @@ def _vnum(name):
     return int(m.group(1)) if m else 0
 
 
+def load_desc(slug):
+    """用户对这个点位的自然语言描述(Claude 据它生成策略)。"""
+    d = idea_dir(slug)
+    if not d:
+        return ""
+    f = os.path.join(d, "entry_desc.md")
+    return open(f, encoding="utf-8").read() if os.path.exists(f) else ""
+
+
+def save_desc(slug, text):
+    d = idea_dir(slug)
+    if not d:
+        return False
+    open(os.path.join(d, "entry_desc.md"), "w", encoding="utf-8").write(text or "")
+    return True
+
+
+def next_vnum(slug):
+    d = idea_dir(slug)
+    if not d:
+        return 1
+    p = os.path.join(d, "strategy")
+    ns = [_vnum(os.path.basename(f)[:-3]) for f in glob.glob(os.path.join(p, "v*.md"))]
+    return (max(ns) if ns else 0) + 1
+
+
+def save_generated(slug, vnum, title, py, md, why="", based_on=""):
+    """把 Claude 生成的策略落盘: strategy/vN.py(代码) + vN.md(文字版)。
+
+    只写文件, 不执行。要跑必须用户另外点「跑回测」—— 那才是审查关口。
+    """
+    d = idea_dir(slug)
+    if not d:
+        return None
+    p = os.path.join(d, "strategy")
+    os.makedirs(p, exist_ok=True)
+    v = f"v{vnum}"
+    open(os.path.join(p, f"{v}.py"), "w", encoding="utf-8").write(py)
+    front = (f"---\ntitle: {title}\nscanner: idea:{slug}:{v}\ncode: strategy/{v}.py\n"
+             f"date: {time.strftime('%Y-%m-%d')}\nbased_on: {based_on}\nwhy: {why}\n---\n\n")
+    open(os.path.join(p, f"{v}.md"), "w", encoding="utf-8").write(front + (md or "") + "\n")
+    return v
+
+
 def load_versions(slug):
     """策略迭代版本: strategy/v1.md, v2.md … 新的在前。"""
     d = idea_dir(slug)
@@ -177,6 +221,7 @@ def load_versions(slug):
     for f in glob.glob(os.path.join(d, "strategy", "v*.md")):
         name = os.path.basename(f)[:-3]
         meta, body = parse_front(open(f, encoding="utf-8").read())
+        py = os.path.join(d, "strategy", f"{name}.py")
         out.append({
             "v": name, "n": _vnum(name),
             "title": meta.get("title", name),
@@ -185,6 +230,7 @@ def load_versions(slug):
             "based_on": meta.get("based_on", ""),      # 从哪一版演化而来
             "why": meta.get("why", ""),                # 为什么有这一版(通常来自上一版的标注)
             "body_html": md2html(body, f"ideas/{slug}"),
+            "code": open(py, encoding="utf-8").read() if os.path.exists(py) else "",
         })
     return sorted(out, key=lambda x: -x["n"])
 

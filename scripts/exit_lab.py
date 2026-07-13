@@ -75,14 +75,12 @@ def resettle(kl, i, long, entry, risk, cfg):
 
 
 CONFIGS = [
-    ("基线 RR2(现状)", {"rr": 2.0}),
-    ("RR1.5", {"rr": 1.5}),
-    ("RR1.0", {"rr": 1.0}),
-    ("1R分批+移动止损", {"partial": True}),
-    ("最小止损0.3% + RR2", {"rr": 2.0, "min_pct": 0.3}),
-    ("最小止损0.5ATR + RR2", {"rr": 2.0, "min_atr": 0.5}),
-    ("RR1.5 + 最小0.5ATR", {"rr": 1.5, "min_atr": 0.5}),
-    ("分批 + 最小0.5ATR", {"partial": True, "min_atr": 0.5}),
+    ("原向 RR2(现状)", {"rr": 2.0}),
+    ("原向 RR0.5(止盈近)", {"rr": 0.5}),
+    ("★反向 RR0.5(你的想法)", {"rr": 0.5, "flip": True}),
+    ("反向 RR1.0", {"rr": 1.0, "flip": True}),
+    ("反向 RR2.0", {"rr": 2.0, "flip": True}),
+    ("反向 RR0.5 +最小0.3%", {"rr": 0.5, "flip": True, "min_pct": 0.3}),
 ]
 
 
@@ -120,7 +118,7 @@ def main():
 
     print(f"\n{'出场规则':<22}{'已结':>6}{'胜率':>8}{'扣费期望':>10}   近4窗扣费期望(一致性)")
     for name, cfg in CONFIGS:
-        res = [resettle(kl, i, lo, e, rk, cfg) for kl, i, lo, e, rk, t in items]
+        res = [resettle(kl, i, (not lo) if cfg.get("flip") else lo, e, rk, cfg) for kl, i, lo, e, rk, t in items]
         paired = list(zip(res, items))
         n, wr, exp = stats([r for r, _ in paired])
         # 4窗

@@ -107,11 +107,19 @@ async def main():
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--top", type=int, default=0)
     ap.add_argument("--conc", type=int, default=3)
+    # 按名单拉(研究用: 如"当日涨幅榜"币种池)。逗号分隔, 或 @文件(每行一个)。
+    ap.add_argument("--symbols", default="")
     a = ap.parse_args()
     tfs = [t for t in a.tfs.split(",") if t]
     t0 = time.time()
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-        syms = await top_symbols(session, a.top)
+        if a.symbols:
+            src = a.symbols
+            if src.startswith("@"):
+                src = ",".join(x.strip() for x in open(src[1:]) if x.strip())
+            syms = [s.strip().upper() for s in src.split(",") if s.strip()]
+        else:
+            syms = await top_symbols(session, a.top)
         print(f"[{time.strftime('%Y-%m-%d %H:%M')}] 刷新 {len(syms)} 币 × {tfs} (滚动{a.days}天, 并发{a.conc})", flush=True)
         sem = asyncio.Semaphore(a.conc)
         done = [0]
