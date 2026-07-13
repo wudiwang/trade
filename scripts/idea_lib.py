@@ -189,6 +189,66 @@ def load_versions(slug):
     return sorted(out, key=lambda x: -x["n"])
 
 
+def new_idea(title, note, data_b64="", symbol="", tf="5m", center=0):
+    """新建灵感: 一张原始图 + 用户的原话 → research/ideas/<NNN>-<slug>/
+
+    note 一字不改地存进 idea.md —— 不许用总结替换掉用户当时真实的想法(AGENTS.md)。
+    Claude 之后据此写出策略 v1。
+    """
+    d0 = os.path.join(RESEARCH, "ideas")
+    os.makedirs(d0, exist_ok=True)
+    nums = []
+    for p in glob.glob(os.path.join(d0, "*")):
+        m = re.match(r"(\d+)-", os.path.basename(p))
+        if m:
+            nums.append(int(m.group(1)))
+    n = (max(nums) if nums else 0) + 1
+    sym = re.sub(r"[^A-Za-z0-9]", "", (symbol or "").upper()) or "idea"
+    slug = f"{n:03d}-{sym.lower()}-{time.strftime('%Y%m%d')}"
+    d = os.path.join(d0, slug)
+    os.makedirs(d, exist_ok=True)
+
+    chart_rel = ""
+    if data_b64:
+        r = save_chart(slug, data_b64, symbol, tf, center, "原始图")
+        if r:
+            chart_rel = "charts/" + os.path.basename(r)
+
+    body = [
+        "---",
+        f"id: {n:03d}",
+        f"title: {title or (sym + ' 形态')}",
+        "type: strategy",
+        "status: 灵感",
+        f"origin_date: {time.strftime('%Y-%m-%d')}",
+        f"origin_chart: {chart_rel}",
+        f"origin_symbol: {sym}",
+        f"origin_tf: {tf}",
+        "tags: []",
+        "---",
+        "",
+        f"## 出发点（用户原话，{time.strftime('%Y-%m-%d')}）",
+        "",
+    ]
+    body += ["> " + ln if ln.strip() else ">" for ln in (note or "").splitlines()]
+    body += [
+        "",
+        "## 仍待明确（由用户拍板，Claude 不许替他假设）",
+        "",
+        "1. 待定 —— Claude 读完上面的原话后，把必须定义清楚的地方列在这里。",
+        "",
+        "## 链路",
+        "",
+        "研究过程见 [timeline.md](timeline.md)。",
+    ]
+    open(os.path.join(d, "idea.md"), "w", encoding="utf-8").write("\n".join(body) + "\n")
+    open(os.path.join(d, "timeline.md"), "w", encoding="utf-8").write(
+        f"# 研究链路 · {n:03d} {title}\n\n"
+        "> 追加式日志：每做一步（提出/回测/证伪/调整）就在最上面加一条。\n\n---\n\n"
+        f"## {time.strftime('%Y-%m-%d')} · 立项\n\n从一张 {sym} 的图 + 一段想法开始。等待 Claude 写出策略 v1。\n")
+    return {"slug": slug, "id": f"{n:03d}"}
+
+
 def save_version(slug, title, scanner, why="", body="", based_on=""):
     """新建策略迭代版本 → strategy/vN.md。
 

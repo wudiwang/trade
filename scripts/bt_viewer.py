@@ -239,6 +239,23 @@ def api_idea(slug: str):
     })
 
 
+@app.post("/api/idea/new")
+async def api_idea_new(request: Request):
+    """新建灵感: 传一张图 + 写下你的想法 → 建 research/ideas/<NNN>-.../
+
+    图可以没有时间(那只是右侧动态K线画不出来), 但想法不能空 —— 灵感库存的是思考链路, 不是图片墙。
+    """
+    import idea_lib
+    b = await request.json()
+    note = (b.get("note") or "").strip()
+    if not note:
+        return JSONResponse({"error": "写下你看到了什么 —— 没有想法的图只是张图, 不是灵感。"},
+                            status_code=400)
+    r = idea_lib.new_idea(b.get("title", ""), note, b.get("data", ""),
+                          b.get("symbol", ""), b.get("tf", "5m"), b.get("center", 0))
+    return {"ok": True, **r}
+
+
 @app.post("/api/idea/{slug}/chart")
 async def api_idea_chart(slug: str, request: Request):
     """原始图上传(粘贴或选文件)。symbol/tf 由用户给, 不做图像识别。"""
@@ -1001,6 +1018,19 @@ IDEAS_HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
  .drop{border:1.5px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--muted);
    font-size:13px;margin-bottom:10px}
  .drop.hot{border-color:var(--accent);color:var(--accent)}
+ .newbtn{width:100%;padding:10px;margin-bottom:12px;border:1px solid var(--accent);border-radius:10px;
+   background:#132033;color:var(--accent);font-size:14px;font-weight:600;cursor:pointer}
+ .newbtn:hover{background:#18293f}
+ /* 新建灵感弹窗 */
+ #modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:50;
+   align-items:center;justify-content:center;padding:20px}
+ #modal.on{display:flex}
+ #modal .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+   width:min(720px,100%);max-height:90dvh;overflow:auto;padding:20px}
+ #modal h2{margin:0 0 4px;font-size:17px}
+ #modal textarea{width:100%;background:#0d1117;color:var(--ink);border:1px solid var(--line);
+   border-radius:8px;padding:10px;font:14px/1.6 system-ui;resize:vertical}
+ #npreview img{max-width:100%;border-radius:8px;border:1px solid var(--line);margin-top:8px}
  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
  /* 回测记录 */
  .kpi{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px}
@@ -1028,6 +1058,7 @@ IDEAS_HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
 <div id=left>
  <h1>💡 灵感库 · 研究档案</h1>
  <div class=sub>原始图 → 策略迭代 → 回测记录 → 结论。<a href="/">← 回信号</a></div>
+ <button class=newbtn onclick="openNew()">➕ 新建灵感（传图 + 写想法）</button>
  <div class=tabs>
   <button id=t-idea aria-pressed=true onclick="tab('idea')">交易策略</button>
   <button id=t-principle aria-pressed=false onclick="tab('principle')">交易准则</button>
@@ -1038,6 +1069,40 @@ IDEAS_HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
 <div id=right>
  <div id=nav></div>
  <div id=pane><div class=empty>← 左边选一条灵感</div></div>
+</div>
+
+<!-- 新建灵感: 一张图 + 你的原话 → Claude 据此写出策略 v1 -->
+<div id=modal onclick="if(event.target.id==='modal')closeNew()">
+ <div class=card>
+  <h2>➕ 新建灵感</h2>
+  <div class=meta style="margin-bottom:12px">一张原始图 + 你看到了什么。你的原话会一字不改地存进灵感库,
+    之后 Claude 据此写出可回测的策略 v1。</div>
+
+  <div class=drop id=ndrop>把图拖进来 / 直接 <b>Ctrl+V 粘贴</b> /
+    <label style="color:var(--accent);cursor:pointer">选文件<input type=file accept="image/*" hidden id=nfile></label></div>
+  <div id=npreview></div>
+
+  <div class=row style="margin-top:12px">
+   <input id=ntitle placeholder="给这个形态起个名(如: 5m放量假破新低反转)" style="flex:1;min-width:220px">
+   <input id=nsym placeholder="币种(如 EDGEUSDT)" style="width:150px">
+   <select id=ntf><option>5m</option><option>15m</option><option>1h</option><option>1m</option></select>
+  </div>
+  <div class=row>
+   <input id=ntime type="datetime-local" style="width:210px">
+   <span class=meta>时间<b>可不填</b> —— 只影响右侧能不能画出那一刻的动态K线, 不挡上传。</span>
+  </div>
+
+  <div style="margin-top:10px">
+   <div class=meta style="margin-bottom:4px">你看到了什么?（原话, 想到哪写到哪, 不用整理）</div>
+   <textarea id=nnote rows=7 placeholder="例: 5分钟标准的反转。我看到的是一个持续下跌的趋势, 最后放量向下砸的时候价格被拉回; 之后尝试再创新低, 结果创不了新低, 然后价格开始往回走, 把那条向下打穿的K线吞没, 又回到了前面……"></textarea>
+  </div>
+
+  <div class=row style="margin-top:12px">
+   <button class=act onclick=submitNew() style="background:var(--accent);color:#06121f;border-color:var(--accent);font-weight:600">创建灵感</button>
+   <button class=act onclick=closeNew()>取消</button>
+   <span class=meta id=nmsg></span>
+  </div>
+ </div>
 </div>
 <script>
 let D={ideas:[],principles:[]}, cur='idea', SEL=null, DET=null, MOD='origin';
@@ -1185,16 +1250,18 @@ function viewOrigin(){
  const canDraw=first&&first.symbol&&first.center;
  return `
  <div class=box>
-  <h3>📤 上传原始图</h3>
+  <h3>📤 给这条灵感补一张图</h3>
+  <div class=meta style="margin-bottom:8px">新的形态想法请用左上角「➕ 新建灵感」—— 那才是"传图+写想法→生成新策略"的入口。这里只是给 <b>#${i.id||''}</b> 补充图例。</div>
   <div class=drop id=drop>把图拖进来 / 直接 Ctrl+V 粘贴 / <label style="color:var(--accent);cursor:pointer">选文件<input type=file accept="image/*" hidden id=fpick></label></div>
   <div class=row>
    <input id=usym placeholder="币种 如 EDGEUSDT" value="${i.symbol||''}" style="width:150px">
-   <select id=utf><option>5m</option><option>15m</option><option>1h</option></select>
-   <input id=utime type="datetime-local" title="这张图对应的时间(右侧据此画K线)">
-   <input id=unote placeholder="备注(可选)" style="flex:1;min-width:120px">
+   <select id=utf><option>5m</option><option>15m</option><option>1h</option><option>1m</option></select>
+   <input id=utime type="datetime-local" title="这张图对应的时间(右侧据此画K线; 可不填)">
+   <input id=unote placeholder="这张图说明什么(可选)" style="flex:1;min-width:120px">
    <button class=act onclick="doUpload()">上传</button>
   </div>
-  <div class=meta id=upmsg>币种和时间要你来填 —— 从截图反推是哪个币哪一刻属于图像识别, 做不到, 不猜。</div>
+  <div class=meta id=upmsg>时间<b>可不填</b>, 只影响右侧能不能画出那一刻的动态K线。
+    从截图反推是哪个币哪一刻属于图像识别 —— 做不到, 不猜, 所以要你给。</div>
  </div>
  <div class=box>
   <h3>🖼 左: 你的原始图　|　右: 同一时刻的动态K线</h3>
@@ -1243,47 +1310,107 @@ async function showChart(sym,tf,center){
 }
 function switchTf(t){ if(curChartSym) showChart(curChartSym,t,curChartCenter); }
 
-/* 上传: 粘贴 / 拖拽 / 选文件 */
-let PENDING=null;
+/* ---------- 上传: 粘贴 / 拖拽 / 选文件 ----------
+   两个入口各有一份待上传的图: PENDING(给已有灵感补图) / NPENDING(新建灵感弹窗)。
+   弹窗开着时, 粘贴/拖拽一律进弹窗。 */
+let PENDING=null, NPENDING=null;
+const modalOn=()=>document.getElementById('modal').classList.contains('on');
+
 function armUpload(){
  document.addEventListener('paste',e=>{
-   if(MOD!=='origin'||!SEL) return;
    const it=[...(e.clipboardData||{}).items||[]].find(x=>x.type.startsWith('image/'));
    if(!it) return;
-   readImg(it.getAsFile());
+   if(modalOn()) return readNImg(it.getAsFile());
+   if(MOD==='origin'&&SEL) readImg(it.getAsFile());
  });
- document.addEventListener('dragover',e=>{const d=document.getElementById('drop'); if(d){e.preventDefault();d.classList.add('hot');}});
- document.addEventListener('dragleave',()=>{const d=document.getElementById('drop'); if(d)d.classList.remove('hot');});
+ document.addEventListener('dragover',e=>{
+   const d=modalOn()?document.getElementById('ndrop'):document.getElementById('drop');
+   if(d){e.preventDefault();d.classList.add('hot');}
+ });
+ document.addEventListener('dragleave',()=>{
+   ['drop','ndrop'].forEach(id=>{const d=document.getElementById(id); if(d)d.classList.remove('hot');});
+ });
  document.addEventListener('drop',e=>{
-   const d=document.getElementById('drop'); if(!d) return;
+   const d=modalOn()?document.getElementById('ndrop'):document.getElementById('drop');
+   if(!d) return;
    e.preventDefault(); d.classList.remove('hot');
    const f=[...e.dataTransfer.files].find(x=>x.type.startsWith('image/'));
-   if(f) readImg(f);
+   if(!f) return;
+   modalOn()?readNImg(f):readImg(f);
  });
- document.addEventListener('change',e=>{ if(e.target.id==='fpick'&&e.target.files[0]) readImg(e.target.files[0]); });
+ document.addEventListener('change',e=>{
+   if(e.target.id==='fpick'&&e.target.files[0]) readImg(e.target.files[0]);
+   if(e.target.id==='nfile'&&e.target.files[0]) readNImg(e.target.files[0]);
+ });
 }
 function readImg(file){
  const r=new FileReader();
  r.onload=()=>{ PENDING=r.result;
    const d=document.getElementById('drop');
-   if(d){ d.innerHTML=`已选好图 (${Math.round(file.size/1024)}KB) —— 填上币种+时间后点「上传」`; d.classList.add('hot'); }
+   if(d){ d.innerHTML=`已选好图 (${Math.round(file.size/1024)}KB) —— 点「上传」`; d.classList.add('hot'); }
  };
  r.readAsDataURL(file);
 }
 async function doUpload(){
  const msg=document.getElementById('upmsg');
  if(!PENDING){ msg.textContent='还没选图(拖进来/Ctrl+V/选文件)。'; return; }
- const sym=document.getElementById('usym').value.trim();
  const tv=document.getElementById('utime').value;
- if(!sym||!tv){ msg.textContent='币种和时间都要填 —— 右侧动态K线靠它们定位。'; return; }
- const body={data:PENDING, symbol:sym, tf:document.getElementById('utf').value,
-             center:Math.floor(new Date(tv).getTime()/1000), note:document.getElementById('unote').value.trim()};
+ const body={data:PENDING, symbol:document.getElementById('usym').value.trim(),
+             tf:document.getElementById('utf').value,
+             center: tv?Math.floor(new Date(tv).getTime()/1000):0,     // 时间可不填
+             note:document.getElementById('unote').value.trim()};
  const r=await (await fetch(`/api/idea/${SEL}/chart`,{method:'POST',headers:{'Content-Type':'application/json'},
                              body:JSON.stringify(body)})).json();
  if(!r.ok){ msg.textContent='上传失败: '+(r.error||'?'); return; }
  PENDING=null;
  DET=await (await fetch('/api/idea/'+SEL)).json();
  renderNav(); renderPane();
+}
+
+/* ---------- 新建灵感弹窗 ---------- */
+function openNew(){ document.getElementById('modal').classList.add('on'); }
+function closeNew(){
+ document.getElementById('modal').classList.remove('on');
+ NPENDING=null;
+ document.getElementById('npreview').innerHTML='';
+ document.getElementById('ndrop').innerHTML='把图拖进来 / 直接 <b>Ctrl+V 粘贴</b> / <label style="color:var(--accent);cursor:pointer">选文件<input type=file accept="image/*" hidden id=nfile></label>';
+ document.getElementById('ndrop').classList.remove('hot');
+ ['ntitle','nsym','ntime','nnote'].forEach(id=>document.getElementById(id).value='');
+ document.getElementById('nmsg').textContent='';
+}
+function readNImg(file){
+ const r=new FileReader();
+ r.onload=()=>{ NPENDING=r.result;
+   const d=document.getElementById('ndrop');
+   d.innerHTML=`已选好图 (${Math.round(file.size/1024)}KB)`; d.classList.add('hot');
+   document.getElementById('npreview').innerHTML=`<img src="${r.result}">`;
+ };
+ r.readAsDataURL(file);
+}
+async function submitNew(){
+ const msg=document.getElementById('nmsg');
+ const note=document.getElementById('nnote').value.trim();
+ if(!note){ msg.textContent='写下你看到了什么 —— 没有想法的图只是张图, 不是灵感。'; return; }
+ const tv=document.getElementById('ntime').value;
+ msg.textContent='创建中…';
+ const body={title:document.getElementById('ntitle').value.trim(),
+             note, data:NPENDING||'',
+             symbol:document.getElementById('nsym').value.trim(),
+             tf:document.getElementById('ntf').value,
+             center: tv?Math.floor(new Date(tv).getTime()/1000):0};
+ const r=await (await fetch('/api/idea/new',{method:'POST',headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify(body)})).json();
+ if(!r.ok){ msg.textContent='失败: '+(r.error||'?'); return; }
+ const slug=r.slug;
+ closeNew();
+ D=await (await fetch('/api/ideas')).json();
+ cur='idea'; renderList();
+ await pick(slug,'idea');
+ document.getElementById('pane').insertAdjacentHTML('afterbegin',
+  `<div class=verdict style="margin-bottom:14px">✅ 已建灵感 <b>#${r.id}</b>。你的原话已一字不改存进
+   <code>research/ideas/${slug}/idea.md</code>。<br>
+   <b>下一步</b>: 跟 Claude 说「读 #${r.id}, 写出策略 v1」—— 它会先把必须由你拍板的定义列出来(不替你假设),
+   再写成可回测的代码。看图器是本地静态页面, 连不上 LLM, 生成策略这一步必须由 Claude 来做。</div>`);
 }
 
 /* ---------- ② 策略迭代 ---------- */
