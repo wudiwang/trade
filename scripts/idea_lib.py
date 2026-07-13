@@ -185,6 +185,21 @@ def save_desc(slug, text):
     return True
 
 
+def load_spec(slug):
+    """已生成的筛选条件(strategy/spec.json)。要能持久化回显 —— 否则页面一重绘/一刷新就没了,
+    用户会以为「① 转成筛选条件」失败了(其实早就成功了)。"""
+    d = idea_dir(slug)
+    if not d:
+        return None
+    f = os.path.join(d, "strategy", "spec.json")
+    if not os.path.exists(f):
+        return None
+    try:
+        return json.load(open(f, encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def next_vnum(slug):
     d = idea_dir(slug)
     if not d:

@@ -246,6 +246,7 @@ def api_idea(slug: str):
     return JSONResponse({
         "idea": idea,
         "desc": idea_lib.load_desc(slug),
+        "spec": idea_lib.load_spec(slug),          # 持久化回显, 别让用户以为①失败了
         "charts": idea_lib.load_charts(slug),
         "versions": idea_lib.load_versions(slug),
         "backtests": bts,
@@ -1484,37 +1485,43 @@ function viewOrigin(){
   <div class=row style="margin-top:10px">
    <select id=etf><option value=5m>5m</option><option value=15m>15m</option><option value=1h>1h</option><option value=1m>1m</option></select>
    <button class=act onclick=genSpec()>① 转成筛选条件</button>
-   <button class=act onclick=genCode()>② 生成策略代码 → 首版</button>
-   <span class=meta id=genmsg></span>
+   <button class=act onclick=genCode() ${DET.spec?'':'disabled'}
+     title="${DET.spec?'':'先点①'}">② 生成策略代码 → 首版</button>
+   <span class=meta id=genmsg>${DET.spec?'':'两步都要点: ① 出条件(约1分钟) → ② 出代码(约4分钟)。'}</span>
   </div>
-  <div id=specbox></div>
+  <div id=specbox>${DET.spec?specHtml(DET.spec):''}</div>
  </div>`;
 }
 
-/* ① 自然语言 → 筛选条件(调本机 claude -p) */
+/* ① 自然语言 → 筛选条件(调本机 claude -p, 约1分钟) */
 async function genSpec(){
  const m=document.getElementById('genmsg');
  const text=document.getElementById('edesc').value.trim();
  if(!text){ m.textContent='先写下你看到了什么。'; return; }
- m.textContent='⏳ 本机 Claude 正在拆解…';
+ m.textContent='⏳ 本机 Claude 正在拆解…(约1分钟, 别关页面)';
  const r=await (await fetch(`/api/idea/${SEL}/spec`,{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({text, tf:document.getElementById('etf').value})})).json();
  if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
- pollJob(r.job, m, j=>{ if(j.spec) showSpec(j.spec); });
+ pollJob(r.job, m, async()=>{
+   // 重新拉一次: 让描述和筛选条件都【持久化回显】。原来只塞进一个临时div,
+   // 页面一重绘/一刷新就没了, 用户会以为①失败了(其实早就成功了)。
+   DET=await (await fetch('/api/idea/'+SEL)).json();
+   renderNav(); renderPane();
+ });
 }
-function showSpec(sp){
- const box=document.getElementById('specbox');
+function specHtml(sp){
  const rows=(sp.conditions||[]).map(c=>`<tr>
    <td><b>${c.id}</b></td><td>${c['用户的话']||''}</td><td>${c['量化定义']||''}</td>
    <td>${JSON.stringify(c['参数']||{})}</td>
    <td style="color:${c['把握度']==='高'?'var(--ok)':c['把握度']==='低'?'var(--bad)':'var(--warn)'}">${c['把握度']||''}</td>
    <td style="color:var(--warn)">${c['待用户拍板']||''}</td></tr>`).join('');
- box.innerHTML=`<div class=box style="margin-top:12px">
+ return `<div class=box style="margin-top:12px">
    <h3>🔍 筛选条件 · ${sp.name||''} <span class=meta style="font-weight:400">${sp.direction||''}</span></h3>
+   <div class=verdict>条件已出。<b>还没有策略</b> —— 再点上面的「② 生成策略代码 → 首版」才会写出可回测的代码(约4分钟)。</div>
    <table style="width:100%;border-collapse:collapse;font-size:12.5px">
     <tr><th>#</th><th>你的话</th><th>量化定义</th><th>参数</th><th>把握度</th><th>待你拍板</th></tr>${rows}</table>
    <div class=meta style="margin-top:8px">入场: ${sp.entry||'-'}<br>止损: ${sp.sl||'-'}<br>止盈: ${sp.tp||'-'}</div>
-   ${(sp['疑问']||[]).length?`<div class=verdict style="margin-top:10px"><b>必须由你拍板的问题</b>:<br>
+   ${(sp['疑问']||[]).length?`<div class=verdict style="margin-top:10px"><b>必须由你拍板的问题</b>(拍板后把答案补进上面的描述框, 重跑①):<br>
      ${sp['疑问'].map((q,i)=>`${i+1}. ${q}`).join('<br>')}</div>`:''}
   </div>`;
 }
