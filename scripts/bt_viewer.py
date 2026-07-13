@@ -624,21 +624,34 @@ def _klines_of(symbol: str, tf: str, days: int):
         return None
 
 
-@app.get("/api/klines")
-def api_klines(symbol: str, center: int, span: int = 120, tf: str = "5m", after: int = -1):
-    """after = 触发点【之后】给几根K线。
+TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 
-    after=0 → 盲测模式: 只给到触发那一刻为止, 一根未来K都不泄露。
-    这是 P004(盲测入场点) 的地基 —— 看得到后市的判断是被结果污染过的判断。
-    after<0(默认) → 与 span 同, 保持老行为。
+
+@app.get("/api/klines")
+def api_klines(symbol: str, center: int, span: int = 120, tf: str = "5m",
+               after: int = -1, cut: int = 0):
+    """after = 触发点【之后】给几根K线; cut = 信息截止时刻(unix秒)。
+
+    盲测(P004)的地基。两个坑:
+    1. after=0 → 不给触发之后的K线。
+    2. cut → 【必须】, 否则切到大级别时会偷偷泄露未来: 1m 的触发点落在某根 5m K线中间,
+       那根 5m K要到5分钟后才收盘, 它的高/低/收盘价包含了触发之后的信息。
+       cut = 触发K收盘那一刻; 只给【在 cut 之前就已经收盘】的K线, 那根还没走完的一律砍掉。
+
+    after<0 且 cut=0(默认) → 老行为, 前后都给。
     """
     k = _klines_of(symbol, tf, DAYS) or _klines_of(symbol, "5m", DAYS)
     if not k:
         return JSONResponse([])
     times = [int(b["open_time"]) // 1000 for b in k]
-    j = bisect.bisect_left(times, center)
-    nafter = span if after < 0 else after
-    lo, hi = max(0, j - span), min(len(k), j + nafter + 1)
+    dur = TF_SEC.get(tf, 300)
+    if cut:
+        hi = bisect.bisect_right(times, cut - dur)      # 最后一根【已收盘】的K
+        lo = max(0, hi - span)
+    else:
+        j = bisect.bisect_left(times, center)
+        nafter = span if after < 0 else after
+        lo, hi = max(0, j - span), min(len(k), j + nafter + 1)
     return JSONResponse([
         {"t": int(b["open_time"]) // 1000, "o": float(b["open"]), "h": float(b["high"]),
          "l": float(b["low"]), "c": float(b["close"]), "v": float(b["volume"])}
@@ -1539,6 +1552,12 @@ function sigRow(b,s,ix,ann){
    <span class=meta>${new Date(s.t*1000).toLocaleString('zh-CN')}</span>
    ${outcome}${st}</summary>
   <div style="padding:10px 12px">
+   <div class=row style="margin-bottom:6px">
+    <span class=meta>看图级别:</span>
+    ${['1m','5m','15m','1h'].map(t=>`<button class=act id="tf_${b.id}_${key}_${t}"
+       style="padding:3px 10px" onclick="switchSigTf('${b.id}','${key}',${ix},'${t}')">${t}${t===(s.tf||'5m')?' ★':''}</button>`).join('')}
+    <span class=meta>★ = 策略的触发级别(${s.tf||'5m'}); 其余是你换个眼睛看形态/趋势</span>
+   </div>
    <div class=chartbox id="c_${b.id}_${key}" style="height:320px"></div>
    <div class=meta id="h_${b.id}_${key}" style="margin-top:6px"></div>
    <div class=row style="margin-top:10px" id="a_${b.id}_${key}">
@@ -1551,18 +1570,37 @@ function sigRow(b,s,ix,ann){
   </div></details>`;
 }
 
-/* reveal=0 盲测(after=0, 一根未来K都不给) | reveal=1 揭晓(给后市+结果线) */
+const TFSEC={'1m':60,'5m':300,'15m':900,'1h':3600};
+const DEFAULT_VIEW_TF='5m';        // 默认用5m看形态(哪怕策略在1m上触发) —— 触发级别≠看图级别
+
+function switchSigTf(bid,key,ix,tf){
+ const el=document.getElementById(`c_${bid}_${key}`); if(!el) return;
+ const reveal=el._mode===1?1:0;
+ el._tf=tf; el._mode=-1;            // 强制重画
+ drawSig(bid,key,ix,reveal);
+}
+
+/* reveal=0 盲测(不给未来) | reveal=1 揭晓(给后市+结果) */
 async function drawSig(bid,key,ix,reveal){
  const el=document.getElementById(`c_${bid}_${key}`);
  const hint=document.getElementById(`h_${bid}_${key}`);
  if(!el) return;
  const b=(DET.backtests||[]).find(x=>x.id===bid); if(!b) return;
  const s=b.signals[ix];
+ const tf=el._tf||DEFAULT_VIEW_TF;
  if(el._mode===reveal) return;             // 已经是这个模式了
  el._mode=reveal; el.innerHTML='';
- const after = reveal?120:0;
- const kl=await (await fetch(`/api/klines?symbol=${s.symbol}&center=${s.t}&span=120&tf=${s.tf||'5m'}&after=${after}`)).json();
- if(!kl.length){ el.innerHTML='<div class=meta style="padding:16px">缓存里没有这个币的K线。</div>'; return; }
+ // 按钮高亮
+ ['1m','5m','15m','1h'].forEach(t=>{const btn=document.getElementById(`tf_${bid}_${key}_${t}`);
+   if(btn) btn.style.background = t===tf?'#243447':'#161b22';});
+ // 盲测: cut = 触发K【收盘】那一刻。切到大级别时, 那根还没走完的K必须砍掉,
+ // 否则它的高/低/收盘价里藏着触发之后的信息 —— 那就不是盲测了。
+ const cut=s.t+(TFSEC[s.tf]||60);
+ const q=reveal
+   ? `symbol=${s.symbol}&center=${s.t}&span=120&tf=${tf}`
+   : `symbol=${s.symbol}&center=${s.t}&span=120&tf=${tf}&after=0&cut=${cut}`;
+ const kl=await (await fetch('/api/klines?'+q)).json();
+ if(!kl.length){ el.innerHTML=`<div class=meta style="padding:16px">缓存里没有 ${s.symbol} 的 ${tf} K线。</div>`; return; }
  const c=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
    grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
    timeScale:{timeVisible:true,secondsVisible:false},
@@ -1577,13 +1615,18 @@ async function drawSig(bid,key,ix,reveal){
  // 入场/止损/止盈都是【触发那一刻就已知】的, 不是未来信息, 盲测下照给
  [['入场',s.entry,'#58a6ff'],['止损',s.sl,'#f85149'],['止盈',s.tp,'#3fb950']].forEach(([t,p,col])=>{
    if(p) ser.createPriceLine({price:p,color:col,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:t}); });
- ser.setMarkers([{time:s.t,position:s.dir==='short'?'aboveBar':'belowBar',color:'#d29922',
+ // 触发时刻吸附到当前级别的K线上(5m图上没有1m的时间戳, 不吸附就画不出标记)
+ let mt=kl[0].t; for(const k of kl){ if(k.t<=s.t) mt=k.t; }
+ ser.setMarkers([{time:mt,position:s.dir==='short'?'aboveBar':'belowBar',color:'#d29922',
    shape:s.dir==='short'?'arrowDown':'arrowUp',text:'触发'}]);
  c.timeScale().fitContent();
  new ResizeObserver(()=>c.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
+ const coarse = (TFSEC[tf]||300) > (TFSEC[s.tf]||60);
  if(hint) hint.innerHTML = reveal
-   ? `已揭晓 · 结果 <b>${s.result==='tp'?'止盈':s.result==='sl'?'止损':s.result==='timeout'?'超时平':'仍持仓'}</b>${s.pnl_r!=null?` · ${s.pnl_r>0?'+':''}${s.pnl_r}R`:''}${s.net_r!=null?` (扣费 ${s.net_r}R)`:''}`
-   : `🔒 <b>盲测中</b>: 图只画到触发那一刻, 后面一根K都没给。先判断这是不是你要的入场点 —— 判完才揭晓。`;
+   ? `已揭晓 · ${tf}图 · 结果 <b>${s.result==='tp'?'止盈':s.result==='sl'?'止损':s.result==='timeout'?'超时平':'仍持仓'}</b>${s.pnl_r!=null?` · ${s.pnl_r>0?'+':''}${s.pnl_r}R`:''}${s.net_r!=null?` (扣费 ${s.net_r}R)`:''}`
+   : `🔒 <b>盲测中</b> · ${tf}图: 只画到触发那一刻, 后面一根K都没给。`
+     + (coarse?` <span style="color:var(--warn)">(触发时那根${tf}K还没收盘, 已砍掉 —— 它的高低收里藏着未来)</span>`:'')
+     + ` 先判断这是不是你要的入场点 —— 判完才揭晓。`;
 }
 
 async function annot(bid,key,ix,verdict){
