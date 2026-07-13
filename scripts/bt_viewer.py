@@ -251,6 +251,44 @@ async def api_idea_chart(slug: str, request: Request):
     return {"ok": True, "path": rel}
 
 
+def _register_fvg1m():
+    """把灵感001(5m FVG回踩 + 1m缠论底分型入场)注册成可一键回测的 scanner。
+
+    代码一直躺在 scripts/strat_fvg1m.py, 只是没接进 SCANS。它需要 1m 数据 ——
+    本地只有 198 个币有 1m 缓存, 所以它的样本天然比 5m 策略小, 这不是 bug。
+    """
+    try:
+        import strat_fvg1m as S
+    except Exception:
+        return
+
+    def scan_fvg1m(C):
+        k5all, k1all = C("5m"), C("1m")
+        rows = []
+        for sym, k1 in k1all.items():
+            k5 = k5all.get(sym)
+            if not k5:
+                continue
+            try:
+                rows.extend(S.walk(sym, k5, k1, S.BASE))
+            except Exception:
+                pass
+        return rows
+
+    R.SCANS["fvg1m"] = scan_fvg1m
+    R.META.setdefault("fvg1m", {
+        "label": "FVG回踩·1m止跌入场", "tf": "1m",
+        "logic": ["① 5m 一段≥2%的上涨, 留下 FVG(缺口)",
+                  "② 回踩进 FVG 区间(跌穿下沿则作废)",
+                  "③ 1m 出现缠论底分型 = 止跌信号",
+                  "④ 确认K收盘那一刻买入(无未来函数)",
+                  "⑤ 止损 A=1m分型低点 / B=FVG下沿 / C=回踩最低点-0.3%"],
+    })
+
+
+_register_fvg1m()
+
+
 @app.get("/api/live")
 def api_live():
     """线上实盘系统【真实打出】的最近N笔信号(从 VPS 的 signals/paper_trades 拉的),
@@ -357,13 +395,13 @@ def _run_backtest(job, slug, version, scanner, month):
             if not (t0 <= t < t1):
                 continue
             net = None
-            if s.get("result") in ("tp", "sl"):
+            if s.get("result") in ("tp", "sl", "timeout") and s.get("pnl_r") is not None:
                 risk = abs(s["entry"] - s["sl"]) or 1e-9
                 cost = 2 * (FEE / 100.0) * s["entry"] / risk
                 net = s["pnl_r"] - cost
                 nets.append(net)
             sigs.append({"id": len(sigs), "symbol": s["symbol"], "t": t,
-                         "dir": s["direction"], "tf": trig_tf(scanner),
+                         "dir": s["direction"], "tf": s.get("tf") or trig_tf(scanner),
                          "entry": s["entry"], "sl": s["sl"], "tp": s["tp"],
                          "result": s.get("result"), "pnl_r": s.get("pnl_r"),
                          "net_r": round(net, 3) if net is not None else None})
@@ -453,6 +491,57 @@ def api_job(id: str):
     return JSONResponse(JOBS.get(id) or {"state": "unknown"})
 
 
+@app.post("/api/idea/{slug}/summary")
+async def api_idea_summary(slug: str, request: Request):
+    """把这次回测里所有「不符合」的理由按频次归纳 → 存成 annotations/<bt_id>_summary.md。
+
+    诚实说明: 看图器是个本地静态应用, 连不上 LLM —— 这个按钮做的是【归纳】, 不是【生成新策略】。
+    归纳出来的东西是给 Claude 的输入; 由 Claude 读了它去改规则、写出 v(N+1) 的代码。
+    """
+    import idea_lib
+    b = await request.json()
+    bt_id = b.get("bt_id", "")
+    d = idea_lib.idea_dir(slug)
+    if not d or not bt_id:
+        return JSONResponse({"error": "参数不全"}, status_code=400)
+
+    ann = idea_lib.load_annotations(slug, bt_id)
+    ok = [a for a in ann.values() if a["verdict"] == "ok"]
+    bad = [a for a in ann.values() if a["verdict"] == "bad"]
+    if not ann:
+        return JSONResponse({"error": "还没有任何盲测标注"}, status_code=400)
+
+    groups = {}
+    for a in bad:
+        groups.setdefault(a["reason"].strip(), []).append(a["sig"])
+    ranked = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+    rate = round(len(ok) / len(ann) * 100, 1)
+
+    md = [f"# 盲测汇总 · {bt_id}", "",
+          f"- 已盲测: **{len(ann)}** 笔",
+          f"- 符合: **{len(ok)}** 笔 · 不符合: **{len(bad)}** 笔",
+          f"- **图形通过率: {rate}%**  ← 第一阶段的唯一进度指标(P004: 先形后利)", ""]
+    if ranked:
+        md += ["## 不符合的理由(按出现频次)", ""]
+        for r, sigs in ranked:
+            md.append(f"- **{len(sigs)}次** — {r}  <small>(信号 {', '.join(map(str, sigs[:8]))}"
+                      f"{'…' if len(sigs) > 8 else ''})</small>")
+        md += ["", "## 下一步", "",
+               "把这份汇总交给 Claude: 「据此把规则改成 v(N+1)」。",
+               "出现频次最高的理由 = 最该先收紧的那条筛选语句。"]
+    else:
+        md += ["## 没有「不符合」的样本", "",
+               f"通过率 {rate}%。图形阶段基本达标, 可以进入第二阶段(研究怎么在这个形态上赚钱)。"]
+
+    txt = "\n".join(md)
+    p = os.path.join(d, "annotations")
+    os.makedirs(p, exist_ok=True)
+    open(os.path.join(p, f"{bt_id}_summary.md"), "w", encoding="utf-8").write(txt + "\n")
+    return {"ok": True, "n": len(ann), "n_ok": len(ok), "n_bad": len(bad), "pass_rate": rate,
+            "groups": [{"reason": r, "count": len(s)} for r, s in ranked],
+            "html": idea_lib.md2html(txt, f"ideas/{slug}")}
+
+
 @app.post("/api/idea/{slug}/annotate")
 async def api_idea_annotate(slug: str, request: Request):
     """回测标注: 符合(ok) / 不准(bad, 必须写明该改哪条筛选语句)。绑定到该次回测=该策略版本。"""
@@ -519,13 +608,20 @@ def _klines_of(symbol: str, tf: str, days: int):
 
 
 @app.get("/api/klines")
-def api_klines(symbol: str, center: int, span: int = 120, tf: str = "5m"):
+def api_klines(symbol: str, center: int, span: int = 120, tf: str = "5m", after: int = -1):
+    """after = 触发点【之后】给几根K线。
+
+    after=0 → 盲测模式: 只给到触发那一刻为止, 一根未来K都不泄露。
+    这是 P004(盲测入场点) 的地基 —— 看得到后市的判断是被结果污染过的判断。
+    after<0(默认) → 与 span 同, 保持老行为。
+    """
     k = _klines_of(symbol, tf, DAYS) or _klines_of(symbol, "5m", DAYS)
     if not k:
         return JSONResponse([])
     times = [int(b["open_time"]) // 1000 for b in k]
     j = bisect.bisect_left(times, center)
-    lo, hi = max(0, j - span), min(len(k), j + span)
+    nafter = span if after < 0 else after
+    lo, hi = max(0, j - span), min(len(k), j + nafter + 1)
     return JSONResponse([
         {"t": int(b["open_time"]) // 1000, "o": float(b["open"]), "h": float(b["high"]),
          "l": float(b["low"]), "c": float(b["close"]), "v": float(b["volume"])}
@@ -1244,20 +1340,40 @@ function viewBt(){
  if(!bs.length) return run+`<div class=box><h3>📊 回测记录</h3><div class=meta>还没有回测。</div></div>`;
  return run+bs.map(b=>{
    const ann=b.annotations||{}, sigs=b.signals||[];
+   const vals=Object.values(ann), nok=vals.filter(a=>a.verdict==='ok').length;
+   const rate=vals.length?Math.round(nok/vals.length*100):0;
    const exp=b.exp_r, pos=exp>0;
    return `<div class=box>
     <h3>📊 ${b.id} <span class=meta style="font-weight:400">策略 ${b.version||'?'} · ${b.range||'?'} ·
-      ${b.symbols||'?'}币 · 手续费${b.fee_pct_side||0.045}%/边 · ${b.at||''}</span></h3>
+      ${b.symbols||'?'}币 · ${b.at||''}</span></h3>
+
+    <!-- 第一阶段(P004): 图形对不对。盈利指标折叠起来 —— 盲测时看到期望值会污染判断 -->
     <div class=kpi>
-     <div>扣费后期望<b class="${pos?'pos':'neg'}">${exp==null?'—':(exp>0?'+':'')+exp+'R'}</b></div>
-     <div>笔数<b>${b.n||sigs.length}</b></div>
-     <div>胜率<b>${b.win_rate!=null?b.win_rate+'%':'—'}</b></div>
-     <div>t值<b class="${(b.tstat||0)>2?'pos':''}">${b.tstat!=null?b.tstat:'—'}</b></div>
-     <div>已标注<b>${Object.keys(ann).length}/${sigs.length}</b></div>
+     <div>触发笔数<b>${b.n||sigs.length}</b></div>
+     <div>已盲测<b>${vals.length}</b></div>
+     <div>图形通过率<b class="${rate>=70?'pos':(vals.length?'neg':'')}">${vals.length?rate+'%':'—'}</b></div>
     </div>
-    ${b.verdict?`<div class=verdict><b>结论与建议</b>: ${b.verdict}</div>`:''}
-    ${b.truncated?`<div class=meta style="color:var(--warn)">⚠ 共 ${b.n} 个信号, 页面只画前 300 张。</div>`:''}
+    <div class=meta id="prog_${b.id}"></div>
+    <div class=row style="margin-top:8px">
+      <button class=act onclick="summarize('${b.id}')">🧾 汇总不满意理由 → 下一版改哪条</button>
+    </div>
+    <div id="sum_${b.id}"></div>
+
+    <details style="margin-top:10px">
+     <summary style="cursor:pointer;color:var(--muted);font-size:12px">
+       💰 盈利指标(第二阶段才看 —— 盲测时别点开, 会污染你的判断)</summary>
+     <div class=kpi style="margin-top:8px">
+      <div>扣费后期望<b class="${pos?'pos':'neg'}">${exp==null?'—':(exp>0?'+':'')+exp+'R'}</b></div>
+      <div>胜率<b>${b.win_rate!=null?b.win_rate+'%':'—'}</b></div>
+      <div>t值<b class="${(b.tstat||0)>2?'pos':''}">${b.tstat!=null?b.tstat:'—'}</b></div>
+     </div>
+     ${b.verdict?`<div class=verdict><b>结论与建议</b>: ${b.verdict}</div>`:''}
+    </details>
+
+    ${b.truncated?`<div class=meta style="color:var(--warn);margin-top:8px">⚠ 共 ${b.n} 个信号, 页面只画前 300 张。</div>`:''}
+    <div style="margin-top:10px">
     ${sigs.length?sigs.map((s,ix)=>sigRow(b,s,ix,ann)).join(''):'<div class=meta>这次回测没有触发信号。</div>'}
+    </div>
    </div>`;
  }).join('');
 }
@@ -1278,50 +1394,107 @@ async function runBt(){
    }
  },1500);
 }
+/* ---- 盲测(P004): 判断前只给触发那一刻为止的K线, 判完才揭晓后市与盈亏 ----
+   已判过的样本直接显示结果(没必要再瞒), 没判过的一律封住。 */
 function sigRow(b,s,ix,ann){
  const key=String(s.id!=null?s.id:ix), a=ann[key];
- const st=a?(a.verdict==='ok'?`<span class="st ok">✓ 符合</span>`
-            :`<span class="st bad">✗ 不准 · ${a.reason}</span>`):`<span class="st none">未标注</span>`;
- return `<details class=sig>
-  <summary onclick="setTimeout(()=>drawSig('${b.id}','${key}','${s.symbol}',${s.t},'${s.tf||'5m'}'),50)">
-   <b>${s.symbol}</b> <span class=meta>${new Date(s.t*1000).toLocaleString('zh-CN')}</span>
-   ${s.result?`<span class=meta>· ${s.result==='tp'?'盈':'损'}${s.pnl_r!=null?(' '+s.pnl_r+'R'):''}</span>`:''}
-   ${st}</summary>
+ const judged=!!a;
+ const st=judged?(a.verdict==='ok'?`<span class="st ok">✓ 符合</span>`
+            :`<span class="st bad">✗ 不符合 · ${a.reason}</span>`)
+          :`<span class="st none">🔒 未判(盲测)</span>`;
+ // 未判 = 结果/盈亏一个字都不能露
+ const outcome = judged
+   ? `<span class=meta>· ${s.result==='tp'?'止盈':s.result==='sl'?'止损':s.result==='timeout'?'超时':'持仓'}${s.pnl_r!=null?(' '+s.pnl_r+'R'):''}</span>`
+   : '';
+ return `<details class=sig data-key="${key}">
+  <summary onclick="setTimeout(()=>drawSig('${b.id}','${key}',${ix},${judged?1:0}),50)">
+   <b>${s.symbol}</b> <span class="tfb tf-${s.tf||'5m'}">${s.tf||'5m'}</span>
+   <span class=meta>${new Date(s.t*1000).toLocaleString('zh-CN')}</span>
+   ${outcome}${st}</summary>
   <div style="padding:10px 12px">
-   <div class=chartbox id="c_${b.id}_${key}" style="height:300px"></div>
-   <div class=row style="margin-top:10px">
-    <button class="act ok" onclick="annot('${b.id}','${key}','ok')">👍 符合要求</button>
-    <button class="act bad" onclick="annot('${b.id}','${key}','bad')">👎 不准</button>
-    <input id="r_${b.id}_${key}" placeholder="不准的话: 该改哪条筛选语句?" style="flex:1;min-width:200px">
+   <div class=chartbox id="c_${b.id}_${key}" style="height:320px"></div>
+   <div class=meta id="h_${b.id}_${key}" style="margin-top:6px"></div>
+   <div class=row style="margin-top:10px" id="a_${b.id}_${key}">
+    ${judged?'':`
+     <button class="act ok" onclick="annot('${b.id}','${key}',${ix},'ok')">👍 符合我要的入场点</button>
+     <button class="act bad" onclick="annot('${b.id}','${key}',${ix},'bad')">👎 不符合</button>
+     <input id="r_${b.id}_${key}" placeholder="不符合的话: 哪里不对?(这条理由=下一版要改的筛选语句)" style="flex:1;min-width:240px">`}
     <span class=meta id="m_${b.id}_${key}"></span>
    </div>
   </div></details>`;
 }
-async function drawSig(bid,key,sym,t,tf){
- const el=document.getElementById(`c_${bid}_${key}`); if(!el||el._done) return;
- const kl=await (await fetch(`/api/klines?symbol=${sym}&center=${t}&span=120&tf=${tf}`)).json();
+
+/* reveal=0 盲测(after=0, 一根未来K都不给) | reveal=1 揭晓(给后市+结果线) */
+async function drawSig(bid,key,ix,reveal){
+ const el=document.getElementById(`c_${bid}_${key}`);
+ const hint=document.getElementById(`h_${bid}_${key}`);
+ if(!el) return;
+ const b=(DET.backtests||[]).find(x=>x.id===bid); if(!b) return;
+ const s=b.signals[ix];
+ if(el._mode===reveal) return;             // 已经是这个模式了
+ el._mode=reveal; el.innerHTML='';
+ const after = reveal?120:0;
+ const kl=await (await fetch(`/api/klines?symbol=${s.symbol}&center=${s.t}&span=120&tf=${s.tf||'5m'}&after=${after}`)).json();
  if(!kl.length){ el.innerHTML='<div class=meta style="padding:16px">缓存里没有这个币的K线。</div>'; return; }
  const c=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
    grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
-   timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#30363d'}});
- const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(kl[0].c||1))+4));
- const s=c.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',
+   timeScale:{timeVisible:true,secondsVisible:false},
+   rightPriceScale:{borderColor:'#30363d',scaleMargins:{top:0.06,bottom:0.28}}});
+ const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(s.entry||kl[0].c||1))+4));
+ const ser=c.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',
    borderVisible:false,priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
- s.setData(kl.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
- s.setMarkers([{time:t,position:'belowBar',color:'#58a6ff',shape:'arrowUp',text:'触发'}]);
+ ser.setData(kl.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
+ const vol=c.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol'});
+ c.priceScale('vol').applyOptions({scaleMargins:{top:0.78,bottom:0.02}});
+ vol.setData(kl.map(k=>({time:k.t,value:k.v,color:k.c>=k.o?'#2ea043cc':'#f85149aa'})));
+ // 入场/止损/止盈都是【触发那一刻就已知】的, 不是未来信息, 盲测下照给
+ [['入场',s.entry,'#58a6ff'],['止损',s.sl,'#f85149'],['止盈',s.tp,'#3fb950']].forEach(([t,p,col])=>{
+   if(p) ser.createPriceLine({price:p,color:col,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:t}); });
+ ser.setMarkers([{time:s.t,position:s.dir==='short'?'aboveBar':'belowBar',color:'#d29922',
+   shape:s.dir==='short'?'arrowDown':'arrowUp',text:'触发'}]);
  c.timeScale().fitContent();
  new ResizeObserver(()=>c.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
- el._done=true;
+ if(hint) hint.innerHTML = reveal
+   ? `已揭晓 · 结果 <b>${s.result==='tp'?'止盈':s.result==='sl'?'止损':s.result==='timeout'?'超时平':'仍持仓'}</b>${s.pnl_r!=null?` · ${s.pnl_r>0?'+':''}${s.pnl_r}R`:''}${s.net_r!=null?` (扣费 ${s.net_r}R)`:''}`
+   : `🔒 <b>盲测中</b>: 图只画到触发那一刻, 后面一根K都没给。先判断这是不是你要的入场点 —— 判完才揭晓。`;
 }
-async function annot(bid,key,verdict){
- const reason=document.getElementById(`r_${bid}_${key}`).value.trim();
+
+async function annot(bid,key,ix,verdict){
+ const inp=document.getElementById(`r_${bid}_${key}`);
+ const reason=inp?inp.value.trim():'';
  const m=document.getElementById(`m_${bid}_${key}`);
- if(verdict==='bad'&&!reason){ m.textContent='标「不准」必须写明该改哪条 —— 它是下一版改规则的依据。'; return; }
+ if(verdict==='bad'&&!reason){ m.textContent='说明哪里不对 —— 这条理由就是下一版要改的筛选语句, 空着等于白判。'; return; }
  const r=await (await fetch(`/api/idea/${SEL}/annotate`,{method:'POST',headers:{'Content-Type':'application/json'},
    body:JSON.stringify({bt_id:bid,sig:key,verdict,reason})})).json();
  if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
- m.textContent='已记录';
+ // 判完 → 揭晓后市
+ document.getElementById(`a_${bid}_${key}`).innerHTML=
+   `<span class=meta>已判: ${verdict==='ok'?'👍 符合':'👎 不符合 · '+reason}</span>`;
+ const el=document.getElementById(`c_${bid}_${key}`); if(el) el._mode=-1;
+ await drawSig(bid,key,ix,1);
  DET=await (await fetch('/api/idea/'+SEL)).json();
+ renderProgress(bid);
+}
+function renderProgress(bid){
+ const b=(DET.backtests||[]).find(x=>x.id===bid); if(!b) return;
+ const el=document.getElementById('prog_'+bid); if(!el) return;
+ const ann=b.annotations||{}, vals=Object.values(ann);
+ const ok=vals.filter(a=>a.verdict==='ok').length;
+ el.innerHTML=`已盲测 <b>${vals.length}</b>/${(b.signals||[]).length} · 符合 <b>${ok}</b> ·
+   <b>图形通过率 ${vals.length?Math.round(ok/vals.length*100):0}%</b>`;
+}
+
+/* 汇总不满意理由 → 下一版改哪条规则 */
+async function summarize(bid){
+ const box=document.getElementById('sum_'+bid);
+ box.innerHTML='<div class=meta>归纳中…</div>';
+ const r=await (await fetch(`/api/idea/${SEL}/summary`,{method:'POST',
+   headers:{'Content-Type':'application/json'},body:JSON.stringify({bt_id:bid})})).json();
+ if(!r.ok){ box.innerHTML=`<div class=meta>${r.error||'失败'}</div>`; return; }
+ box.innerHTML=`<div class=body>${r.html}</div>
+   <div class=verdict>这个按钮做的是<b>归纳</b>, 不是<b>生成新策略</b> —— 看图器是本地静态应用, 连不上 LLM。
+   把上面这份汇总(已存进 <code>annotations/${bid}_summary.md</code>)交给 Claude, 说「据此写出 v(N+1)」,
+   由它改规则、写代码、注册成新 scanner, 你再回来重跑一遍盲测, 看通过率有没有涨。</div>`;
 }
 
 /* ---------- ④ 结论 ---------- */
