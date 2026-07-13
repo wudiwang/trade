@@ -348,8 +348,17 @@ def load_backtests(slug):
     return out
 
 
+def akey(symbol, t, direction):
+    """市场点位的身份 = 币 + 时刻 + 方向。
+
+    【不能】用"回测里的第几条"当身份 —— 换个版本重跑, 同一个点位的下标就变了,
+    你在 v1 判过"不符合"的点会在 v2 里重新问你一遍。判断必须跟着【点位】走, 不是跟着下标走。
+    """
+    return f"{symbol}|{int(t)}|{direction}"
+
+
 def load_annotations(slug, bt_id):
-    """标注记录(追加式, 同一信号以最后一条为准)。绑定回测=绑定策略版本, 一经生成不随新版本改变。"""
+    """某次回测的标注(键=该次回测里的下标), 用来算这次的通过率。"""
     d = idea_dir(slug)
     if not d:
         return {}
@@ -369,19 +378,63 @@ def load_annotations(slug, bt_id):
     return out
 
 
-def save_annotation(slug, bt_id, sig, verdict, reason=""):
-    """verdict: ok(符合要求) | bad(不准, 需优化筛选语句)。reason 是以后改规则的依据。"""
+def load_judged(slug):
+    """跨【所有版本】的判断, 键 = 市场点位身份。
+
+    老记录(只有 sig 下标、没有 key)会现场回填: 用 bt_id 找到那次回测的 json, 把下标映射回
+    symbol/t/dir —— 不能让用户之前的判断白判。
+    """
+    d = idea_dir(slug)
+    if not d:
+        return {}
+    out = {}
+    for f in sorted(glob.glob(os.path.join(d, "annotations", "*.jsonl"))):
+        bt_id = os.path.basename(f)[:-6]
+        sigs = None
+        for ln in open(f, encoding="utf-8"):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                r = json.loads(ln)
+            except Exception:
+                continue
+            k = r.get("key")
+            if not k:                                   # 老记录: 用下标回填
+                if sigs is None:
+                    bf = os.path.join(d, "backtests", f"{bt_id}.json")
+                    try:
+                        sigs = json.load(open(bf, encoding="utf-8")).get("signals", [])
+                    except Exception:
+                        sigs = []
+                try:
+                    s = sigs[int(r["sig"])]
+                    k = akey(s["symbol"], s["t"], s["dir"])
+                except Exception:
+                    continue
+            r["key"], r["from"] = k, bt_id
+            out[k] = r                                  # 后判的覆盖先判的
+    return out
+
+
+def save_annotation(slug, bt_id, sig, verdict, reason="", symbol="", t=0, direction=""):
+    """verdict: ok(符合) | bad(不符合, 必须写明该改哪条)。
+
+    同时记下【市场点位身份】(币|时刻|方向), 这样换版本重跑时这条判断还认得出同一个点。
+    """
     d = idea_dir(slug)
     if not d:
         return None
     if verdict not in ("ok", "bad"):
         return None
     if verdict == "bad" and not reason.strip():
-        return None          # 标"不准"必须说明该改哪条 —— 否则这条标注对下一版没用
+        return None          # 标"不符合"必须说明哪里不对 —— 否则这条标注对下一版没用
     p = os.path.join(d, "annotations")
     os.makedirs(p, exist_ok=True)
     rec = {"sig": sig, "verdict": verdict, "reason": reason.strip(),
            "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    if symbol and t:
+        rec["key"] = akey(symbol, t, direction or "long")
     with open(os.path.join(p, f"{bt_id}.jsonl"), "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return rec

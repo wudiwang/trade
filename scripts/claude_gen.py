@@ -18,12 +18,29 @@ import subprocess
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KIT = os.path.join(ROOT, "scripts", "strat_kit.py")
 
+# 工具箱只给【签名+一句话】, 不贴全文 —— 贴全文白白多几千 token, 生成更慢
+KIT_API = """
+settle_all(rows, kmap, max_hold=288)  # 结算(先碰止损还是止盈/超时平/扣手续费), 你不用写
+hvn(k, lo, hi, bins=24) -> float|None # 密集成交区(筹码堆积处)。【昂贵】, 只能放在便宜条件之后
+reclaim(k, i, ia) -> bool             # k[i]收盘 是否把 k[ia] 那根下跌K线整根收回去了
+vol_x(k, i, n=20) -> float            # 第i根的量 是前n根均量的几倍
+atr(k, n, i) / ema(k,n,i) / sma(k,n,i)
+body(bar) / rng(bar) / is_bull(bar) / is_bear(bar) / engulf_bull(k, i)
 
-def _claude(prompt, model="sonnet", timeout=300):
-    """跑一次 headless claude。返回 (ok, text)。"""
+K线字段: bar["open_time"](毫秒) open high low close volume  —— 都是字符串, 用前先 float()
+"""
+
+
+def _claude(prompt, model="sonnet", timeout=600):
+    """跑一次 headless claude。返回 (ok, text)。
+
+    --tools '' : 【关键】不给它任何工具。否则它会在仓库目录里到处翻文件探索, 一次生成能拖到7分钟
+    甚至超时 —— 而它根本不需要翻: 工具箱源码、上一版代码、用户原话, 全都已经贴在 prompt 里了。
+    --max-turns 1 : 一轮就出结果, 不许来回折腾。
+    """
     exe = "claude"
     try:
-        p = subprocess.run([exe, "-p", "--model", model],
+        p = subprocess.run([exe, "-p", "--model", model, "--tools", "", "--max-turns", "1"],
                            input=prompt, capture_output=True, text=True,
                            encoding="utf-8", timeout=timeout, cwd=ROOT)
     except FileNotFoundError:
@@ -58,8 +75,13 @@ RULES = """
    - `reclaim(k, i, ia)` = k[i] 收盘是否把 k[ia] 那根下跌K线【收回去】了。
    - `vol_x(k, i, n)` = 第i根的量是前n根均量的几倍。`body(b)` / `rng(b)` / `is_bull` / `is_bear`。
    - `ema/sma/atr`。
-5. **参数集中在 BASE dict**, 不要把魔法数字散落在代码里 —— 后面要靠调它们迭代。
-6. 结算不用你写: 最后 `return settle_all(rows, k5, max_hold=288)` 即可。
+5. **判定顺序 = 先便宜后昂贵**(这条不是优化建议, 是硬要求):
+   回测要扫 663 个币 × 8600 根K = 570万次循环。所以【必须】把 O(1) 的便宜判断放最前面
+   (是不是阴线 / 放量够不够 / 实体够不够大), 一路 `continue` 淘汰掉 99.9% 的K线;
+   **`hvn()` 这种要做成交量分桶的昂贵计算, 只能放在所有便宜条件都通过之后**。
+   把 hvn() 写在循环第一行 = 每根K都算一遍分桶 = 回测从 3 秒变成 3 分钟。
+6. **参数集中在 BASE dict**, 不要把魔法数字散落在代码里 —— 后面要靠调它们迭代。
+7. 结算不用你写: 最后 `return settle_all(rows, k5, max_hold=288)` 即可。
 """
 
 
@@ -107,7 +129,6 @@ def spec(note, symbol="", tf="5m"):
 
 def codegen(note, spec_json, slug, vnum, symbol="", tf="5m"):
     """筛选条件 → Python scan() + 优化后的文字版策略。返回 (ok, msg, {py, md, title}）。"""
-    kit = open(KIT, encoding="utf-8").read()
     prompt = f"""你是量化策略工程师。把下面的筛选条件写成【可回测的 Python 策略】。
 
 ## 用户的原话
@@ -118,9 +139,9 @@ def codegen(note, spec_json, slug, vnum, symbol="", tf="5m"):
 {json.dumps(spec_json, ensure_ascii=False, indent=1)}
 ```
 
-## 你必须依赖的工具箱(scripts/strat_kit.py, 已经存在, 直接 import)
-```python
-{kit}
+## 工具箱 API(scripts/strat_kit.py, 已存在, 直接 import; 不用自己重新实现)
+```
+{KIT_API}
 ```
 
 {RULES}
@@ -187,7 +208,6 @@ def iterate(note, prev_py, prev_md, annotations, vnum, tf="5m"):
     ranked = sorted(groups.items(), key=lambda kv: -kv[1])
     rate = round(ok_n / len(annotations) * 100, 1) if annotations else 0
 
-    kit = open(KIT, encoding="utf-8").read()
     prompt = f"""你是量化策略工程师。用户对上一版策略选出来的入场点做了【盲测】(只看触发那一刻的K线,
 不给后市, 判完才揭晓 —— 所以他的判断没有被结果污染), 现在要据此迭代出更准的下一版。
 
@@ -204,16 +224,30 @@ def iterate(note, prev_py, prev_md, annotations, vnum, tf="5m"):
 
 ## 盲测结果
 - 共判 {len(annotations)} 笔, 符合 {ok_n} 笔 → **图形通过率 {rate}%**
-- 「不符合」的理由(按出现次数):
-{chr(10).join(f'  - {n}次: {r}' for r, n in ranked) or '  (无)'}
+- 「不符合」的理由(附出现次数, 但**次数不代表重要性**, 见下):
+{chr(10).join(f'  - [{n}次] {r}' for r, n in ranked) or '  (无)'}
 
 ## 你的任务
-出现次数最多的理由 = 最该先收紧的那条筛选语句。据此改规则, 目标是【提高图形通过率】——
-现在只管形态对不对, **不要为了让回测赚钱去调参数**(那是下一阶段的事, 现在调就是过拟合)。
 
-## 你必须依赖的工具箱(已存在)
-```python
-{kit[:2500]}
+据这些理由改规则, 目标是【提高图形通过率】。
+
+**⚠ 最容易犯的错: 拿出现频次当重要性。**
+频次高的往往只是"细节阈值不对"; 而**只被说了一次的, 可能是一条结构性前提** ——
+比如"我要在【下跌趋势】里找反转, 你这个是在上涨趋势里找延续" 这种话, 说的是【方向和前提】,
+漏掉它, 策略会在完全错误的场景里疯狂误报。这类前提必须【优先】落实。
+
+所以:
+1. 先把每条理由归类: 【结构性前提】(趋势方向/必须存在的动作/形态骨架) vs 【细节阈值】(几倍/几根/多少%)。
+2. **结构性前提一条都不许漏**, 哪怕它只被提过一次。
+3. 然后再调细节阈值。
+4. 在文字版里逐条对照: 用户的每一条不满意 → 我在代码里怎么落实的。如果某条你决定不改,
+   必须写明为什么 —— **不许默默忽略**。
+
+**不要为了让回测赚钱去调参数**(那是第二阶段的事, 现在调就是过拟合)。现在只管形态对不对。
+
+## 工具箱 API(已存在, 直接 import)
+```
+{KIT_API}
 ```
 
 {RULES}

@@ -231,12 +231,25 @@ def api_idea(slug: str):
     if not idea_lib.idea_dir(slug):
         return JSONResponse({"error": "not found"}, status_code=404)
     idea = next((x for x in idea_lib.load_ideas() if x["slug"] == slug), None)
+    judged = idea_lib.load_judged(slug)          # 跨所有版本, 键=市场点位身份
+    bts = idea_lib.load_backtests(slug)
+    # 给每条信号挂上"这个点位你以前判过没有" —— 换版本重跑时不该再问你一遍
+    for b in bts:
+        n_prior = 0
+        for s in b.get("signals", []):
+            p = judged.get(idea_lib.akey(s["symbol"], s["t"], s["dir"]))
+            if p:
+                s["prior"] = {"verdict": p["verdict"], "reason": p.get("reason", ""),
+                              "from": p.get("from", "")}
+                n_prior += 1
+        b["n_prior"] = n_prior
     return JSONResponse({
         "idea": idea,
         "desc": idea_lib.load_desc(slug),
         "charts": idea_lib.load_charts(slug),
         "versions": idea_lib.load_versions(slug),
-        "backtests": idea_lib.load_backtests(slug),
+        "backtests": bts,
+        "n_judged": len(judged),
     })
 
 
@@ -400,15 +413,34 @@ def _run_backtest(job, slug, version, scanner, month):
         # 和 _coverage() 必须用同一套判断 —— 否则界面标"663币"、实际却跑50币的档, 结果对不上
         days = 30 if me > (dt.datetime.now() - dt.timedelta(days=30)) else 365
 
-        JOBS[job] = {"state": "running", "msg": f"加载缓存({days}d)…"}
+        t_start = time.time()
+        el = lambda: f"{int(time.time() - t_start)}秒"      # noqa: E731
+
+        JOBS[job] = {"state": "running", "msg": f"加载缓存({days}d)… [{el()}]"}
         C = R.cache_loader(days)
-        JOBS[job] = {"state": "running", "msg": f"扫描 {scanner} …(全量约30秒)"}
+
         fn = _resolve_scanner(scanner)          # 内置策略 或 灵感目录里 Claude 生成的
         if fn is None:
             raise RuntimeError(f"找不到 scanner: {scanner}")
-        rows = fn(C)
 
-        JOBS[job] = {"state": "running", "msg": "结算与统计…"}
+        # 扫描期间起个心跳线程报真实耗时 —— 别再写"约30秒"这种拍脑袋的估计骗人:
+        # 内置策略约30秒, 但用了 hvn(密集成交区) 的生成策略要 2~3 分钟(每根K都要做成交量分桶)。
+        import threading as _th
+        done_flag = {"v": False}
+
+        def _beat():
+            while not done_flag["v"]:
+                JOBS[job] = {"state": "running",
+                             "msg": f"扫描 {scanner} 中… 已用 {el()}（663币全量, 请等它跑完）"}
+                time.sleep(2)
+        hb = _th.Thread(target=_beat, daemon=True)
+        hb.start()
+        try:
+            rows = fn(C)
+        finally:
+            done_flag["v"] = True
+
+        JOBS[job] = {"state": "running", "msg": f"结算与统计… [{el()}]"}
         FEE = 0.045                                   # 每边手续费%, 与 bt_registry.score 一致
         sigs, nets = [], []
         for s in rows:
@@ -464,8 +496,9 @@ def _run_backtest(job, slug, version, scanner, month):
                    "truncated": len(sigs) > 300,
                    "signals": sigs[:300],           # 页面只画前300张; 不静默截断, truncated 会标出来
                    "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        payload["took_sec"] = int(time.time() - t_start)
         bid = idea_lib.write_backtest(slug, payload)
-        JOBS[job] = {"state": "done", "msg": verdict, "bt_id": bid}
+        JOBS[job] = {"state": "done", "msg": f"[耗时 {el()}] {verdict}", "bt_id": bid}
     except Exception as e:
         JOBS[job] = {"state": "error", "msg": f"{type(e).__name__}: {e}"}
 
@@ -629,9 +662,10 @@ async def api_idea_iterate(slug: str, request: Request):
     import idea_lib
     b = await request.json()
     bt_id = b.get("bt_id", "")
-    ann = list(idea_lib.load_annotations(slug, bt_id).values())
+    # 用【跨所有版本】的全部判断, 不只是这一次回测的 —— 你在 v1 说过的话, 到 v3 依然算数
+    ann = list(idea_lib.load_judged(slug).values())
     if len(ann) < 5:
-        return JSONResponse({"error": f"只判了 {len(ann)} 笔 —— 样本太少, 归纳不出规律。"
+        return JSONResponse({"error": f"总共只判了 {len(ann)} 笔 —— 样本太少, 归纳不出规律。"
                                       f"建议至少 20 笔。"}, status_code=400)
     vs = idea_lib.load_versions(slug)
     cur = next((v for v in vs if bt_id.startswith(v["v"] + "_")), vs[0] if vs else None)
@@ -715,7 +749,8 @@ async def api_idea_annotate(slug: str, request: Request):
     import idea_lib
     b = await request.json()
     rec = idea_lib.save_annotation(slug, b.get("bt_id", ""), b.get("sig"),
-                                   b.get("verdict", ""), b.get("reason", ""))
+                                   b.get("verdict", ""), b.get("reason", ""),
+                                   b.get("symbol", ""), b.get("t", 0), b.get("dir", ""))
     if not rec:
         return JSONResponse({"error": "标注失败(标'不准'必须写理由 —— 它是下一版改规则的依据)"},
                             status_code=400)
@@ -1270,7 +1305,7 @@ IDEAS_HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
 <script>
 let D={ideas:[],principles:[]}, cur='idea', SEL=null, DET=null, MOD='origin';
 let chart, candle, curChartSym='', curChartTf='5m', curChartCenter=0;
-let SCANNERS=[], COVERAGE={months:[]};
+let SCANNERS=[], COVERAGE={months:[]}, ONLY_NEW=true;   // 默认只看没判过的点位
 
 const MODULES=[['origin','原始图'],['iter','策略迭代'],['bt','回测记录'],['concl','结论']];
 
@@ -1734,8 +1769,18 @@ function viewBt(){
     </details>
 
     ${b.truncated?`<div class=meta style="color:var(--warn);margin-top:8px">⚠ 共 ${b.n} 个信号, 页面只画前 300 张。</div>`:''}
+    <div class=row style="margin-top:10px">
+     <label class=meta style="cursor:pointer"><input type=checkbox id="only_${b.id}" ${ONLY_NEW?'checked':''}
+       onchange="ONLY_NEW=this.checked;renderPane()"> 只看没判过的</label>
+     <span class=meta>${b.n_prior?`这一版里有 <b>${b.n_prior}</b> 个点位你以前判过(跨版本继承, 不再问你第二遍)`:''}</span>
+    </div>
     <div style="margin-top:10px">
-    ${sigs.length?sigs.map((s,ix)=>sigRow(b,s,ix,ann)).join(''):'<div class=meta>这次回测没有触发信号。</div>'}
+    ${(()=>{
+      const rows=sigs.map((s,ix)=>[s,ix]).filter(([s,ix])=>!ONLY_NEW||!(ann[String(s.id!=null?s.id:ix)]||s.prior));
+      if(!sigs.length) return '<div class=meta>这次回测没有触发信号。</div>';
+      if(!rows.length) return '<div class=meta>这一版里的点位你都判过了 —— 去掉上面的勾可以回看。</div>';
+      return rows.map(([s,ix])=>sigRow(b,s,ix,ann)).join('');
+    })()}
     </div>
    </div>`;
  }).join('');
@@ -1760,10 +1805,13 @@ async function runBt(){
 /* ---- 盲测(P004): 判断前只给触发那一刻为止的K线, 判完才揭晓后市与盈亏 ----
    已判过的样本直接显示结果(没必要再瞒), 没判过的一律封住。 */
 function sigRow(b,s,ix,ann){
- const key=String(s.id!=null?s.id:ix), a=ann[key];
+ const key=String(s.id!=null?s.id:ix);
+ // 判断跟着【市场点位】走, 不跟着下标走 —— 你在 v1 判过的点, 换版本重跑不该再问一遍
+ const a=ann[key]||s.prior;
  const judged=!!a;
- const st=judged?(a.verdict==='ok'?`<span class="st ok">✓ 符合</span>`
-            :`<span class="st bad">✗ 不符合 · ${a.reason}</span>`)
+ const cross=!ann[key]&&!!s.prior;      // 是别的版本判的
+ const st=judged?(a.verdict==='ok'?`<span class="st ok">✓ 符合${cross?` <span class=meta>(${s.prior.from} 判的)</span>`:''}</span>`
+            :`<span class="st bad">✗ 不符合 · ${a.reason}${cross?` <span class=meta>(${s.prior.from} 判的)</span>`:''}</span>`)
           :`<span class="st none">🔒 未判(盲测)</span>`;
  // 未判 = 结果/盈亏一个字都不能露
  const outcome = judged
@@ -1857,8 +1905,11 @@ async function annot(bid,key,ix,verdict){
  const reason=inp?inp.value.trim():'';
  const m=document.getElementById(`m_${bid}_${key}`);
  if(verdict==='bad'&&!reason){ m.textContent='说明哪里不对 —— 这条理由就是下一版要改的筛选语句, 空着等于白判。'; return; }
+ const b=(DET.backtests||[]).find(x=>x.id===bid), s=b?b.signals[ix]:null;
  const r=await (await fetch(`/api/idea/${SEL}/annotate`,{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({bt_id:bid,sig:key,verdict,reason})})).json();
+   // 带上市场点位身份(币|时刻|方向), 这条判断才能跨版本认得出同一个点
+   body:JSON.stringify({bt_id:bid,sig:key,verdict,reason,
+                        symbol:s?s.symbol:'', t:s?s.t:0, dir:s?s.dir:''})})).json();
  if(!r.ok){ m.textContent='失败: '+(r.error||'?'); return; }
  // 判完 → 揭晓后市
  document.getElementById(`a_${bid}_${key}`).innerHTML=
