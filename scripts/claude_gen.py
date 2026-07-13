@@ -23,6 +23,10 @@ KIT_API = """
 settle_all(rows, kmap, max_hold=288)  # 结算(先碰止损还是止盈/超时平/扣手续费), 你不用写
 hvn(k, lo, hi, bins=24) -> float|None # 密集成交区(筹码堆积处)。【昂贵】, 只能放在便宜条件之后
 reclaim(k, i, ia) -> bool             # k[i]收盘 是否把 k[ia] 那根下跌K线整根收回去了
+second_buy(k, i) -> (bool, p1, p2, e2) # 【严格缠论二买】刚在k[i]确认? 复用 app/engine 的笔/分型,
+                                      #   与线上口径一致。用户说"缠论二买"时【必须】用它, 不许用
+                                      #   "回踩不破新低+突破前高"之类的简化近似 —— 那不是缠论。
+bi_seq(k, upto=i) -> [(kind, 极值K下标, 确认K下标, 价)]  # 缠论笔序列(顶/底分型交替)
 vol_x(k, i, n=20) -> float            # 第i根的量 是前n根均量的几倍
 atr(k, n, i) / ema(k,n,i) / sma(k,n,i)
 body(bar) / rng(bar) / is_bull(bar) / is_bear(bar) / engulf_bull(k, i)
@@ -31,16 +35,23 @@ K线字段: bar["open_time"](毫秒) open high low close volume  —— 都是�
 """
 
 
-def _claude(prompt, model="sonnet", timeout=600):
-    """跑一次 headless claude。返回 (ok, text)。
+# 【必须显式禁掉】。`--tools ""` 是无效的 —— 它照样会去 grep 你的代码库,
+# 然后被 --max-turns 1 掐断在工具调用那一步, 吐出来的是一句工具日志而不是结果(表现为"返回的不是合法JSON")。
+# 而且它翻仓库一翻就是好几分钟, 之前的 7 分钟超时就是这么来的。
+# 它根本不需要翻: 工具箱API、上一版代码、用户原话, 全都已经贴在 prompt 里了。
+NO_TOOLS = ["--disallowedTools", "Bash", "Read", "Grep", "Glob", "Edit", "Write",
+            "WebFetch", "WebSearch", "Task", "TodoWrite", "NotebookEdit"]
 
-    --tools '' : 【关键】不给它任何工具。否则它会在仓库目录里到处翻文件探索, 一次生成能拖到7分钟
-    甚至超时 —— 而它根本不需要翻: 工具箱源码、上一版代码、用户原话, 全都已经贴在 prompt 里了。
-    --max-turns 1 : 一轮就出结果, 不许来回折腾。
+
+def _claude(prompt, model="sonnet", timeout=600):
+    """跑一次 headless claude(禁工具)。返回 (ok, text)。
+
+    不加 --max-turns: 模型哪怕只是【试图】调一次被禁的工具, 也会吃掉一轮 → 直接判超限退出
+    (returncode!=0 且 stderr 是空的, 极难排查)。工具都禁了, 它本来也不会循环。
     """
     exe = "claude"
     try:
-        p = subprocess.run([exe, "-p", "--model", model, "--tools", "", "--max-turns", "1"],
+        p = subprocess.run([exe, "-p", "--model", model] + NO_TOOLS,
                            input=prompt, capture_output=True, text=True,
                            encoding="utf-8", timeout=timeout, cwd=ROOT)
     except FileNotFoundError:
@@ -150,7 +161,7 @@ def codegen(note, spec_json, slug, vnum, symbol="", tf="5m"):
 
 第一块 —— 策略代码(必须能被 `exec` 后拿到 `scan` 和 `BASE`):
 ```python
-from strat_kit import settle_all, hvn, reclaim, ema, sma, atr, vol_x, body, rng, is_bull, is_bear, engulf_bull
+from strat_kit import settle_all, hvn, reclaim, second_buy, bi_seq, ema, sma, atr, vol_x, body, rng, is_bull, is_bear, engulf_bull
 
 TITLE = "策略名"
 

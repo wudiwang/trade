@@ -132,6 +132,57 @@ def is_bear(b):
     return float(b["close"]) < float(b["open"])
 
 
+# ---------------- 缠论: 笔 / 分型 / 二买 ----------------
+# 直接复用仓库里已有的实现(app/engine/chan.py + chan_bi.py) —— 线上策略用的就是这套。
+# 【不许自己手搓缠论】: 包含关系、分型确认、笔的成立条件, 陷阱极多, 手搓的必错。
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+try:
+    from app.engine.chan_bi import build_bi as _build_bi
+except Exception:                                   # pragma: no cover
+    _build_bi = None
+
+
+def bi_seq(k, upto=None, min_merged=5):
+    """缠论笔序列(交替的顶/底分型)。upto=只用 k[:upto+1](防未来函数)。
+
+    返回 [(kind, extreme_idx, confirm_idx, price), ...]
+      extreme_idx = 极值所在的原始K下标
+      confirm_idx = 【分型确认K】的下标 —— 真实可交易的时刻是这一根收盘, 不是极值那一根。
+                    (右侧K收盘才知道分型成立, 用极值那根当入场时刻 = 未来函数)
+    """
+    if _build_bi is None:
+        return []
+    kk = k if upto is None else k[:upto + 1]
+    try:
+        _merged, seq = _build_bi(kk, min_merged=min_merged)
+    except Exception:
+        return []
+    return [(fx.kind, int(fx.extreme_src_idx), int(fx.confirm_src_idx), float(fx.extreme_price))
+            for fx in seq]
+
+
+def second_buy(k, i, min_merged=5, confirm_lag=2):
+    """k[i] 这一刻, 是否刚形成【严格缠论二买】。
+
+    口径与线上 macro_pullback / signals.py 一致:
+        一买(底分型) → 之后一个【更高的底分型】= 二买。
+    只看 k[:i+1], 且以【分型确认K】为准 —— 无未来函数。
+    返回 (是否二买, 一买价, 二买价, 二买极值K下标)。
+    """
+    seq = bi_seq(k, upto=i, min_merged=min_merged)
+    bots = [(ex, cf, px) for (kind, ex, cf, px) in seq if kind == "bottom"]
+    if len(bots) < 2:
+        return False, None, None, None
+    (_e1, _c1, p1), (e2, c2, p2) = bots[-2], bots[-1]
+    if p2 <= p1:
+        return False, None, None, None              # 不是更高的低点 → 不成二买
+    if not (i - confirm_lag <= c2 <= i):
+        return False, None, None, None              # 二买不是"刚在这一刻确认"
+    return True, p1, p2, e2
+
+
 def hvn(k, lo, hi, bins=24):
     """密集成交区(High Volume Node): k[lo:hi] 这段里成交量最集中的那个价格。
 
