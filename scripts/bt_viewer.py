@@ -1460,15 +1460,44 @@ async function startReplay(ix, stale){
    rightPriceScale:{borderColor:'#30363d',scaleMargins:{top:0.08,bottom:0.08}}});
  const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(r.entry||1))+4));
  const s=c.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',
-   borderVisible:false,priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
+   borderVisible:false,priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)},
+   priceScaleId:'right'});
+ c.priceScale('right').applyOptions({scaleMargins:{top:0.06,bottom:0.26}});
  s.setData(pre.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
+ // 成交量(独占下 22%)
+ const vol=c.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol'});
+ c.priceScale('vol').applyOptions({scaleMargins:{top:0.78,bottom:0.02}});
+ vol.setData(pre.map(k=>({time:k.t,value:k.v,color:k.c>=k.o?'#2ea043cc':'#f85149aa'})));
  s.createPriceLine({price:r.entry,color:'#58a6ff',lineWidth:1,lineStyle:0,axisLabelVisible:true,title:'入场'});
- s.setMarkers([{time:pre[pre.length-1].t,position:r.direction==='long'?'belowBar':'aboveBar',
-   color:'#d29922',shape:r.direction==='long'?'arrowUp':'arrowDown',text:'触发'}]);
+ // 结构标记: 策略判定二买/二卖时看到的 一买/一卖(★爆量倍数)、二买/二卖 各在哪根 —— 都在触发之前, 不泄露未来
+ const mk=[{time:pre[pre.length-1].t,position:r.direction==='long'?'belowBar':'aboveBar',
+   color:'#d29922',shape:r.direction==='long'?'arrowUp':'arrowDown',text:'触发'}];
+ (r.markers||[]).forEach(m=>{
+   if(!m.t||m.t>r.created_at) return;                 // 只标触发及之前的
+   const isFirst=m.label&&m.label.indexOf('1')<0&&(m.label[0]==='H'||m.label[0]==='L');
+   const txt=m.vol_ratio?`${m.label} 爆量${(+m.vol_ratio).toFixed(1)}x`:m.label;
+   mk.push({time:m.t, position:m.label&&m.label[0]==='H'?'aboveBar':'belowBar',
+     color:m.vol_ratio?'#f0883e':'#8b949e', shape:'circle', text:txt});
+ });
+ mk.sort((a,b)=>a.time-b.time);
+ s.setMarkers(mk);
  c.timeScale().fitContent();
  new ResizeObserver(()=>c.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
  const risk=Math.abs(r.entry-r.sl)||1e-9;
- REP[ix]={chart:c, series:s, buf, shown:0, entry:r.entry, risk, dir:r.direction, dig, sig:r};
+ REP[ix]={chart:c, series:s, vol, buf, shown:0, entry:r.entry, risk, dir:r.direction, dig, sig:r};
+ // 结构说明: 策略凭什么判它是二买/二卖 —— 一买/一卖(爆量) → 更低高点/更高低点 → 入场
+ const ms=r.markers||[], first=ms.find(m=>m.vol_ratio), second=ms.find(m=>m.label&&(m.label.indexOf('2')>=0||m.label[1]==='2'));
+ const isShort=r.direction==='short';
+ let struct='';
+ if(first&&second){
+   const validLH = isShort ? (second.price<first.price) : (second.price>first.price);
+   struct=`<div class=meta style="margin-top:6px;line-height:1.8">
+     <b>策略凭什么开这一单</b>(${isShort?'威科夫UTAD一卖→缠论二卖':'威科夫Spring一买→缠论二买'}):<br>
+     ① ${first.label} ${first.price} <span style="color:#f0883e">爆量${(+first.vol_ratio).toFixed(1)}x</span> ← 就是你圈的那根<br>
+     ② ${second.label} ${second.price} ${validLH?`<span style="color:var(--ok)">✓ ${isShort?'更低的高点':'更高的低点'}(缠论${isShort?'二卖':'二买'}成立)</span>`:`<span style="color:var(--bad)">✗ ${isShort?'没比一卖更低':'没比一买更高'}, 结构存疑</span>`}<br>
+     ③ 入场 ${r.entry} · 止损 ${r.sl}(${isShort?'H2上方':'L2下方'}) · 止盈 ${r.tp}</div>`;
+ }
+ document.getElementById('rc_'+ix).insertAdjacentHTML('beforebegin',`<div id="st_${ix}">${struct}</div>`);
  // 已经走过的: 直接显示你当时的结果 + 策略结果, 不再重走
  if(r.mine){ revealCompare(ix); return; }
  renderReplayCtl(ix);
@@ -1500,6 +1529,7 @@ function stepReplay(ix,n){
  for(let i=0;i<n&&R.shown<R.buf.length;i++){
    const k=R.buf[R.shown++];
    R.series.update({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c});
+   if(R.vol) R.vol.update({time:k.t,value:k.v,color:k.c>=k.o?'#2ea043cc':'#f85149aa'});
  }
  R.chart.timeScale().scrollToRealTime();
  renderReplayCtl(ix);

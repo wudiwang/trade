@@ -29,7 +29,7 @@ n = int(sys.argv[1]) if len(sys.argv) > 1 else 50
 days = int(sys.argv[2]) if len(sys.argv) > 2 else 0     # >0: 按最近N天拉全量(忽略 n 上限)
 c = sqlite3.connect("data/trade.db"); c.row_factory = sqlite3.Row
 cols = """s.id, s.created_at, s.symbol, s.tf, s.direction, s.kind,
-         s.entry, s.sl, s.tp, s.rr, s.vol_ratio, s.status, s.state, s.reason,
+         s.entry, s.sl, s.tp, s.rr, s.vol_ratio, s.status, s.state, s.reason, s.extra,
          p.track, p.result, p.pnl_r, p.exit_price, p.closed_at"""
 if days > 0:
     cut = int(time.time()) - days * 86400
@@ -43,12 +43,23 @@ else:
 tot = c.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
 closed = c.execute("SELECT COUNT(*), SUM(pnl_r) FROM paper_trades WHERE result IN ('tp','sl')").fetchone()
 wins = c.execute("SELECT COUNT(*) FROM paper_trades WHERE result='tp'").fetchone()[0]
+out = []
+for r in rows:
+    d = dict(r)
+    ex = {}
+    try:
+        ex = json.loads(d.pop("extra") or "{}")
+    except Exception:
+        d.pop("extra", None)
+    # 只带回【结构标记】: 策略判定二买/二卖时看到的 一买/一卖、爆量K、二买/二卖 各在哪根、量能几倍
+    ms = ex.get("markers") or []
+    d["markers"] = [{"label": m.get("label"), "t": int(m.get("time", 0)) // 1000,
+                     "price": m.get("price"), "vol_ratio": m.get("vol_ratio")} for m in ms]
+    d["first_vol_ratio"] = (ex.get("wyckoff") or {}).get("vol_ratio")
+    out.append(d)
 print(json.dumps({
-  "rows": [dict(r) for r in rows],
-  "total": tot,
-  "n_closed": closed[0] or 0,
-  "sum_r": closed[1] or 0.0,
-  "wins": wins,
+  "rows": out, "total": tot,
+  "n_closed": closed[0] or 0, "sum_r": closed[1] or 0.0, "wins": wins,
 }, ensure_ascii=False))
 '''
 
