@@ -24,16 +24,22 @@ APP = "/opt/trade"
 
 # 在 VPS 上跑这段, 把最近 N 条信号(含 paper 结算)吐成 JSON。
 REMOTE = r'''
-import json, sqlite3, sys
+import json, sqlite3, sys, time
 n = int(sys.argv[1]) if len(sys.argv) > 1 else 50
+days = int(sys.argv[2]) if len(sys.argv) > 2 else 0     # >0: 按最近N天拉全量(忽略 n 上限)
 c = sqlite3.connect("data/trade.db"); c.row_factory = sqlite3.Row
-rows = c.execute("""
-  SELECT s.id, s.created_at, s.symbol, s.tf, s.direction, s.kind,
+cols = """s.id, s.created_at, s.symbol, s.tf, s.direction, s.kind,
          s.entry, s.sl, s.tp, s.rr, s.vol_ratio, s.status, s.state, s.reason,
-         p.track, p.result, p.pnl_r, p.exit_price, p.closed_at
-  FROM signals s LEFT JOIN paper_trades p ON p.signal_id = s.id
-  ORDER BY s.created_at DESC LIMIT ?
-""", (n,)).fetchall()
+         p.track, p.result, p.pnl_r, p.exit_price, p.closed_at"""
+if days > 0:
+    cut = int(time.time()) - days * 86400
+    rows = c.execute(f"""SELECT {cols} FROM signals s
+      LEFT JOIN paper_trades p ON p.signal_id = s.id
+      WHERE s.created_at >= ? ORDER BY s.created_at DESC""", (cut,)).fetchall()
+else:
+    rows = c.execute(f"""SELECT {cols} FROM signals s
+      LEFT JOIN paper_trades p ON p.signal_id = s.id
+      ORDER BY s.created_at DESC LIMIT ?""", (n,)).fetchall()
 tot = c.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
 closed = c.execute("SELECT COUNT(*), SUM(pnl_r) FROM paper_trades WHERE result IN ('tp','sl')").fetchone()
 wins = c.execute("SELECT COUNT(*) FROM paper_trades WHERE result='tp'").fetchone()[0]
@@ -47,12 +53,12 @@ print(json.dumps({
 '''
 
 
-def pull(n=50, timeout=40):
-    """SSH 到 VPS 取最近 n 条真实信号 → 写本地 JSON。返回 (ok, msg)。"""
+def pull(n=50, days=0, timeout=60):
+    """SSH 到 VPS 取真实信号 → 写本地 JSON。days>0 时按最近N天拉全量, 否则拉最近 n 条。"""
     try:
         p = subprocess.run(
             ["ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", VPS,
-             f"cd {APP} && python3 - {n}"],
+             f"cd {APP} && python3 - {n} {days}"],
             input=REMOTE, capture_output=True, text=True, timeout=timeout, encoding="utf-8")
     except subprocess.TimeoutExpired:
         return False, "SSH 超时 —— VPS 连不上?"
@@ -84,7 +90,8 @@ def load():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=50)
+    ap.add_argument("--days", type=int, default=0, help=">0: 拉最近N天全部触发")
     a = ap.parse_args()
-    ok, msg = pull(a.n)
+    ok, msg = pull(a.n, a.days)
     print(("[live_sync] " + msg))
     sys.exit(0 if ok else 1)

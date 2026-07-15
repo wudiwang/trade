@@ -321,17 +321,58 @@ def _register_fvg1m():
 _register_fvg1m()
 
 
+LIVE_REPLAY = os.path.join(R.CACHE, "live_replay.jsonl")
+
+
+def _load_replays():
+    """你手动逐根走出来的止盈止损决策(键=线上信号id)。同一条以最后一次为准。"""
+    out = {}
+    if os.path.exists(LIVE_REPLAY):
+        for ln in open(LIVE_REPLAY, encoding="utf-8"):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                r = json.loads(ln)
+                out[str(r["id"])] = r
+            except Exception:
+                pass
+    return out
+
+
 @app.get("/api/live")
 def api_live():
-    """线上实盘系统【真实打出】的最近N笔信号(从 VPS 的 signals/paper_trades 拉的),
+    """线上实盘系统【真实打出】的信号(从 VPS 的 signals/paper_trades 拉的),
     不是本地扫出来的模拟信号。"""
     import live_sync
     d = live_sync.load()
     if not d:
         return JSONResponse({"rows": [], "msg": "还没同步过 —— 点「刷新」从 VPS 拉。"})
-    # 本地K线缓存的最新时刻: 比它更新的线上信号画不出K线, 要如实告诉用户而不是给张空图
     d["kline_until"] = _kline_latest()
+    rep = _load_replays()
+    for r in d.get("rows", []):
+        mine = rep.get(str(r["id"]))
+        if mine:
+            r["mine"] = mine                       # 你亲自走过的结果(手动止盈止损)
+    d["n_replayed"] = sum(1 for r in d.get("rows", []) if r.get("mine"))
     return JSONResponse(d)
+
+
+@app.post("/api/live/replay")
+async def api_live_replay(request: Request):
+    """保存你逐根走完一笔的手动决策: 在第几根离场、离场价、你自己的R。"""
+    b = await request.json()
+    if b.get("id") is None:
+        return JSONResponse({"error": "缺 id"}, status_code=400)
+    rec = {"id": b["id"], "symbol": b.get("symbol", ""),
+           "exit_bar": b.get("exit_bar"), "exit_price": b.get("exit_price"),
+           "my_r": b.get("my_r"), "verdict": b.get("verdict", ""),
+           "note": (b.get("note") or "").strip(),
+           "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    os.makedirs(os.path.dirname(LIVE_REPLAY), exist_ok=True)
+    with open(LIVE_REPLAY, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return {"ok": True, "rec": rec}
 
 
 @lru_cache(maxsize=1)
@@ -350,7 +391,7 @@ def api_live_refresh():
     JOBS[job] = {"state": "running", "msg": "SSH 连 VPS 拉取中…"}
 
     def run():
-        ok, msg = live_sync.pull(50)
+        ok, msg = live_sync.pull(50, days=7)          # 默认拉最近一周全部触发
         JOBS[job] = {"state": "done" if ok else "error", "msg": msg}
     threading.Thread(target=run, daemon=True).start()
     return {"ok": True, "job": job}
@@ -1341,47 +1382,58 @@ async function showLive(){
  LIVE=await (await fetch('/api/live')).json();
  renderLive();
 }
+let LIVE_ONLY_NEW=true;
 function renderLive(){
  const d=LIVE||{}, rows=d.rows||[];
  const age=d.synced_at?Math.round((Date.now()/1000-d.synced_at)/60):null;
+ const done=rows.filter(r=>r.mine);
+ const myWin=done.filter(r=>r.mine.verdict==='win').length;
  const head=`<div class=box>
-   <h3>🔴 线上策略 · 实盘触发
+   <h3>🔴 线上策略 · 逐根盲测回放
      <span class=meta style="font-weight:400">${d.synced_at?`同步于 ${age} 分钟前`:'未同步'}</span>
-     <button class=act style="float:right" onclick=refreshLive()>刷新</button></h3>
+     <button class=act style="float:right" onclick=refreshLive()>刷新(拉最近一周)</button></h3>
    <div class=kpi>
-    <div>线上累计信号<b>${d.total??'—'}</b></div>
-    <div>已结算<b>${d.n_closed??'—'}</b></div>
-    <div>胜率<b>${d.win_rate!=null?d.win_rate+'%':'—'}</b></div>
-    <div>期望(未扣费)<b class="${(d.exp_r||0)>0?'pos':'neg'}">${d.exp_r!=null?(d.exp_r>0?'+':'')+d.exp_r+'R':'—'}</b></div>
+    <div>本周触发<b>${rows.length}</b></div>
+    <div>你已走完<b>${done.length}</b></div>
+    <div>你的手动胜率<b class="${done.length&&myWin/done.length>0.5?'pos':''}">${done.length?Math.round(myWin/done.length*100)+'%':'—'}</b></div>
    </div>
-   <div class=verdict>⚠ 期望是<b>扣手续费前</b>的(paper 结算不含费)。按往返 0.045%/边 折算, 实际还要再差一截 ——
-     这与「机械策略扣费后全负」的既有结论一致, 别把这里的数字当成正边际。</div>
-   <div class=meta id=lmsg></div></div>`;
+   <div class=verdict>🔒 <b>盲测规则</b>: 每笔只画到【触发那一刻】, 后面的K线要你自己一根根往后拉。
+     你亲自决定在哪根止盈、哪根止损 —— 走完才对比策略实际结果。<b>别偷看后市</b>, 这是练手感。</div>
+   <div class=row><label class=meta style="cursor:pointer"><input type=checkbox ${LIVE_ONLY_NEW?'checked':''}
+      onchange="LIVE_ONLY_NEW=this.checked;renderLive()"> 只看没走过的</label>
+     <span class=meta id=lmsg></span></div>
+   <details style="margin-top:6px"><summary style="cursor:pointer;color:var(--muted);font-size:12px">📉 策略自己的成绩(走之前别看, 会有先入为主)</summary>
+     <div class=kpi style="margin-top:6px">
+      <div>线上累计<b>${d.total??'—'}</b></div><div>已结算<b>${d.n_closed??'—'}</b></div>
+      <div>胜率<b>${d.win_rate!=null?d.win_rate+'%':'—'}</b></div>
+      <div>期望(未扣费)<b class="${(d.exp_r||0)>0?'pos':'neg'}">${d.exp_r!=null?(d.exp_r>0?'+':'')+d.exp_r+'R':'—'}</b></div></div></details>
+   </div>`;
  if(!rows.length) return void(document.getElementById('pane').innerHTML=head+
-   `<div class=box><div class=meta>${d.msg||'没有信号。'}</div></div>`);
+   `<div class=box><div class=meta>${d.msg||'没有信号。点「刷新」从 VPS 拉最近一周。'}</div></div>`);
  const cut=d.kline_until||0;
- const list=rows.map((r,ix)=>{
-   const res=r.result==='tp'?'<span class="st ok">✓ 止盈</span>'
-            :r.result==='sl'?'<span class="st bad">✗ 止损</span>'
-            :'<span class="st none">⏳ 持仓</span>';
+ const shown=rows.map((r,ix)=>[r,ix]).filter(([r])=>!LIVE_ONLY_NEW||!r.mine);
+ const list=shown.map(([r,ix])=>{
    const stale=cut&&r.created_at>cut;
-   return `<details class=sig>
-    <summary onclick="setTimeout(()=>drawLive(${ix},${stale?1:0}),50)">
+   const mine=r.mine;
+   const badge=mine?(mine.verdict==='win'?`<span class="st ok">你走: +${mine.my_r}R</span>`
+                    :mine.verdict==='loss'?`<span class="st bad">你走: ${mine.my_r}R</span>`
+                    :`<span class="st none">你走: 平</span>`)
+                  :`<span class="st none">🔒 待你走</span>`;
+   return `<details class=sig data-ix="${ix}">
+    <summary onclick="setTimeout(()=>startReplay(${ix},${stale?1:0}),50)">
      <b>${r.symbol}</b> <span class="tfb tf-${r.tf}">${r.tf}</span>
-     <span class="${r.direction==='long'?'':''}" style="color:${r.direction==='long'?'#3fb950':'#f85149'}">${r.direction==='long'?'多':'空'}</span>
+     <span style="color:${r.direction==='long'?'#3fb950':'#f85149'}">${r.direction==='long'?'多':'空'}</span>
      <span class=meta>${new Date(r.created_at*1000).toLocaleString('zh-CN')}</span>
-     <span class=meta>· ${r.track||'-'}</span>
-     ${r.pnl_r!=null?`<span class=meta>· ${r.pnl_r>0?'+':''}${r.pnl_r}R</span>`:''}
-     ${res}</summary>
-    <div style="padding:10px 12px">
-     <div class=meta>入场 ${r.entry} · 止损 ${r.sl} · 止盈 ${r.tp} · RR ${r.rr}${r.reason?(' · '+r.reason):''}</div>
-     <div class=chartbox id="lc_${ix}" style="height:300px;margin-top:8px"></div>
+     <span class=meta>· ${r.track||'-'}</span>${badge}</summary>
+    <div style="padding:10px 12px" id="rep_${ix}">
+     <div class=chartbox id="lc_${ix}" style="height:340px"></div>
+     <div id="rc_${ix}"></div>
     </div></details>`;
  }).join('');
- document.getElementById('pane').innerHTML=head+`<div class=box><h3>最近 ${rows.length} 笔触发</h3>${list}</div>`;
+ document.getElementById('pane').innerHTML=head+`<div class=box><h3>最近一周 ${rows.length} 笔 · 待走 ${rows.length-done.length}</h3>${list||'<div class=meta>都走完了。去掉「只看没走过的」可回看。</div>'}</div>`;
 }
 async function refreshLive(){
- const m=document.getElementById('lmsg'); m.textContent='⏳ SSH 拉取中…';
+ const m=document.getElementById('lmsg'); m.textContent='⏳ SSH 拉最近一周…';
  const r=await (await fetch('/api/live/refresh',{method:'POST'})).json();
  const poll=setInterval(async()=>{
    const j=await (await fetch('/api/job?id='+encodeURIComponent(r.job))).json();
@@ -1389,26 +1441,97 @@ async function refreshLive(){
    if(j.state!=='running'){ clearInterval(poll); if(j.state==='done') showLive(); }
  },1500);
 }
-async function drawLive(ix, stale){
- const el=document.getElementById('lc_'+ix); if(!el||el._done) return;
+
+/* ---- 逐根步进回放: 图只画到触发, 用户点「下一根」一根根揭晓, 亲自决定止盈止损 ---- */
+const REP={};   // ix -> {chart, series, buf, shown, entry, risk, dir, dig, sig}
+async function startReplay(ix, stale){
+ const el=document.getElementById('lc_'+ix); if(!el||el._init) return;
+ el._init=true;
  const r=LIVE.rows[ix];
- el._done=true;
- if(stale){ el.innerHTML=`<div class=meta style="padding:16px">这条信号(${new Date(r.created_at*1000).toLocaleString('zh-CN')})比本地K线缓存还新<br>缓存只到 ${new Date((LIVE.kline_until||0)*1000).toLocaleString('zh-CN')} —— 跑一次 bt_refresh 才画得出。</div>`; return; }
- const kl=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=120&tf=${r.tf}`)).json();
- if(!kl.length){ el.innerHTML='<div class=meta style="padding:16px">本地缓存里没有这个币的K线。</div>'; return; }
+ if(stale){ el.innerHTML=`<div class=meta style="padding:16px">这条(${new Date(r.created_at*1000).toLocaleString('zh-CN')})比本地K线还新, 跑 bt_refresh 才画得出。</div>`; return; }
+ // 触发前的K线(after=0, 一根未来都不给) + 触发后的缓冲(藏着, 一根根揭晓)
+ const pre=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=90&tf=${r.tf}&after=0`)).json();
+ const post=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=0&tf=${r.tf}&after=200`)).json();
+ if(!pre.length){ el.innerHTML='<div class=meta style="padding:16px">本地缓存没有这个币的K线。</div>'; return; }
+ const buf=post.filter(k=>k.t>r.created_at);      // 只留触发之后的
  const c=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
    grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
-   timeScale:{timeVisible:true,secondsVisible:false},rightPriceScale:{borderColor:'#30363d'}});
+   timeScale:{timeVisible:true,secondsVisible:false},
+   rightPriceScale:{borderColor:'#30363d',scaleMargins:{top:0.08,bottom:0.08}}});
  const dig=Math.min(8,Math.max(2,Math.ceil(-Math.log10(r.entry||1))+4));
  const s=c.addCandlestickSeries({upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',
    borderVisible:false,priceFormat:{type:'price',precision:dig,minMove:Math.pow(10,-dig)}});
- s.setData(kl.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
- [['入场',r.entry,'#58a6ff'],['止损',r.sl,'#f85149'],['止盈',r.tp,'#3fb950']].forEach(([t,p,col])=>{
-   if(p) s.createPriceLine({price:p,color:col,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:t}); });
- s.setMarkers([{time:r.created_at,position:r.direction==='long'?'belowBar':'aboveBar',
+ s.setData(pre.map(k=>({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c})));
+ s.createPriceLine({price:r.entry,color:'#58a6ff',lineWidth:1,lineStyle:0,axisLabelVisible:true,title:'入场'});
+ s.setMarkers([{time:pre[pre.length-1].t,position:r.direction==='long'?'belowBar':'aboveBar',
    color:'#d29922',shape:r.direction==='long'?'arrowUp':'arrowDown',text:'触发'}]);
  c.timeScale().fitContent();
  new ResizeObserver(()=>c.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
+ const risk=Math.abs(r.entry-r.sl)||1e-9;
+ REP[ix]={chart:c, series:s, buf, shown:0, entry:r.entry, risk, dir:r.direction, dig, sig:r};
+ // 已经走过的: 直接显示你当时的结果 + 策略结果, 不再重走
+ if(r.mine){ revealCompare(ix); return; }
+ renderReplayCtl(ix);
+}
+function curR(ix){
+ const R=REP[ix]; if(!R||!R.shown) return 0;
+ const last=R.buf[R.shown-1]; const px=last.c;
+ return (R.dir==='long'?(px-R.entry):(R.entry-px))/R.risk;
+}
+function renderReplayCtl(ix){
+ const R=REP[ix], box=document.getElementById('rc_'+ix);
+ const r=curR(ix), atEnd=R.shown>=R.buf.length;
+ const bars=R.shown, hrs=(bars*(R.sig.tf==='15m'?15:R.sig.tf==='1h'?60:5)/60).toFixed(1);
+ box.innerHTML=`
+  <div class=row style="margin-top:8px;align-items:center">
+   <button class=act onclick="stepReplay(${ix},1)" ${atEnd?'disabled':''}>下一根 →</button>
+   <button class=act onclick="stepReplay(${ix},5)" ${atEnd?'disabled':''}>快进 5根</button>
+   <span class=meta>已走 <b>${bars}</b> 根(~${hrs}小时)　浮动盈亏 <b class="${r>=0?'pos':'neg'}" style="font-size:15px">${r>=0?'+':''}${r.toFixed(2)}R</b></span>
+  </div>
+  <div class=row style="margin-top:8px">
+   <button class="act ${r>=0?'ok':'bad'}" style="font-size:14px" onclick="exitReplay(${ix})" ${bars?'':'disabled'}>
+     ✋ 就在这根离场 (${r>=0?'+':''}${r.toFixed(2)}R)</button>
+   <span class=meta>盈亏由离场那一刻的价格自动算 —— 你只管决定"在哪根手放开"</span>
+   ${atEnd?'<span class=meta style="color:var(--warn)">缓冲用完了(已到最新K线, 这笔还没走完的话就是数据到头了)</span>':''}
+  </div>`;
+}
+function stepReplay(ix,n){
+ const R=REP[ix]; if(!R) return;
+ for(let i=0;i<n&&R.shown<R.buf.length;i++){
+   const k=R.buf[R.shown++];
+   R.series.update({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c});
+ }
+ R.chart.timeScale().scrollToRealTime();
+ renderReplayCtl(ix);
+}
+async function exitReplay(ix){
+ const R=REP[ix]; if(!R||!R.shown) return;
+ const last=R.buf[R.shown-1];
+ const my_r=+curR(ix).toFixed(3);
+ const verdict = my_r>0.05?'win':my_r<-0.05?'loss':'flat';   // 盈亏由R正负自动定, 不再自相矛盾
+ const rec={id:R.sig.id, symbol:R.sig.symbol, exit_bar:R.shown, exit_price:last.c,
+            my_r, verdict, note:''};
+ await fetch('/api/live/replay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)});
+ R.sig.mine=rec;
+ revealCompare(ix);
+ // 更新列表徽章(把"🔒 待你走"换成你的结果), 但保持当前展开的这条不动
+ const sm=document.querySelector(`details.sig[data-ix="${ix}"] > summary`);
+ if(sm){ const b=sm.querySelector('.st'); if(b){
+   b.className='st '+(rec.verdict==='win'?'ok':rec.verdict==='loss'?'bad':'none');
+   b.textContent=rec.verdict==='flat'?'你走: 平':`你走: ${rec.my_r>0?'+':''}${rec.my_r}R`; } }
+}
+function revealCompare(ix){
+ const R=REP[ix], r=R.sig, box=document.getElementById('rc_'+ix);
+ // 揭晓: 把策略计划的止损止盈画出来 + 策略实际结果
+ [['止损',r.sl,'#f85149'],['止盈',r.tp,'#3fb950']].forEach(([t,p,col])=>{
+   if(p) R.series.createPriceLine({price:p,color:col,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:t+'(策略)'}); });
+ const stratRes=r.result==='tp'?'止盈':r.result==='sl'?'止损':r.result==='rev'?'反转平':r.result?'超时':'仍持仓';
+ const mine=r.mine;
+ const myTxt=`${mine.my_r>0?'+':''}${mine.my_r}R ${mine.verdict==='win'?'(赚)':mine.verdict==='loss'?'(亏)':'(平)'}`;
+ box.innerHTML=`<div class=verdict style="margin-top:8px">
+   <b>你走的</b>: 第 ${mine.exit_bar} 根离场 · ${myTxt}<br>
+   <b>策略实际</b>: ${stratRes}${r.pnl_r!=null?` · ${r.pnl_r>0?'+':''}${r.pnl_r}R`:''}
+   ${r.reason?`<br><span class=meta>信号: ${r.reason}</span>`:''}</div>`;
 }
 
 async function pick(slug, kind){
