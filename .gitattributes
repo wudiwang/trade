@@ -1,0 +1,2 @@
+# Shell 脚本必须 LF —— 否则 Mac/Linux 上 CRLF 会导致 "bad interpreter: /usr/bin/env^M"
+*.sh text eol=lf
