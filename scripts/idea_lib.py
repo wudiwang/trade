@@ -70,9 +70,12 @@ def md2html(md, base=""):
         elif ln.startswith(">"):
             out.append(f"<blockquote>{inline(ln.lstrip('> '), base)}</blockquote>")
         elif re.match(r"^\s*[-*] ", ln):
-            out.append(f"<li>{inline(re.sub(r'^\s*[-*] ', '', ln), base)}</li>")
+            # f-string 表达式含反斜杠是 3.12 语法(PEP 701)，挪出来兼容 3.11
+            stripped = re.sub(r"^\s*[-*] ", "", ln)
+            out.append(f"<li>{inline(stripped, base)}</li>")
         elif re.match(r"^\s*\d+\. ", ln):
-            out.append(f"<li>{inline(re.sub(r'^\s*\d+\. ', '', ln), base)}</li>")
+            stripped = re.sub(r"^\s*\d+\. ", "", ln)
+            out.append(f"<li>{inline(stripped, base)}</li>")
         elif ln.startswith("---"):
             out.append("<hr>")
         else:
