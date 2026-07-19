@@ -16,6 +16,7 @@ import re
 import secrets
 import socket
 import sys
+import threading
 import time
 from functools import lru_cache
 
@@ -322,6 +323,8 @@ _register_fvg1m()
 
 
 LIVE_REPLAY = os.path.join(R.CACHE, "live_replay.jsonl")
+LIVE_FEEDBACK = os.path.join(R.CACHE, "live_feedback.jsonl")   # 触发精准性反馈
+LIVE_RECHECK = os.path.join(R.CACHE, "live_recheck.json")      # 最近一次本地重测结果
 
 
 def _load_replays():
@@ -350,11 +353,28 @@ def api_live():
         return JSONResponse({"rows": [], "msg": "还没同步过 —— 点「刷新」从 VPS 拉。"})
     d["kline_until"] = _kline_latest()
     rep = _load_replays()
+    fbs = _load_feedback()
     for r in d.get("rows", []):
         mine = rep.get(str(r["id"]))
         if mine:
             r["mine"] = mine                       # 你亲自走过的结果(手动止盈止损)
+        f = fbs.get(str(r["id"]))
+        if f:
+            r["fb"] = f                            # 你对触发本身的判定
     d["n_replayed"] = sum(1 for r in d.get("rows", []) if r.get("mine"))
+    rows = d.get("rows", [])
+    d["n_fb"] = sum(1 for r in rows if r.get("fb"))
+    d["n_fb_bad"] = sum(1 for r in rows if (r.get("fb") or {}).get("verdict") == "bad")
+    tagc = {}
+    for r in rows:
+        for t in (r.get("fb") or {}).get("tags") or []:
+            tagc[t] = tagc.get(t, 0) + 1
+    d["fb_tags"] = tagc
+    if os.path.exists(LIVE_RECHECK):
+        try:
+            d["recheck"] = json.load(open(LIVE_RECHECK, encoding="utf-8"))
+        except Exception:
+            pass
     return JSONResponse(d)
 
 
@@ -373,6 +393,151 @@ async def api_live_replay(request: Request):
     with open(LIVE_REPLAY, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return {"ok": True, "rec": rec}
+
+
+def _load_feedback():
+    """触发精准性反馈(键=线上信号id)。判断的是【触发点对不对】, 不是走单盈亏。"""
+    out = {}
+    if os.path.exists(LIVE_FEEDBACK):
+        for ln in open(LIVE_FEEDBACK, encoding="utf-8"):
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                r = json.loads(ln)
+                out[str(r["id"])] = r
+            except Exception:
+                pass
+    return out
+
+
+@app.post("/api/live/feedback")
+async def api_live_feedback(request: Request):
+    """保存一条触发反馈: verdict=ok(触发对)/bad(触发有问题) + 拒因标签 + 备注。
+
+    append-only, 同 id 以最后一条为准 —— 反馈全集就是策略迭代的原料。
+    """
+    b = await request.json()
+    if b.get("id") is None:
+        return JSONResponse({"error": "缺 id"}, status_code=400)
+    rec = {"id": b["id"], "symbol": b.get("symbol", ""),
+           "verdict": b.get("verdict", ""), "tags": b.get("tags") or [],
+           "note": (b.get("note") or "").strip(),
+           "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    os.makedirs(os.path.dirname(LIVE_FEEDBACK), exist_ok=True)
+    with open(LIVE_FEEDBACK, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return {"ok": True, "rec": rec}
+
+
+def _recheck_all():
+    """用【本地当前】策略代码 + config.yaml 参数, 对每条线上触发重放"当时那一刻":
+    只喂 <=触发时刻 的K线, 看现在的规则还会不会在同一根K上触发。
+
+    改完策略点「重测」→ 对照你的反馈:
+      满意的还在(ok_kept) / 满意的被误杀(ok_lost, 回归!) /
+      不满意的消失了(bad_gone, 改对了) / 不满意的还在(bad_still, 没改到位)
+    """
+    import yaml
+    import live_sync
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from app.engine.macro_pullback import detect_macro_pullback
+
+    cfg = (yaml.safe_load(open(os.path.join(root, "config.yaml"), encoding="utf-8"))
+           or {}).get("macro_pullback") or {}
+    d = live_sync.load() or {}
+    rows = d.get("rows") or []
+    fb = _load_feedback()
+
+    per, errs = {}, 0
+    for r in rows:
+        tf = r.get("tf") or "5m"
+        k = _klines_of(r["symbol"], tf, DAYS)
+        end_ms = int(r["created_at"]) * 1000
+        # created_at = 触发那根收盘的评估时刻; 只喂当时【已收盘】的K线,
+        # 恰好在这一刻开盘的那根还没走完, 混进去会把检测锚定的"最后一根"顶歪。
+        win = [b for b in (k or []) if int(b["open_time"]) < end_ms][-400:]
+        if len(win) < 60:
+            per[str(r["id"])] = "no_data"
+            continue
+        params = dict(cfg)
+        params["tf"] = tf
+        params["enabled"] = True
+        try:
+            sig = detect_macro_pullback(r["symbol"], r.get("direction", "long"),
+                                        win, win, params)
+        except Exception:
+            errs += 1
+            per[str(r["id"])] = "err"
+            continue
+        if sig is None:
+            per[str(r["id"])] = "gone"
+        else:
+            ent = int((sig.extra.get("structure") or {}).get("entry_time") or 0)
+            tol = TF_SEC.get(tf, 300) * 1000
+            per[str(r["id"])] = "hit" if abs(ent - end_ms) <= tol else "near"
+
+    # 基线: 第一次重测(策略未改动时)的结果。VPS 参数可能被在线改过、K线来源也有
+    # 细微差异, ~30% 线上触发本地本来就不复现 —— 这些点不能算"被你的修改杀掉"。
+    # 之后的重测只对【基线里能复现(hit)】的点统计 误杀/已消除。
+    base_file = os.path.join(R.CACHE, "live_recheck_baseline.json")
+    if not os.path.exists(base_file):
+        with open(base_file, "w", encoding="utf-8") as fh:
+            json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "per": per},
+                      fh, ensure_ascii=False)
+    try:
+        base_per = json.load(open(base_file, encoding="utf-8")).get("per") or {}
+    except Exception:
+        base_per = {}
+
+    def _n(pred):
+        n = 0
+        for r in rows:
+            i = str(r["id"])
+            if base_per and base_per.get(i) != "hit":
+                continue                      # 基线不复现的点不参与统计
+            if pred(per.get(i), (fb.get(i) or {}).get("verdict")):
+                n += 1
+        return n
+    n_unrepro = sum(1 for r in rows if base_per.get(str(r["id"])) not in (None, "hit"))
+    summ = {
+        "total": len(rows), "unreproducible": n_unrepro,
+        "hit": sum(1 for v in per.values() if v == "hit"),
+        "gone": sum(1 for v in per.values() if v in ("gone", "near")),
+        "no_data": sum(1 for v in per.values() if v == "no_data"), "err": errs,
+        "ok_kept": _n(lambda s, v: v == "ok" and s == "hit"),
+        "ok_lost": _n(lambda s, v: v == "ok" and s in ("gone", "near")),
+        "bad_gone": _n(lambda s, v: v == "bad" and s in ("gone", "near")),
+        "bad_still": _n(lambda s, v: v == "bad" and s == "hit"),
+    }
+    out = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "per": per,
+           "base_per": base_per, "summary": summ,
+           "msg": (f"重测{summ['total']}条(基线可复现{summ['total']-n_unrepro}): "
+                   f"仍触发{summ['hit']} | 满意保留{summ['ok_kept']} 满意误杀{summ['ok_lost']}"
+                   f" | 问题已消{summ['bad_gone']} 问题仍在{summ['bad_still']}")}
+    with open(LIVE_RECHECK, "w", encoding="utf-8") as fh:
+        json.dump(out, fh, ensure_ascii=False)
+    return out
+
+
+@app.post("/api/live/recheck")
+def api_live_recheck():
+    job = "live:recheck"
+    if JOBS.get(job, {}).get("state") == "running":
+        return {"ok": True, "job": job}
+    JOBS[job] = {"state": "running", "msg": "本地重测中…"}
+
+    def run():
+        try:
+            res = _recheck_all()
+            JOBS[job] = {"state": "done", "msg": res["msg"]}
+        except Exception as e:
+            JOBS[job] = {"state": "error", "msg": f"{type(e).__name__}: {e}"}
+    threading.Thread(target=run, daemon=True).start()
+    return {"ok": True, "job": job}
 
 
 def _kline_latest():
@@ -1406,7 +1571,15 @@ function renderLive(){
     <div>本周触发<b>${rows.length}</b></div>
     <div>你已走完<b>${done.length}</b></div>
     <div>你的手动胜率<b class="${done.length&&myWin/done.length>0.5?'pos':''}">${done.length?Math.round(myWin/done.length*100)+'%':'—'}</b></div>
+    <div>触发反馈<b>${d.n_fb||0}</b>/${rows.length}</div>
+    <div>标了问题<b class="${d.n_fb_bad?'neg':''}">${d.n_fb_bad||0}</b></div>
    </div>
+   <div class=row style="margin-top:6px">
+     <button class=act onclick=recheckLive()>🔁 本地重测(用改后的策略再猜一遍)</button>
+     <span class=meta id=rkmsg>${d.recheck?('上次重测 '+d.recheck.at+' · '+d.recheck.msg):'改完策略后点这里, 看是否只剩你满意的触发'}</span>
+   </div>
+   ${Object.keys(d.fb_tags||{}).length?`<div class=meta style="margin-top:4px">拒因分布: ${
+     Object.entries(d.fb_tags).sort((a,b)=>b[1]-a[1]).map(([k,v])=>k+'×'+v).join(' · ')}</div>`:''}
    <div class=verdict>🔒 <b>盲测规则</b>: 每笔只画到【触发那一刻】, 后面的K线要你自己一根根往后拉。
      你亲自决定在哪根止盈、哪根止损 —— 走完才对比策略实际结果。<b>别偷看后市</b>, 这是练手感。</div>
    <div class=row><label class=meta style="cursor:pointer"><input type=checkbox ${LIVE_ONLY_NEW?'checked':''}
@@ -1429,15 +1602,29 @@ function renderLive(){
                     :mine.verdict==='loss'?`<span class="st bad">你走: ${mine.my_r}R</span>`
                     :`<span class="st none">你走: 平</span>`)
                   :`<span class="st none">🔒 待你走</span>`;
+   const fbBadge=r.fb?(r.fb.verdict==='ok'?`<span class="st ok">触发✓</span>`
+                                          :`<span class="st bad">触发✗</span>`):'';
+   const rk=(LIVE.recheck&&LIVE.recheck.per)?LIVE.recheck.per[String(r.id)]:null;
+   const rkBase=(LIVE.recheck&&LIVE.recheck.base_per)?LIVE.recheck.base_per[String(r.id)]:null;
+   const fbv=r.fb&&r.fb.verdict;
+   let rkBadge='';
+   if(rk){
+     if(rkBase&&rkBase!=='hit') rkBadge=`<span class="st none">本地不复现</span>`;
+     else if(rk==='hit') rkBadge=fbv==='bad'?`<span class="st bad">问题仍在</span>`:`<span class="st none">仍触发</span>`;
+     else if(rk==='no_data') rkBadge=`<span class="st none">缺数据</span>`;
+     else rkBadge=fbv==='ok'?`<span class="st bad">⚠误杀</span>`
+                 :fbv==='bad'?`<span class="st ok">已消除✓</span>`:`<span class="st none">已消失</span>`;
+   }
    return `<details class=sig data-ix="${ix}">
     <summary onclick="setTimeout(()=>startReplay(${ix},${stale?1:0}),50)">
      <b>${r.symbol}</b> <span class="tfb tf-${r.tf}">${r.tf}</span>
      <span style="color:${r.direction==='long'?'#3fb950':'#f85149'}">${r.direction==='long'?'多':'空'}</span>
      <span class=meta>${new Date(r.created_at*1000).toLocaleString('zh-CN')}</span>
-     <span class=meta>· ${r.track||'-'}</span>${badge}</summary>
+     <span class=meta>· ${r.track||'-'}</span>${badge}${fbBadge}${rkBadge}</summary>
     <div style="padding:10px 12px" id="rep_${ix}">
      <div class=chartbox id="lc_${ix}" style="height:340px"></div>
      <div id="rc_${ix}"></div>
+     ${fbHtml(r,ix)}
     </div></details>`;
  }).join('');
  document.getElementById('pane').innerHTML=head+`<div class=box><h3>最近一周 ${rows.length} 笔 · 待走 ${rows.length-done.length}</h3>${list||'<div class=meta>都走完了。去掉「只看没走过的」可回看。</div>'}</div>`;
@@ -1445,6 +1632,47 @@ function renderLive(){
 async function refreshLive(){
  const m=document.getElementById('lmsg'); m.textContent='⏳ SSH 拉最近一周…';
  const r=await (await fetch('/api/live/refresh',{method:'POST'})).json();
+ const poll=setInterval(async()=>{
+   const j=await (await fetch('/api/job?id='+encodeURIComponent(r.job))).json();
+   m.textContent=(j.state==='running'?'⏳ ':(j.state==='error'?'❌ ':'✅ '))+(j.msg||'');
+   if(j.state!=='running'){ clearInterval(poll); if(j.state==='done') showLive(); }
+ },1500);
+}
+
+/* ---- 触发精准性反馈: 判定触发点本身对不对(和走单盈亏无关) ---- */
+const FB_TAGS=['没成笔(不足5根去包含K)','二买不成立(未创更高低点)','一买/spring不成立',
+               '爆量K不对','入场太追','位置不对','纯噪音'];
+function fbHtml(r,ix){
+ const f=r.fb||{};
+ const tags=(f.tags||[]);
+ return `<div id="fb_${ix}" style="border-top:1px solid #1c2128;margin-top:8px;padding-top:8px">
+  <div class=meta style="margin-bottom:4px"><b>这个触发点对吗?</b>(判定的是策略猜点的精准性, 不是这单赚不赚)</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${FB_TAGS.map(t=>
+    `<label style="border:1px solid ${tags.includes(t)?'#d29922':'#30363d'};color:${tags.includes(t)?'#d29922':'#8b949e'};border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px">
+      <input type=checkbox value="${t}" ${tags.includes(t)?'checked':''} style="display:none"
+        onchange="this.parentNode.style.borderColor=this.checked?'#d29922':'#30363d';this.parentNode.style.color=this.checked?'#d29922':'#8b949e'">${t}</label>`).join('')}</div>
+  <div style="display:flex;gap:8px;align-items:center">
+   <input class=fbnote placeholder="备注(如: 这里其实没成笔)" value="${(f.note||'').replace(/"/g,'&quot;')}"
+     style="flex:1;background:#0e1116;border:1px solid #30363d;border-radius:6px;color:#d6dae0;padding:5px 8px;font-size:12px">
+   <button class=act style="border-color:#238636;color:#3fb950" onclick="saveFb(${ix},'ok')">✓ 触发OK</button>
+   <button class=act style="border-color:#da3633;color:#f85149" onclick="saveFb(${ix},'bad')">✗ 有问题</button>
+   <span class=meta id="fbmsg_${ix}">${f.verdict?('已标: '+(f.verdict==='ok'?'✓':'✗')+' '+(f.at||'')):''}</span>
+  </div></div>`;
+}
+async function saveFb(ix,verdict){
+ const r=LIVE.rows[ix], box=document.getElementById('fb_'+ix);
+ const tags=[...box.querySelectorAll('input[type=checkbox]:checked')].map(c=>c.value);
+ const note=box.querySelector('.fbnote').value;
+ await fetch('/api/live/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({id:r.id,symbol:r.symbol,verdict,tags,note})});
+ r.fb={verdict,tags,note,at:new Date().toLocaleTimeString('zh-CN')};
+ document.getElementById('fbmsg_'+ix).textContent='已保存 '+(verdict==='ok'?'✓':'✗');
+ LIVE.n_fb=LIVE.rows.filter(x=>x.fb).length;
+ LIVE.n_fb_bad=LIVE.rows.filter(x=>x.fb&&x.fb.verdict==='bad').length;
+}
+async function recheckLive(){
+ const m=document.getElementById('rkmsg'); m.textContent='⏳ 本地重测中…';
+ const r=await (await fetch('/api/live/recheck',{method:'POST'})).json();
  const poll=setInterval(async()=>{
    const j=await (await fetch('/api/job?id='+encodeURIComponent(r.job))).json();
    m.textContent=(j.state==='running'?'⏳ ':(j.state==='error'?'❌ ':'✅ '))+(j.msg||'');
