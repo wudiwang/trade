@@ -375,8 +375,9 @@ async def api_live_replay(request: Request):
     return {"ok": True, "rec": rec}
 
 
-@lru_cache(maxsize=1)
 def _kline_latest():
+    # 不缓存(底层 _klines_of 已按 mtime 缓存): 否则 bt_refresh 后
+    # "本地最新K线"永远停在进程启动那一刻, 新触发的线上单全被误判为画不出。
     k = _klines_of("BTCUSDT", "5m", DAYS) or []
     return int(k[-1]["open_time"]) // 1000 if k else 0
 
@@ -835,20 +836,29 @@ def api_signal(sid: int):
 
 
 @lru_cache(maxsize=64)
+def _klines_cached(symbol: str, tf: str, days: int, mtime: float):
+    """mtime 进缓存键: bt_refresh 改了文件 → 键变 → 自动读新数据。"""
+    p = os.path.join(R.CACHE, f"{symbol}_{tf}_{days}d.json")
+    try:
+        return json.load(open(p, encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def _klines_of(symbol: str, tf: str, days: int):
     """只读这一个币的缓存文件。
 
     不要用 R.cache_loader(): 它会 glob 出全部 2263 个币的 *_5m_30d.json 逐个 json.load
     进内存(2.7G 磁盘 -> 进程 RSS 4G+), 于是"重启后第一次点信号"要干等几十秒且界面无提示,
     看起来就像点了没反应。看图一次只需要一个币。
+
+    缓存按文件 mtime 失效 —— 之前 lru_cache 只按 (symbol,tf,days) 缓存, 看图器
+    开着的时候跑 bt_refresh, 界面永远读到旧K线(线上单显示"比本地K线还新")。
     """
     p = os.path.join(R.CACHE, f"{symbol}_{tf}_{days}d.json")
     if not os.path.exists(p):
         return None
-    try:
-        return json.load(open(p, encoding="utf-8"))
-    except Exception:
-        return None
+    return _klines_cached(symbol, tf, days, os.path.getmtime(p))
 
 
 TF_SEC = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
