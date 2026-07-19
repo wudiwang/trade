@@ -394,6 +394,12 @@ async def api_live_replay(request: Request):
            "my_r": b.get("my_r"), "verdict": b.get("verdict", ""),
            "note": (b.get("note") or "").strip(),
            "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+    # 出场实验用: 你自己设的止损 + 这笔是主动止盈还是被止损打掉。
+    # 有了这两样才能反推"你的出场规则", 并与策略自带的 sl/tp 做对照。
+    for k in ("bar_base", "exit_kind", "my_sl", "sl_source", "my_sl_pct",
+              "strat_sl", "strat_tp", "entry", "tf", "direction"):
+        if b.get(k) is not None:
+            rec[k] = b[k]
     os.makedirs(os.path.dirname(LIVE_REPLAY), exist_ok=True)
     with open(LIVE_REPLAY, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -1916,45 +1922,100 @@ function refreshStruct(ix){
 function curR(ix){
  const R=REP[ix]; if(!R||!R.shown) return 0;
  const last=R.buf[R.shown-1]; const px=last.c;
- return (R.dir==='long'?(px-R.entry):(R.entry-px))/R.risk;
+ return (R.dir==='long'?(px-R.entry):(R.entry-px))/myRisk(R);
+}
+/* 风险以【你自己设的止损】为准 —— 盈亏用R衡量, 分母必须是你真实承担的风险 */
+function myRisk(R){ return Math.abs(R.entry-(R.mySl!=null?R.mySl:R.sig.sl))||1e-9; }
+
+/* 设自己的止损: 数字输入 或 点图取价。设完画一条线, 可反复改(未开走之前) */
+function setMySl(ix, price, src){
+ const R=REP[ix]; if(!R) return;
+ const p=parseFloat(price); if(!isFinite(p)||p<=0) return;
+ const long=R.dir==='long';
+ if(long ? p>=R.entry : p<=R.entry){ alert(long?'做多的止损要低于入场价':'做空的止损要高于入场价'); return; }
+ R.mySl=p; R.slSrc=src||'manual';
+ if(R.slLine){ try{ R.series.removePriceLine(R.slLine); }catch(e){} }
+ R.slLine=R.series.createPriceLine({price:p,color:'#f0883e',lineWidth:2,lineStyle:0,
+   axisLabelVisible:true,title:'我的止损'});
+ renderReplayCtl(ix);
+}
+/* 点图取价: 点一下K线区域, 把那个纵坐标换算成价格当止损 */
+function pickSl(ix){
+ const R=REP[ix]; if(!R) return;
+ if(R.picking){ return; }
+ R.picking=true;
+ const h=param=>{
+   if(!param.point){ return; }
+   const p=R.series.coordinateToPrice(param.point.y);
+   if(p!=null) setMySl(ix,p,'click');
+   R.chart.unsubscribeClick(h); R.picking=false; renderReplayCtl(ix);
+ };
+ R.chart.subscribeClick(h);
+ renderReplayCtl(ix);
 }
 function renderReplayCtl(ix){
  const R=REP[ix], box=document.getElementById('rc_'+ix);
  const r=curR(ix), atEnd=R.shown>=R.buf.length;
  const bars=R.shown, hrs=(bars*(R.sig.tf==='15m'?15:R.sig.tf==='1h'?60:5)/60).toFixed(1);
+ const d=R.dig, sl=(R.mySl!=null?R.mySl:R.sig.sl);
+ const slPct=Math.abs(R.entry-sl)/R.entry*100;
+ const slTag = R.mySl==null ? '<span style="color:var(--muted)">(暂用策略的)</span>'
+              : `<span style="color:var(--warn)">(你设的${R.slSrc==='click'?'·点图':''})</span>`;
+ // 止损必须在开走【之前】定 —— 走过之后再改就是拿后见之明调风险, 那数据就废了
+ const locked = bars>0;
  box.innerHTML=`
+  <div class=row style="margin-top:8px;align-items:center;flex-wrap:wrap">
+   <span class=meta>我的止损 <b style="color:#f0883e">${sl.toFixed(d)}</b>(${slPct.toFixed(2)}%) ${slTag}</span>
+   ${locked?'<span class=meta style="color:var(--muted)">已开走, 止损锁定</span>':`
+     <input type=number step=any value="${sl}" id="slin_${ix}"
+       style="width:120px;background:#0e1116;border:1px solid #30363d;border-radius:5px;color:#d6dae0;padding:2px 6px">
+     <button class=act onclick="setMySl(${ix},document.getElementById('slin_${ix}').value,'input')">设为止损</button>
+     <button class=act onclick="pickSl(${ix})">${R.picking?'👆 点图上任意高度…':'点图设置'}</button>`}
+  </div>
   <div class=row style="margin-top:8px;align-items:center">
    <button class=act onclick="stepReplay(${ix},1)" ${atEnd?'disabled':''}>下一根 →</button>
    <button class=act onclick="stepReplay(${ix},5)" ${atEnd?'disabled':''}>快进 5根</button>
    <span class=meta>已走 <b>${bars}</b> 根(~${hrs}小时)　浮动盈亏 <b class="${r>=0?'pos':'neg'}" style="font-size:15px">${r>=0?'+':''}${r.toFixed(2)}R</b></span>
   </div>
   <div class=row style="margin-top:8px">
-   <button class="act ${r>=0?'ok':'bad'}" style="font-size:14px" onclick="exitReplay(${ix})" ${bars?'':'disabled'}>
-     ✋ 就在这根离场 (${r>=0?'+':''}${r.toFixed(2)}R)</button>
-   <span class=meta>盈亏由离场那一刻的价格自动算 —— 你只管决定"在哪根手放开"</span>
+   <button class="act ${r>=0?'ok':'bad'}" style="font-size:14px" onclick="exitReplay(${ix},'tp')" ${bars?'':'disabled'}>
+     ✋ 获利了结 (${r>=0?'+':''}${r.toFixed(2)}R)</button>
+   <span class=meta>止损先设好再开走; 走的过程中被打到止损会自动出局。你只管决定"在哪根收手"</span>
    ${atEnd?'<span class=meta style="color:var(--warn)">缓冲用完了(已到最新K线, 这笔还没走完的话就是数据到头了)</span>':''}
   </div>`;
 }
 function stepReplay(ix,n){
- const R=REP[ix]; if(!R) return;
- let last=null;
+ const R=REP[ix]; if(!R||R.done) return;
+ const long=R.dir==='long', sl=(R.mySl!=null?R.mySl:R.sig.sl);
+ let last=null, hitSl=false;
  for(let i=0;i<n&&R.shown<R.buf.length;i++){
    const k=R.buf[R.shown++]; last=k;
    R.series.update({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c});
    if(R.vol) R.vol.update({time:k.t,value:k.v,color:k.c>=k.o?'#2ea043cc':'#f85149aa'});
+   // 这根K的振幅穿过止损 → 就地出局, 后面的快进不再继续(真实交易里你已经不在场了)
+   if(long ? k.l<=sl : k.h>=sl){ hitSl=true; break; }
  }
- // FVG 框跟着已揭晓的K线往右延伸(不预先画到未来, 否则等于剧透后面有多少根)
- if(last) (R.fvgs||[]).forEach(p=>p.setEnd(last.t));
+ if(last) (R.fvgs||[]).forEach(p=>p.setEnd(last.t));   // FVG框跟着已揭晓的K线延伸
  R.chart.timeScale().scrollToRealTime();
+ if(hitSl){ exitReplay(ix,'sl'); return; }
  renderReplayCtl(ix);
 }
-async function exitReplay(ix){
- const R=REP[ix]; if(!R||!R.shown) return;
+async function exitReplay(ix, kind){
+ const R=REP[ix]; if(!R||!R.shown||R.done) return;
+ R.done=true;
  const last=R.buf[R.shown-1];
- const my_r=+curR(ix).toFixed(3);
+ const mySl=(R.mySl!=null?R.mySl:R.sig.sl);
+ // 止损出局按【止损价】成交(不是收盘价), 否则会低估亏损
+ const px = kind==='sl' ? mySl : last.c;
+ const my_r=+(((R.dir==='long'?(px-R.entry):(R.entry-px))/myRisk(R)).toFixed(3));
  const verdict = my_r>0.05?'win':my_r<-0.05?'loss':'flat';   // 盈亏由R正负自动定, 不再自相矛盾
- const rec={id:R.sig.id, symbol:R.sig.symbol, exit_bar:R.shown, exit_price:last.c,
-            my_r, verdict, note:'', bar_base:'cut'};   // bar_base 标明 exit_bar 的索引口径
+ const rec={id:R.sig.id, symbol:R.sig.symbol, exit_bar:R.shown, exit_price:px,
+            my_r, verdict, note:'', bar_base:'cut',
+            exit_kind:kind||'tp',                    // tp=你主动获利了结 / sl=被你设的止损打掉
+            my_sl:mySl, sl_source:(R.mySl==null?'strategy':R.slSrc||'manual'),
+            my_sl_pct:+(Math.abs(R.entry-mySl)/R.entry*100).toFixed(4),
+            strat_sl:R.sig.sl, strat_tp:R.sig.tp, entry:R.entry, tf:R.sig.tf,
+            direction:R.dir};
  await fetch('/api/live/replay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)});
  R.sig.mine=rec;
  revealCompare(ix);
@@ -1962,7 +2023,8 @@ async function exitReplay(ix){
  const sm=document.querySelector(`details.sig[data-ix="${ix}"] > summary`);
  if(sm){ const b=sm.querySelector('.st'); if(b){
    b.className='st '+(rec.verdict==='win'?'ok':rec.verdict==='loss'?'bad':'none');
-   b.textContent=rec.verdict==='flat'?'你走: 平':`你走: ${rec.my_r>0?'+':''}${rec.my_r}R`; } }
+   b.textContent=(rec.exit_kind==='sl'?'你止损: ':'你走: ')+
+     (rec.verdict==='flat'?'平':`${rec.my_r>0?'+':''}${rec.my_r}R`); } }
 }
 function revealCompare(ix){
  const R=REP[ix], r=R.sig, box=document.getElementById('rc_'+ix);
