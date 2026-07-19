@@ -127,6 +127,7 @@ def _macro_params():
         "reclaim_body_pct", "wyckoff_fractal_window",
         "min_leg_pct", "second_tolerance_pct", "stop_buffer_pct", "cooldown_bars",
         "max_signal_bars_after_second", "max_entry_leg_ratio", "min_effective_bars_between",
+        "retrace_min", "retrace_max", "leg_body_ratio_min", "max_leg_pct",
         "min_rr", "tp_rr_long", "tp_rr_short", "tp_lookback", "vp_bins",
     )
     params = {k: cfg.get(f"macro_pullback.{k}") for k in keys}
@@ -170,7 +171,7 @@ def scan_macro_pullback(C):
     from app.engine.chan import find_fractals, merge_klines
     from app.engine.macro_pullback import (
         _body_reclaim_level, _effective_bar_count, _entry_near_second, _f,
-        _tp_for, _vol_ratio,
+        _leg_quality_ok, _tp_for, _vol_ratio,
     )
     params = _macro_params()
     lookback = int(params.get("lookback", 20))
@@ -244,6 +245,10 @@ def scan_macro_pullback(C):
                 if (leg_high - l1) / max(l1, 1e-12) < min_leg:
                     continue
                 l2 = _f(k5[l2_idx], "low")
+                # 反弹质量三门槛(回调深度/实体占比/幅度上限) —— 与线上
+                # macro_pullback._long_second 保持同一口径, 否则回测测的不是线上那套
+                if not _leg_quality_ok(params, k5, l1, leg_high, l2, l1_idx, leg_high_idx):
+                    continue
                 right_idx, stall_idx, entry_idx = l2_idx + 1, l2_idx + 2, l2_idx + 3
                 if entry_idx >= len(k5):
                     continue
@@ -276,6 +281,8 @@ def scan_macro_pullback(C):
                 if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
                     continue
                 h2 = _f(k5[h2_idx], "high")
+                if not _leg_quality_ok(params, k5, h1, leg_low, h2, h1_idx, leg_low_idx):
+                    continue
                 right_idx, stall_idx, entry_idx = h2_idx + 1, h2_idx + 2, h2_idx + 3
                 if entry_idx >= len(k5):
                     continue
