@@ -337,6 +337,11 @@ def _load_replays():
                 continue
             try:
                 r = json.loads(ln)
+                # 2026-07-19 修盲测泄露前的记录: 当时 buf 少了第一根(旧的
+                # t>created_at 过滤会吞掉它), 旧 exit_bar=N 指向今天索引下的第 N+1 根。
+                # 读时归一化, jsonl 本身保持 append-only 不动; 新记录带 bar_base 不再修正。
+                if r.get("bar_base") != "cut" and isinstance(r.get("exit_bar"), int):
+                    r["exit_bar"] += 1
                 out[str(r["id"])] = r
             except Exception:
                 pass
@@ -1058,11 +1063,15 @@ def api_klines(symbol: str, center: int, span: int = 120, tf: str = "5m",
 
     after<0 且 cut=0(默认) → 老行为, 前后都给。
     """
-    k = _klines_of(symbol, tf, DAYS) or _klines_of(symbol, "5m", DAYS)
+    # cut 有值 = 盲测请求: 禁止静默回退到 5m。回退会让下面的 dur 与真实bar周期错配,
+    # 边界算术随之失效(实测 tf=1m 无缓存时回退到5m, dur仍取60 → 多画一根, 泄露最多240秒)。
+    k = _klines_of(symbol, tf, DAYS) or (None if cut else _klines_of(symbol, "5m", DAYS))
     if not k:
         return JSONResponse([])
     times = [int(b["open_time"]) // 1000 for b in k]
-    dur = TF_SEC.get(tf, 300)
+    # 周期以【实际数据】为准而非请求的 tf: 取相邻开盘时间差的最小值 —— 数据缺口只会
+    # 让差值变大、永不变小, 故只要存在任意一对连续bar, min 就等于真实周期。
+    dur = min((b - a for a, b in zip(times, times[1:])), default=TF_SEC.get(tf, 300))
     if cut:
         vis = bisect.bisect_right(times, cut - dur)     # 已收盘K的根数(= 可见区右端)
         # after>0: 要 cut 【之后】的K(盲测缓冲区, 前端藏着一根根揭晓)。
@@ -1839,17 +1848,32 @@ function buildFvgs(ix){
  R.fvgs=[]; R.fvgInfo='';
  const r=R.sig, long=r.direction==='long', kl=R.pre;
  if(!kl||kl.length<3) return;
- const mts=(r.markers||[]).map(m=>+m.t).filter(t=>t&&t<=r.created_at);
- const legStart=mts.length?Math.min.apply(null,mts):kl[0].t;   // 一买/一卖那根起算
  // 右端跟随"已揭晓到哪根": 回放中途改参数重建时不能缩回触发点
  const endT=(R.shown&&R.buf[R.shown-1]) ? R.buf[R.shown-1].t : kl[kl.length-1].t;
- const gaps=findFvgs(kl,long,FVG_MINPCT).filter(g=>g.t>=legStart);
+ const ms=(r.markers||[]).filter(m=>m.t&&+m.t<=r.created_at);
+ const secM=ms.find(m=>m.label&&m.label.indexOf('2')>=0);        // L2/H2 = 二买/二卖那根
+ const i1=ms.length?kl.findIndex(k=>k.t===Math.min.apply(null,ms.map(m=>+m.t))):-1;
+ const i2=secM?kl.findIndex(k=>k.t===+secM.t):-1;
+ if(i1<0||i2<=i1){   // 标记对不上就不下"命中"结论, 只说找到几个, 不误导
+   const all=findFvgs(kl,long,FVG_MINPCT);
+   R.fvgInfo=`④ 这段有 ${all.length} 个${long?'看涨':'看跌'}FVG（<span style="color:var(--muted)">未能定位二买/二卖, 不判定回踩是否命中</span>）`;
+   all.forEach(g=>{ const p=new FvgPrimitive(g.t,endT,g.lo,g.hi,long,'plain'); R.fvgs.push(p);
+     if(FVG_ON){ try{ R.series.attachPrimitive(p); }catch(e){} } });
+   R.fvgAttached=FVG_ON; repaint(R); return;
+ }
+ // 腿极值(反弹顶/反抽底): 与 macro_pullback.py:174 的 leg_high_idx 同口径
+ let legEnd=i1+1;
+ for(let x=i1+1;x<=i2;x++){ if(long ? kl[x].h>kl[legEnd].h : kl[x].l<kl[legEnd].l) legEnd=x; }
+ // FVG 只在【一买→腿极值】这段推动里找: 三根K要整体落在区间内。
+ // 回调段和 L2→入场段里的缺口不算 —— 策略自己也不看那些(strat_macrofvg.py:206 同界)。
+ const gaps=findFvgs(kl,long,FVG_MINPCT).filter(g=>g.i-1>=i1 && g.i+1<=legEnd);
  let hitCount=0, hitZone=null;
  gaps.forEach(g=>{
-  // 缺口成型之后到触发为止: 价格有没有回踩进来(long: 最低价探进上沿)/有没有跌穿(long: 破下沿)
-  const after=kl.slice(g.i+2);
-  const entered=after.some(k=> long ? k.l<=g.hi : k.h>=g.lo);
-  const pierced=after.some(k=> long ? k.l< g.lo : k.h> g.hi);
+  // 命中窗口 = 【腿极值→二买】那一段回踩, 不是"成型后到入场的所有K"。
+  // 旧写法把腿内小回抽也算成"回踩命中", 实测 176 条里 50 条是假阳性。
+  const seg=kl.slice(Math.max(g.i+2,legEnd), i2+1);
+  const entered=seg.some(k=> long ? k.l<=g.hi : k.h>=g.lo);
+  const pierced=seg.some(k=> long ? k.l< g.lo : k.h> g.hi);
   const tier = pierced ? 'dead' : (entered ? 'hit' : 'plain');
   if(tier==='hit'){ hitCount++; if(!hitZone) hitZone=g; }
   const p=new FvgPrimitive(g.t,endT,g.lo,g.hi,long,tier);
@@ -1857,11 +1881,18 @@ function buildFvgs(ix){
   if(FVG_ON){ try{ R.series.attachPrimitive(p); }catch(e){} }
  });
  R.fvgAttached=FVG_ON;
+ repaint(R);
  const d=R.dig;
  R.fvgInfo = gaps.length
-   ? (hitZone ? `④ 回踩落在 FVG [${hitZone.lo.toFixed(d)} ~ ${hitZone.hi.toFixed(d)}] 内 <span style="color:var(--ok)">✓ 与流动性缺口重合</span>（这段共 ${gaps.length} 个${long?'看涨':'看跌'}FVG, 命中 ${hitCount}）`
-              : `④ <span style="color:var(--warn)">回踩没进任何 FVG</span>（这段有 ${gaps.length} 个${long?'看涨':'看跌'}FVG, 都没被碰到或已被跌穿）`)
+   ? (hitZone ? `④ 回踩落在 FVG [${hitZone.lo.toFixed(d)} ~ ${hitZone.hi.toFixed(d)}] 内 <span style="color:var(--ok)">✓ 与流动性缺口重合</span>（推动段共 ${gaps.length} 个${long?'看涨':'看跌'}FVG, 回踩命中 ${hitCount}）`
+              : `④ <span style="color:var(--warn)">回踩没进任何 FVG</span>（推动段有 ${gaps.length} 个${long?'看涨':'看跌'}FVG, 回踩时都没碰到或已被跌穿）`)
    : `④ 这段推动里<span style="color:var(--muted)">没有留下 ${long?'看涨':'看跌'}FVG</span>（最小宽度 ${FVG_MINPCT}%）`;
+}
+/* attachPrimitive/detachPrimitive 只改集合、不触发重绘(v4.1.3 实测),
+   改完必须显式请求一次, 否则开关和阈值"点了没反应"。 */
+function repaint(R){
+ try{ R.chart.applyOptions({}); }catch(e){}
+ (R.fvgs||[]).forEach(p=>{ try{ if(p._req) p._req(); }catch(e){} });
 }
 /* 切换显示 / 改最小宽度: 对所有已展开的图重建 */
 function toggleFvg(on){
@@ -1870,6 +1901,7 @@ function toggleFvg(on){
   if(on===R.fvgAttached) return;
   R.fvgs.forEach(p=>{ try{ on?R.series.attachPrimitive(p):R.series.detachPrimitive(p); }catch(e){} });
   R.fvgAttached=on;
+  repaint(R);
  });
 }
 function setFvgPct(v){
@@ -1922,7 +1954,7 @@ async function exitReplay(ix){
  const my_r=+curR(ix).toFixed(3);
  const verdict = my_r>0.05?'win':my_r<-0.05?'loss':'flat';   // 盈亏由R正负自动定, 不再自相矛盾
  const rec={id:R.sig.id, symbol:R.sig.symbol, exit_bar:R.shown, exit_price:last.c,
-            my_r, verdict, note:''};
+            my_r, verdict, note:'', bar_base:'cut'};   // bar_base 标明 exit_bar 的索引口径
  await fetch('/api/live/replay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(rec)});
  R.sig.mine=rec;
  revealCompare(ix);
