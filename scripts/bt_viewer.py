@@ -468,9 +468,13 @@ def _recheck_all():
         tf = r.get("tf") or "5m"
         k = _klines_of(r["symbol"], tf, DAYS)
         end_ms = int(r["created_at"]) * 1000
-        # created_at = 触发那根收盘的评估时刻; 只喂当时【已收盘】的K线,
-        # 恰好在这一刻开盘的那根还没走完, 混进去会把检测锚定的"最后一根"顶歪。
-        win = [b for b in (k or []) if int(b["open_time"]) < end_ms][-400:]
+        # created_at = 入场K收盘的评估时刻。必须按【收盘时间 <= created_at】筛,
+        # 不能用 open_time < created_at: 有 53/176 条 created_at 带 0~3 秒延迟(未对齐
+        # bar边界), 用开盘时间筛会把"恰在此刻开盘、触发之后才收盘"的那根也喂进去,
+        # 于是入场K不再是窗口最后一根, _stall_entry_idx 直接判不成立 —— 这 53 条
+        # 曾被误记为"本地不复现", 实为窗口多喂一根所致。
+        dur_ms = TF_SEC.get(tf, 300) * 1000
+        win = [b for b in (k or []) if int(b["open_time"]) + dur_ms <= end_ms][-400:]
         if len(win) < 60:
             per[str(r["id"])] = "no_data"
             continue
@@ -492,9 +496,11 @@ def _recheck_all():
             if rj:
                 why[str(r["id"])] = sorted(set(rj))
         else:
+            # entry_time 是入场K的【开盘】时间, created_at 是它【收盘】的评估时刻
+            # (还带 0~3 秒延迟) —— 必须补上一个周期再比, 否则天生差 dur, 全判成 near。
             ent = int((sig.extra.get("structure") or {}).get("entry_time") or 0)
             tol = TF_SEC.get(tf, 300) * 1000
-            per[str(r["id"])] = "hit" if abs(ent - end_ms) <= tol else "near"
+            per[str(r["id"])] = "hit" if abs((ent + dur_ms) - end_ms) <= tol else "near"
 
     # 基线: 第一次重测(策略未改动时)的结果。VPS 参数可能被在线改过、K线来源也有
     # 细微差异, ~30% 线上触发本地本来就不复现 —— 这些点不能算"被你的修改杀掉"。
