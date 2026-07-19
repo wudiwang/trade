@@ -6,6 +6,66 @@ def _f(k, name: str) -> float:
     return float(k[name])
 
 
+def _rej(params: dict, code: str) -> None:
+    """记录本次被哪条规则否掉 —— 三条门槛同时上线时仍能事后拆出各自贡献。"""
+    try:
+        params.setdefault("_rejects", []).append(code)
+    except Exception:
+        pass
+
+
+def _leg_body_ratio(klines: list, i_from: int, i_to: int) -> float:
+    """反弹/反抽段里 K 线的平均实体占振幅比。低 = 实体小、走得粘稠、没力度。"""
+    a, b = min(i_from, i_to), max(i_from, i_to)
+    vals = []
+    for k in klines[a:b + 1]:
+        rng = _f(k, "high") - _f(k, "low")
+        if rng > 0:
+            vals.append(abs(_f(k, "close") - _f(k, "open")) / rng)
+    return _avg(vals)
+
+
+def _leg_quality_ok(params: dict, klines: list, base: float, peak: float,
+                    second: float, i_base: int, i_peak: int) -> bool:
+    """一买/一卖之后那一笔的"力度 + 回调健康度"三道门槛。
+
+    2026-07-19 由 15 条人工触发反馈反推得到(ok组 vs bad组在这三项上几乎完全分离):
+      ① 回调深度 = |peak-second| / |peak-base| 必须落在 [retrace_min, retrace_max]
+         低于下限 = "根本没回调过"(用户原话); 高于上限 = 反弹被吃回太多, 结构已转弱。
+      ② 反弹段平均实体占比 >= leg_body_ratio_min —— 低 = "K线实体太小, 走得太粘稠"。
+      ③ 反弹幅度 <= max_leg_pct —— 高 = "反弹太高", 属追高不是中继。
+    三条都是可关的(阈值设为 None/0 即跳过), 便于单独测边际贡献。
+    """
+    leg = abs(peak - base)
+    if leg <= 0:
+        _rej(params, "leg_zero")
+        return False
+
+    rmin = params.get("retrace_min")
+    rmax = params.get("retrace_max")
+    if rmin is not None or rmax is not None:
+        retr = abs(peak - second) / leg
+        if rmin is not None and retr < float(rmin):
+            _rej(params, "retrace_shallow")
+            return False
+        if rmax is not None and retr > float(rmax):
+            _rej(params, "retrace_deep")
+            return False
+
+    bmin = params.get("leg_body_ratio_min")
+    if bmin:
+        if _leg_body_ratio(klines, i_base, i_peak) < float(bmin):
+            _rej(params, "leg_sticky")
+            return False
+
+    lmax = params.get("max_leg_pct")
+    if lmax:
+        if leg / max(abs(base), 1e-12) * 100.0 > float(lmax):
+            _rej(params, "leg_too_far")
+            return False
+    return True
+
+
 def _avg(nums: list[float]) -> float:
     return sum(nums) / len(nums) if nums else 0.0
 
@@ -179,6 +239,9 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
             continue
         if (leg_high - l1) / max(l1, 1e-12) < min_leg:
             continue
+        if not _leg_quality_ok(params, klines, l1, leg_high,
+                               _f(klines[l2_idx], "low"), l1_idx, leg_high_idx):
+            continue
         return {"L1": l1, "H1": leg_high, "L2": _f(klines[l2_idx], "low"),
                 "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"]),
                 "L1_idx": l1_idx, "H1_idx": leg_high_idx, "L2_idx": l2_idx}
@@ -202,6 +265,9 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
         if _effective_bar_count(klines, leg_low_idx, h2_idx) < min_bars:
             continue
         if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
+            continue
+        if not _leg_quality_ok(params, klines, h1, leg_low,
+                               _f(klines[h2_idx], "high"), h1_idx, leg_low_idx):
             continue
         return {"H1": h1, "L1": leg_low, "H2": _f(klines[h2_idx], "high"),
                 "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"]),

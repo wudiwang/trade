@@ -452,7 +452,7 @@ def _recheck_all():
     rows = d.get("rows") or []
     fb = _load_feedback()
 
-    per, errs = {}, 0
+    per, why, errs = {}, {}, 0
     for r in rows:
         tf = r.get("tf") or "5m"
         k = _klines_of(r["symbol"], tf, DAYS)
@@ -466,6 +466,7 @@ def _recheck_all():
         params = dict(cfg)
         params["tf"] = tf
         params["enabled"] = True
+        params["_rejects"] = []
         try:
             sig = detect_macro_pullback(r["symbol"], r.get("direction", "long"),
                                         win, win, params)
@@ -475,6 +476,10 @@ def _recheck_all():
             continue
         if sig is None:
             per[str(r["id"])] = "gone"
+            # 哪条门槛把它挡下的(三条同时上线时仍可事后拆分各自贡献)
+            rj = params.get("_rejects") or []
+            if rj:
+                why[str(r["id"])] = sorted(set(rj))
         else:
             ent = int((sig.extra.get("structure") or {}).get("entry_time") or 0)
             tol = TF_SEC.get(tf, 300) * 1000
@@ -513,11 +518,22 @@ def _recheck_all():
         "bad_gone": _n(lambda s, v: v == "bad" and s in ("gone", "near")),
         "bad_still": _n(lambda s, v: v == "bad" and s == "hit"),
     }
-    out = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "per": per,
+    # 各条门槛各挡下多少(只统计基线里本来能复现的, 否则混入环境差异)
+    rej_count = {}
+    for i, codes in why.items():
+        if base_per and base_per.get(i) != "hit":
+            continue
+        for c in codes:
+            rej_count[c] = rej_count.get(c, 0) + 1
+    summ["reject_by_rule"] = rej_count
+
+    out = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "per": per, "why": why,
            "base_per": base_per, "summary": summ,
            "msg": (f"重测{summ['total']}条(基线可复现{summ['total']-n_unrepro}): "
                    f"仍触发{summ['hit']} | 满意保留{summ['ok_kept']} 满意误杀{summ['ok_lost']}"
-                   f" | 问题已消{summ['bad_gone']} 问题仍在{summ['bad_still']}")}
+                   f" | 问题已消{summ['bad_gone']} 问题仍在{summ['bad_still']}"
+                   + (" | 拒因: " + " ".join(f"{k}×{v}" for k, v in
+                      sorted(rej_count.items(), key=lambda x: -x[1])) if rej_count else ""))}
     with open(LIVE_RECHECK, "w", encoding="utf-8") as fh:
         json.dump(out, fh, ensure_ascii=False)
     return out
@@ -1048,8 +1064,11 @@ def api_klines(symbol: str, center: int, span: int = 120, tf: str = "5m",
     times = [int(b["open_time"]) // 1000 for b in k]
     dur = TF_SEC.get(tf, 300)
     if cut:
-        hi = bisect.bisect_right(times, cut - dur)      # 最后一根【已收盘】的K
-        lo = max(0, hi - span)
+        vis = bisect.bisect_right(times, cut - dur)     # 已收盘K的根数(= 可见区右端)
+        # after>0: 要 cut 【之后】的K(盲测缓冲区, 前端藏着一根根揭晓)。
+        # after<=0: 老行为, 只给可见区 —— 两者拼起来无重叠也无跳过。
+        nafter = 0 if after < 0 else after
+        lo, hi = max(0, vis - span), min(len(k), vis + nafter)
     else:
         j = bisect.bisect_left(times, center)
         nafter = span if after < 0 else after
@@ -1548,8 +1567,68 @@ function renderList(){
   </div>`).join('') : '<div class=empty>还没有内容。</div>';
 }
 
+/* ---- FVG 色块(lightweight-charts v4 series primitive: 真矩形, 不是两条线) ----
+   与主看图器那份同源; ideas 页是另一段独立 HTML, 拿不到那边的类, 故此处再放一份。 */
+class FvgRenderer{
+ constructor(p1,p2,fill,edge,dash){this._p1=p1;this._p2=p2;this._fill=fill;this._edge=edge;this._dash=dash;}
+ draw(target){
+  if(this._p1.x===null||this._p2.x===null||this._p1.y===null||this._p2.y===null)return;
+  target.useBitmapCoordinateSpace(scope=>{
+   const ctx=scope.context, hr=scope.horizontalPixelRatio, vr=scope.verticalPixelRatio;
+   const x1=Math.round(Math.min(this._p1.x,this._p2.x)*hr), x2=Math.round(Math.max(this._p1.x,this._p2.x)*hr);
+   const y1=Math.round(Math.min(this._p1.y,this._p2.y)*vr), y2=Math.round(Math.max(this._p1.y,this._p2.y)*vr);
+   ctx.fillStyle=this._fill; ctx.fillRect(x1,y1,x2-x1,Math.max(y2-y1,1*vr));
+   ctx.strokeStyle=this._edge; ctx.lineWidth=1*vr;
+   if(this._dash) ctx.setLineDash([3*hr,3*hr]);
+   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y1); ctx.moveTo(x1,y2); ctx.lineTo(x2,y2); ctx.stroke();
+   ctx.setLineDash([]);
+  });
+ }
+}
+class FvgView{
+ constructor(src){this._src=src;this._p1={x:null,y:null};this._p2={x:null,y:null};}
+ update(){
+  const s=this._src._series, ts=this._src._chart.timeScale();
+  this._p1={x:ts.timeToCoordinate(this._src._t1),y:s.priceToCoordinate(this._src._lo)};
+  this._p2={x:ts.timeToCoordinate(this._src._t2),y:s.priceToCoordinate(this._src._hi)};
+ }
+ renderer(){return new FvgRenderer(this._p1,this._p2,this._src._fill,this._src._edge,this._src._dash);}
+}
+class FvgPrimitive{
+ constructor(t1,t2,lo,hi,long,tier){
+  this._t1=t1;this._t2=t2;this._lo=lo;this._hi=hi;
+  const col=long?'63,185,80':'248,81,73';
+  // tier: hit=回踩真的进了这个缺口(策略关心的那个) / plain=没被回踩 / dead=已被跌穿(失效)
+  this._fill = tier==='hit'?`rgba(${col},0.26)` : tier==='dead'?'rgba(139,148,158,0.07)' : `rgba(${col},0.10)`;
+  this._edge = tier==='hit'?`rgba(${col},0.85)` : tier==='dead'?'rgba(139,148,158,0.35)' : `rgba(${col},0.35)`;
+  this._dash = tier!=='hit';
+  this._view=new FvgView(this);
+ }
+ setEnd(t){ this._t2=t; if(this._req) this._req(); }
+ attached(p){this._series=p.series;this._chart=p.chart;this._req=p.requestUpdate;}
+ detached(){}
+ updateAllViews(){this._view.update();}
+ paneViews(){return [this._view];}
+}
+/* 三根K线失衡区。口径与 scripts/strat_macrofvg.py:47-66 的 find_fvgs 一致:
+   看涨 low[i+1] > high[i-1] → [high[i-1], low[i+1]]; 看跌 high[i+1] < low[i-1] → [high[i+1], low[i-1]]
+   锚点时间取第一根(i-1)的开盘时间; 最小宽度按中点百分比过滤(min_gap_pct 同名同义)。 */
+function findFvgs(kl,long,minGapPct){
+ const out=[];
+ for(let i=1;i<kl.length-1;i++){
+  const lo = long ? kl[i-1].h : kl[i+1].h;
+  const hi = long ? kl[i+1].l : kl[i-1].l;
+  if(!(hi>lo)) continue;
+  const mid=(hi+lo)/2;
+  if(mid<=0 || (hi-lo)/mid*100 < minGapPct) continue;
+  out.push({t:kl[i-1].t, i, lo, hi});
+ }
+ return out;
+}
+
 /* ---------- 🔴 线上策略: 实盘真实打出的最近50笔 ---------- */
 let LIVE=null;
+let FVG_ON=true, FVG_MINPCT=0.05;
 async function showLive(){
  SEL=null;
  document.getElementById('nav').innerHTML='';
@@ -1584,6 +1663,11 @@ function renderLive(){
      你亲自决定在哪根止盈、哪根止损 —— 走完才对比策略实际结果。<b>别偷看后市</b>, 这是练手感。</div>
    <div class=row><label class=meta style="cursor:pointer"><input type=checkbox ${LIVE_ONLY_NEW?'checked':''}
       onchange="LIVE_ONLY_NEW=this.checked;renderLive()"> 只看没走过的</label>
+     <label class=meta style="cursor:pointer;margin-left:14px"><input type=checkbox ${FVG_ON?'checked':''}
+      onchange="toggleFvg(this.checked)"> FVG 色块</label>
+     <label class=meta style="margin-left:8px">最小宽度
+       <input type=number step=0.01 min=0 value="${FVG_MINPCT}" onchange="setFvgPct(this.value)"
+        style="width:62px;background:#0e1116;border:1px solid #30363d;border-radius:5px;color:#d6dae0;padding:2px 5px">%</label>
      <span class=meta id=lmsg></span></div>
    <details style="margin-top:6px"><summary style="cursor:pointer;color:var(--muted);font-size:12px">📉 策略自己的成绩(走之前别看, 会有先入为主)</summary>
      <div class=kpi style="margin-top:6px">
@@ -1687,11 +1771,14 @@ async function startReplay(ix, stale){
  el._init=true;
  const r=LIVE.rows[ix];
  if(stale){ el.innerHTML=`<div class=meta style="padding:16px">这条(${new Date(r.created_at*1000).toLocaleString('zh-CN')})比本地K线还新, 跑 bt_refresh 才画得出。</div>`; return; }
- // 触发前的K线(after=0, 一根未来都不给) + 触发后的缓冲(藏着, 一根根揭晓)
- const pre=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=90&tf=${r.tf}&after=0`)).json();
- const post=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=0&tf=${r.tf}&after=200`)).json();
+ // 盲测边界: created_at = 入场K收盘那一刻(评估时刻)。必须传 cut, 只给【在它之前
+ // 已收盘】的K —— 否则 bisect_left(center) 会把"正在走、要到触发之后才收盘"的那根
+ // 也画上去(实测176条全中, created_at没对齐bar的53条漏2根), 盲测就成了偷看。
+ const cut=r.created_at;
+ const pre=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=90&tf=${r.tf}&after=0&cut=${cut}`)).json();
+ const post=await (await fetch(`/api/klines?symbol=${r.symbol}&center=${r.created_at}&span=0&tf=${r.tf}&after=200&cut=${cut}`)).json();
  if(!pre.length){ el.innerHTML='<div class=meta style="padding:16px">本地缓存没有这个币的K线。</div>'; return; }
- const buf=post.filter(k=>k.t>r.created_at);      // 只留触发之后的
+ const buf=post;   // cut 分支保证 post 紧接 pre 之后, 无重叠(旧的 t>created_at 过滤会吞掉第一根)
  const c=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
    grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
    timeScale:{timeVisible:true,secondsVisible:false},
@@ -1722,7 +1809,9 @@ async function startReplay(ix, stale){
  c.timeScale().fitContent();
  new ResizeObserver(()=>c.applyOptions({width:el.clientWidth,height:el.clientHeight})).observe(el);
  const risk=Math.abs(r.entry-r.sl)||1e-9;
- REP[ix]={chart:c, series:s, vol, buf, shown:0, entry:r.entry, risk, dir:r.direction, dig, sig:r};
+ REP[ix]={chart:c, series:s, vol, buf, shown:0, entry:r.entry, risk, dir:r.direction, dig, sig:r,
+          pre, fvgs:[], fvgInfo:''};
+ buildFvgs(ix);
  // 结构说明: 策略凭什么判它是二买/二卖 —— 一买/一卖(爆量) → 更低高点/更高低点 → 入场
  const ms=r.markers||[], first=ms.find(m=>m.vol_ratio), second=ms.find(m=>m.label&&(m.label.indexOf('2')>=0||m.label[1]==='2'));
  const isShort=r.direction==='short';
@@ -1733,12 +1822,64 @@ async function startReplay(ix, stale){
      <b>策略凭什么开这一单</b>(${isShort?'威科夫UTAD一卖→缠论二卖':'威科夫Spring一买→缠论二买'}):<br>
      ① ${first.label} ${first.price} <span style="color:#f0883e">爆量${(+first.vol_ratio).toFixed(1)}x</span> ← 就是你圈的那根<br>
      ② ${second.label} ${second.price} ${validLH?`<span style="color:var(--ok)">✓ ${isShort?'更低的高点':'更高的低点'}(缠论${isShort?'二卖':'二买'}成立)</span>`:`<span style="color:var(--bad)">✗ ${isShort?'没比一卖更低':'没比一买更高'}, 结构存疑</span>`}<br>
-     ③ 入场 ${r.entry} · 止损 ${r.sl}(${isShort?'H2上方':'L2下方'}) · 止盈 ${r.tp}</div>`;
+     ③ 入场 ${r.entry} · 止损 ${r.sl}(${isShort?'H2上方':'L2下方'}) · 止盈 ${r.tp}<br>
+     <span id="fvgline_${ix}">${REP[ix].fvgInfo}</span></div>`;
  }
  document.getElementById('rc_'+ix).insertAdjacentHTML('beforebegin',`<div id="st_${ix}">${struct}</div>`);
  // 已经走过的: 直接显示你当时的结果 + 策略结果, 不再重走
  if(r.mine){ revealCompare(ix); return; }
  renderReplayCtl(ix);
+}
+/* 在回放图上画 FVG 矩形。级别 = 信号自己的 tf(5m单就是5m的FVG)。
+   只用 pre(触发及之前已收盘的K)计算 —— 盲测不能拿未来的K去找缺口。
+   范围: 从最早的结构标记(爆量K/一买一卖分型)起, 到触发为止的那一段推动。 */
+function buildFvgs(ix){
+ const R=REP[ix]; if(!R) return;
+ (R.fvgs||[]).forEach(p=>{ try{ R.series.detachPrimitive(p); }catch(e){} });
+ R.fvgs=[]; R.fvgInfo='';
+ const r=R.sig, long=r.direction==='long', kl=R.pre;
+ if(!kl||kl.length<3) return;
+ const mts=(r.markers||[]).map(m=>+m.t).filter(t=>t&&t<=r.created_at);
+ const legStart=mts.length?Math.min.apply(null,mts):kl[0].t;   // 一买/一卖那根起算
+ // 右端跟随"已揭晓到哪根": 回放中途改参数重建时不能缩回触发点
+ const endT=(R.shown&&R.buf[R.shown-1]) ? R.buf[R.shown-1].t : kl[kl.length-1].t;
+ const gaps=findFvgs(kl,long,FVG_MINPCT).filter(g=>g.t>=legStart);
+ let hitCount=0, hitZone=null;
+ gaps.forEach(g=>{
+  // 缺口成型之后到触发为止: 价格有没有回踩进来(long: 最低价探进上沿)/有没有跌穿(long: 破下沿)
+  const after=kl.slice(g.i+2);
+  const entered=after.some(k=> long ? k.l<=g.hi : k.h>=g.lo);
+  const pierced=after.some(k=> long ? k.l< g.lo : k.h> g.hi);
+  const tier = pierced ? 'dead' : (entered ? 'hit' : 'plain');
+  if(tier==='hit'){ hitCount++; if(!hitZone) hitZone=g; }
+  const p=new FvgPrimitive(g.t,endT,g.lo,g.hi,long,tier);
+  R.fvgs.push(p);
+  if(FVG_ON){ try{ R.series.attachPrimitive(p); }catch(e){} }
+ });
+ R.fvgAttached=FVG_ON;
+ const d=R.dig;
+ R.fvgInfo = gaps.length
+   ? (hitZone ? `④ 回踩落在 FVG [${hitZone.lo.toFixed(d)} ~ ${hitZone.hi.toFixed(d)}] 内 <span style="color:var(--ok)">✓ 与流动性缺口重合</span>（这段共 ${gaps.length} 个${long?'看涨':'看跌'}FVG, 命中 ${hitCount}）`
+              : `④ <span style="color:var(--warn)">回踩没进任何 FVG</span>（这段有 ${gaps.length} 个${long?'看涨':'看跌'}FVG, 都没被碰到或已被跌穿）`)
+   : `④ 这段推动里<span style="color:var(--muted)">没有留下 ${long?'看涨':'看跌'}FVG</span>（最小宽度 ${FVG_MINPCT}%）`;
+}
+/* 切换显示 / 改最小宽度: 对所有已展开的图重建 */
+function toggleFvg(on){
+ FVG_ON=on;
+ Object.keys(REP).forEach(ix=>{ const R=REP[ix]; if(!R||!R.fvgs) return;
+  if(on===R.fvgAttached) return;
+  R.fvgs.forEach(p=>{ try{ on?R.series.attachPrimitive(p):R.series.detachPrimitive(p); }catch(e){} });
+  R.fvgAttached=on;
+ });
+}
+function setFvgPct(v){
+ const n=parseFloat(v); if(!isFinite(n)||n<0) return;
+ FVG_MINPCT=n;
+ Object.keys(REP).forEach(ix=>{ if(!REP[ix]) return; buildFvgs(ix); refreshStruct(ix); });
+}
+function refreshStruct(ix){
+ const box=document.getElementById('fvgline_'+ix);
+ if(box) box.innerHTML=REP[ix]?REP[ix].fvgInfo:'';
 }
 function curR(ix){
  const R=REP[ix]; if(!R||!R.shown) return 0;
@@ -1764,11 +1905,14 @@ function renderReplayCtl(ix){
 }
 function stepReplay(ix,n){
  const R=REP[ix]; if(!R) return;
+ let last=null;
  for(let i=0;i<n&&R.shown<R.buf.length;i++){
-   const k=R.buf[R.shown++];
+   const k=R.buf[R.shown++]; last=k;
    R.series.update({time:k.t,open:k.o,high:k.h,low:k.l,close:k.c});
    if(R.vol) R.vol.update({time:k.t,value:k.v,color:k.c>=k.o?'#2ea043cc':'#f85149aa'});
  }
+ // FVG 框跟着已揭晓的K线往右延伸(不预先画到未来, 否则等于剧透后面有多少根)
+ if(last) (R.fvgs||[]).forEach(p=>p.setEnd(last.t));
  R.chart.timeScale().scrollToRealTime();
  renderReplayCtl(ix);
 }
