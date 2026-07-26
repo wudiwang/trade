@@ -424,3 +424,121 @@ def detect(klines: list, min_merged: int = 5, max_gap: int = 3,
         # 二卖：上一个顶存在 且 本顶更低(更低的高点)；类型名沿用 buy1/buy2，方向分多空
         sig_type = "buy2" if (len(tops) >= 2 and last_fx.extreme_price < tops[-2].extreme_price) else "buy1"
     return direction, sig_type, last_fx, s, grade, vratio, seq
+
+
+# ======================= 底座 v1(用户 2026-07-27 确认定义) =======================
+# 三条锁定定义：
+#   ① 中枢=标准(连续三笔重叠, ZG/ZD 由前三笔锁定, 相交则延伸, 离开即结束)
+#   ② 一买=任意下跌笔末端底分型 + 停顿K(无背驰、无中枢门槛)
+#   ③ 二买=严格: 一买后 上涨成笔→回调成笔, 且 B2>B1(不破一买低点) + 停顿K
+# 均为新增函数, 不改动线上 detect()/build_bi()。
+
+def _bi_lohi(seq):
+    """把分型序列转成每一笔的 (low, high)。第 i 笔连接 seq[i]、seq[i+1]。"""
+    out = []
+    for i in range(len(seq) - 1):
+        a, b = seq[i].extreme_price, seq[i + 1].extreme_price
+        out.append((min(a, b), max(a, b)))
+    return out
+
+
+def build_zhongshu(seq, min_bis: int = 3):
+    """标准中枢。连续三笔区间重叠成枢: ZG=min(三高), ZD=max(三低), 需 ZG>ZD;
+    GG/DD=延伸期间的最高/最低; 后续笔只要与[ZD,ZG]相交则延伸, 完全离开即结束。
+    返回中枢列表, 每个: {start_fx, end_fx, ZG, ZD, GG, DD, start_time, end_time, bis}。
+    start_fx/end_fx 为 seq 下标; 一个中枢覆盖 seq[start_fx..end_fx]。"""
+    bis = _bi_lohi(seq)
+    out = []
+    i = 0
+    while i + (min_bis - 1) < len(bis):
+        lo3 = [bis[i + k][0] for k in range(min_bis)]
+        hi3 = [bis[i + k][1] for k in range(min_bis)]
+        ZG = min(hi3); ZD = max(lo3)
+        if ZG > ZD:                                    # 前三笔重叠 → 成枢
+            GG = max(hi3); DD = min(lo3)
+            j = i + min_bis                            # 尝试延伸
+            while j < len(bis) and bis[j][0] <= ZG and bis[j][1] >= ZD:
+                GG = max(GG, bis[j][1]); DD = min(DD, bis[j][0]); j += 1
+            end_fx = j + 1 if j < len(bis) else len(seq) - 1   # 覆盖到最后一笔的右端分型
+            end_fx = min(end_fx, len(seq) - 1)
+            out.append({"start_fx": i, "end_fx": end_fx, "ZG": ZG, "ZD": ZD,
+                        "GG": GG, "DD": DD, "start_time": seq[i].open_time,
+                        "end_time": seq[end_fx].open_time, "bis": j - i})
+            i = j                                      # 中枢结束后继续找下一个
+        else:
+            i += 1
+    return out
+
+
+def stall_after(klines, merged, fx, max_gap: int = 3):
+    """通用停顿K(可枚举历史, 不要求是最后一根): 分型确认后 max_gap 根内, 第一根
+    收盘突破右侧合并K极值的K。底分型→收盘>右合并K最高; 顶分型→收盘<右合并K最低。
+    返回该K原始下标 或 None。"""
+    rk = fx.mid_merged_idx + 1
+    if rk >= len(merged):
+        return None
+    ref_high, ref_low = merged[rk].high, merged[rk].low
+    start = fx.confirm_src_idx + 1
+    for idx in range(start, min(len(klines), start + max_gap)):
+        c = float(klines[idx]["close"])
+        if fx.kind == "bottom" and c > ref_high:
+            return idx
+        if fx.kind == "top" and c < ref_low:
+            return idx
+    return None
+
+
+def find_buy_points(klines, min_merged: int = 5, max_gap: int = 3,
+                    vol_ma: int = 10, vol_mult: float = 2.0, apply_quality: bool = False):
+    """枚举全历史 一买/二买/一卖/二卖(按 v1 锁定定义)。
+    返回列表, 每条: {type, direction, fx_price, fx_time, fx_src_idx, stall_idx, stall_time,
+                    ref_price(二买/二卖=一买/一卖低/高点), grade, vol_ratio}。
+    一买(宽): 下跌笔末端底分型+停顿。 二买(严): B1(下跌笔末底)→T1顶(成笔)→B2底(成笔) 且 B2>B1 +停顿。"""
+    merged, seq = build_bi(klines, min_merged)
+    pts = []
+    if len(seq) < 2:
+        return pts, merged, seq
+
+    def _q(fx):
+        if not apply_quality:
+            g = fractal_grade(klines, merged, fx)
+            return True, g, round(front_vol_ratio(klines, merged, fx, vol_ma), 2)
+        return quality_ok(klines, merged, fx, vol_ma, vol_mult)
+
+    def _emit(fx, typ, direction, st, ref=None):
+        ok, grade, vr = _q(fx)
+        if not ok:
+            return
+        pts.append({"type": typ, "direction": direction, "fx_price": fx.extreme_price,
+                    "fx_time": fx.open_time, "fx_src_idx": fx.extreme_src_idx,
+                    "stall_idx": st, "stall_time": int(klines[st]["open_time"]),
+                    "ref_price": ref, "grade": grade, "vol_ratio": vr})
+
+    # ① 一买/一卖: 任意"末端笔"分型 + 停顿
+    for k in range(1, len(seq)):
+        fx, prev = seq[k], seq[k - 1]
+        if fx.kind == "bottom" and prev.kind == "top":      # 下跌笔末端底分型
+            st = stall_after(klines, merged, fx, max_gap)
+            if st is not None:
+                _emit(fx, "buy1", "long", st)
+        elif fx.kind == "top" and prev.kind == "bottom":    # 上涨笔末端顶分型
+            st = stall_after(klines, merged, fx, max_gap)
+            if st is not None:
+                _emit(fx, "sell1", "short", st)
+
+    # ② 二买/二卖: 严格 B1→T1(成笔)→B2(成笔), B2 更高低点 / T2 更低高点 + 停顿
+    for k in range(len(seq) - 2):
+        A, M, B = seq[k], seq[k + 1], seq[k + 2]
+        if A.kind == "bottom" and M.kind == "top" and B.kind == "bottom":
+            if B.extreme_price > A.extreme_price:           # 不破一买低点
+                st = stall_after(klines, merged, B, max_gap)
+                if st is not None:
+                    _emit(B, "buy2", "long", st, ref=A.extreme_price)
+        elif A.kind == "top" and M.kind == "bottom" and B.kind == "top":
+            if B.extreme_price < A.extreme_price:           # 不破一卖高点
+                st = stall_after(klines, merged, B, max_gap)
+                if st is not None:
+                    _emit(B, "sell2", "short", st, ref=A.extreme_price)
+
+    pts.sort(key=lambda p: p["stall_time"])
+    return pts, merged, seq
