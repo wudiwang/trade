@@ -20,11 +20,12 @@ except Exception:
 from app.engine import chan_bi as CB
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 import uvicorn
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, ".btcache")
+_LWC = os.path.join(ROOT, "app", "static", "lwc.js")
 DAYS = 30
 app = FastAPI()
 
@@ -38,6 +39,11 @@ def _symbols():
             out.append(s)
     out.sort()
     return out
+
+
+@app.get("/lib/lwc.js")
+def lib_lwc():
+    return Response(open(_LWC, encoding="utf-8").read(), media_type="application/javascript")
 
 
 @app.get("/api/symbols")
@@ -72,7 +78,7 @@ def api_chart(sym: str, quality: int = 0):
 HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>缠论底座验证器</title>
-<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script src="/lib/lwc.js"></script>
 <style>
  body{margin:0;font:13px system-ui;background:#0e1116;color:#d6dae0}
  #bar{padding:8px 12px;border-bottom:1px solid #222;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -96,6 +102,11 @@ HTML = """<!DOCTYPE html><html lang=zh><head><meta charset=utf-8>
 <div id=chart></div>
 <div id=info class=muted>选币 → 图上叠加 笔/中枢/一买二买。点标记看详情。</div>
 <script>
+if(typeof LightweightCharts==='undefined'){
+  document.getElementById('info').innerHTML='<b style="color:#f85149">图表库未加载 (/lib/lwc.js 取不到)。刷新试试;若仍空白告诉我。</b>';
+  throw new Error('LightweightCharts missing');
+}
+window.onerror=function(m){var el=document.getElementById('info');if(el)el.innerHTML='<b style="color:#f85149">前端报错: '+m+'</b>';};
 const el=document.getElementById('chart');
 const chart=LightweightCharts.createChart(el,{layout:{background:{color:'#0e1116'},textColor:'#d6dae0'},
  grid:{vertLines:{color:'#161b22'},horzLines:{color:'#161b22'}},timeScale:{timeVisible:true,secondsVisible:false},
@@ -148,7 +159,11 @@ chart.subscribeClick(param=>{
  if(!param.time||!window._pts)return; const p=window._pts[param.time]; if(!p)return;
  const nm={buy1:'一买',buy2:'二买',sell1:'一卖',sell2:'二卖'}[p.type];
  let s=`<b class=${p.type[0]+p.type.slice(-1)}>${nm}</b> @ ${new Date(p.t*1000).toLocaleString('zh-CN')} · 分型价 ${p.fx_price} · 强度 ${p.grade} · 放量 ${p.vol}x`;
- if(p.ref!=null)s+=` · ${p.type==='buy2'?'一买低点':'一卖高点'} ${p.ref} (${p.type==='buy2'?p.fx_price>p.ref:'':''}${p.type==='buy2'?' 不破✓':''})`;
+ if(p.ref!=null){
+   const lbl=p.type==='buy2'?'一买低点':'一卖高点';
+   const ok=(p.type==='buy2'&&p.fx_price>p.ref)||(p.type==='sell2'&&p.fx_price<p.ref);
+   s+=` · ${lbl} ${p.ref}${ok?' 不破✓':''}`;
+ }
  document.getElementById('info').innerHTML=s;
 });
 ['cB1','cB2','cS1','cS2','cZ','cBi','cQ'].forEach(id=>document.getElementById(id).onchange=load);
