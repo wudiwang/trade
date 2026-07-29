@@ -325,7 +325,15 @@ def _stall_entry_idx(direction: str, klines: list, second: dict, params: dict) -
 
 
 def _entry_near_second(direction: str, klines: list, second: dict, entry: float, sl: float, params: dict) -> bool:
-    max_bars = int(params.get("max_signal_bars_after_second", 2))
+    """入场价是否【紧贴】第二极值(价格维度)。
+
+    2026-07-29: 原先这里还有一道"新鲜度"时间检查(stall_idx - second_idx <= max_signal_bars_after_second=2)。
+    旧代码里 stall_idx 恒等于 second_idx+2, 该检查恒不触发, 是休眠的冗余保险;
+    停顿逻辑改用【合并K基准 + stall_max_gap_bars】后, 它变成真约束并把新参数完全压制
+    (实测 stall_max_gap_bars 从1扫到30 信号数恒定不变 = 死参数)。
+    时间门现由 _stall_entry_idx 唯一负责, 此处只管价格是否贴近第二极值。
+    (bt_registry 的回测路径 stall_idx 亦恒为 second_idx+2, 移除对其无影响。)
+    """
     max_leg_ratio = float(params.get("max_entry_leg_ratio", 0.5))
     if direction == "long":
         second_idx = int(second.get("L2_idx", len(klines) - 1))
@@ -336,9 +344,6 @@ def _entry_near_second(direction: str, klines: list, second: dict, entry: float,
         leg = abs(float(second["H1"]) - float(second["L1"]))
         detached = float(second["H2"]) - entry
 
-    freshness_idx = int(second.get("stall_idx", len(klines) - 1))
-    if freshness_idx - second_idx > max_bars:
-        return False
     return leg > 0 and detached <= max_leg_ratio * leg
 
 
