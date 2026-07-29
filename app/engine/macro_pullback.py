@@ -276,27 +276,35 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
 
 
 def _stall_entry_idx(direction: str, klines: list, second: dict, params: dict) -> int | None:
-    max_bars = int(params.get("max_signal_bars_after_second", 2))
+    """停顿确认(2026-07-29 修: 缠论正统口径 = 去包含合并K)。
+    旧实现用【原始K的第+1根】当"右K",可该根常被分型低K包含(去包含后不成立), 且只给2根死线,
+    导致漂亮的低位分型因"停顿差1根/比错对象"被漏。改为:
+      - 停顿判定对象 = 分型右侧【合并K】的高/低点(真去包含)
+      - 入场=当前最后一根K, 停顿=前一根K收盘突破该合并K极值
+      - 死线放宽到 stall_max_gap_bars 根(从分型确认K算起), 让停顿"迟几根走出来"也算
+    """
+    from .chan import find_fractals, merge_klines
+    max_gap = int(params.get("stall_max_gap_bars", params.get("max_signal_bars_after_second", 2)))
     last_idx = len(klines) - 1
+    entry_idx = last_idx
+    stall_idx = last_idx - 1
+    if stall_idx < 2:
+        return None
+    second_idx = int(second["L2_idx"]) if direction == "long" else int(second["H2_idx"])
+    kind = "bottom" if direction == "long" else "top"
+    merged = merge_klines(klines)
+    fx = next((f for f in find_fractals(klines, merged)
+               if f.kind == kind and f.extreme_src_idx == second_idx), None)
+    if fx is None:
+        return None
+    rk = fx.mid_merged_idx + 1                    # 分型右侧合并K
+    if rk >= len(merged):
+        return None
+    if not (fx.confirm_src_idx < stall_idx <= fx.confirm_src_idx + max_gap):
+        return None                              # 停顿须在分型确认后 max_gap 根内
     if direction == "long":
-        second_idx = int(second["L2_idx"])
-        right_idx = second_idx + 1
-        stall_idx = right_idx + 1
-        entry_idx = stall_idx + 1
-        if entry_idx >= len(klines) or last_idx != entry_idx:
-            return None
-        if stall_idx - second_idx > max_bars:
-            return None
-        return entry_idx if _f(klines[stall_idx], "close") > _f(klines[right_idx], "high") else None
-    second_idx = int(second["H2_idx"])
-    right_idx = second_idx + 1
-    stall_idx = right_idx + 1
-    entry_idx = stall_idx + 1
-    if entry_idx >= len(klines) or last_idx != entry_idx:
-        return None
-    if stall_idx - second_idx > max_bars:
-        return None
-    return entry_idx if _f(klines[stall_idx], "close") < _f(klines[right_idx], "low") else None
+        return entry_idx if _f(klines[stall_idx], "close") > merged[rk].high else None
+    return entry_idx if _f(klines[stall_idx], "close") < merged[rk].low else None
 
 
 def _entry_near_second(direction: str, klines: list, second: dict, entry: float, sl: float, params: dict) -> bool:
