@@ -228,26 +228,30 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
     bottoms = _chan_fractal_extremes_after(klines, l1_idx + 3, "bottom")
-    # 二买底 L2 = L1之后【最低的底】(仅次于最低点L1的第二低点); 不许退而求其次取更高更晚的底凑数。
-    # 2026-07-29 用户: 若真正的第二低点自身不合格, 整条作废, 不许落到第三/四低点。
-    cands = [j for j in bottoms if _f(klines[j], "low") >= l1 * (1 - tol)]
-    if not cands:
-        return None
-    l2_idx = min(cands, key=lambda j: _f(klines[j], "low"))
-    leg_high_idx = max(range(l1_idx + 1, l2_idx + 1), key=lambda x: _f(klines[x], "high"))
-    leg_high = _f(klines[leg_high_idx], "high")
-    if _effective_bar_count(klines, l1_idx, leg_high_idx) < min_bars:
-        return None
-    if _effective_bar_count(klines, leg_high_idx, l2_idx) < min_bars:
-        return None
-    if (leg_high - l1) / max(l1, 1e-12) < min_leg:
-        return None
-    if not _leg_quality_ok(params, klines, l1, leg_high,
-                           _f(klines[l2_idx], "low"), l1_idx, leg_high_idx):
-        return None
-    return {"L1": l1, "H1": leg_high, "L2": _f(klines[l2_idx], "low"),
-            "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"]),
-            "L1_idx": l1_idx, "H1_idx": leg_high_idx, "L2_idx": l2_idx}
+    for l2_idx in bottoms:
+        if _f(klines[l2_idx], "low") < l1 * (1 - tol):
+            continue
+        leg_high_idx = max(range(l1_idx + 1, l2_idx + 1), key=lambda x: _f(klines[x], "high"))
+        leg_high = _f(klines[leg_high_idx], "high")
+        # 2026-07-29 用户: 二买底必须是"仅次于L1的第二低点"——即【拉升高点H1之后最低的底】。
+        # 若 H1 与该候选之间已存在更低的底(它才是真二买点却没成), 说明结构已降级, 该候选是第三/四低点 → 跳过。
+        # (只比 H1 之后的底; H1 之前的底属上涨腿内部, 不参与竞争)
+        if any(_f(klines[j], "low") < _f(klines[l2_idx], "low")
+               for j in bottoms if leg_high_idx < j < l2_idx):
+            continue
+        if _effective_bar_count(klines, l1_idx, leg_high_idx) < min_bars:
+            continue
+        if _effective_bar_count(klines, leg_high_idx, l2_idx) < min_bars:
+            continue
+        if (leg_high - l1) / max(l1, 1e-12) < min_leg:
+            continue
+        if not _leg_quality_ok(params, klines, l1, leg_high,
+                               _f(klines[l2_idx], "low"), l1_idx, leg_high_idx):
+            continue
+        return {"L1": l1, "H1": leg_high, "L2": _f(klines[l2_idx], "low"),
+                "L1_time": int(klines[l1_idx]["open_time"]), "L2_time": int(klines[l2_idx]["open_time"]),
+                "L1_idx": l1_idx, "H1_idx": leg_high_idx, "L2_idx": l2_idx}
+    return None
 
 
 def _short_second(klines: list, first: dict, params: dict) -> dict | None:
@@ -257,26 +261,29 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
     tol = float(params.get("second_tolerance_pct", 0.2)) / 100.0
     min_bars = int(params.get("min_effective_bars_between", 5))
     tops = _chan_fractal_extremes_after(klines, h1_idx + 3, "top")
-    # 二卖顶 H2 = H1之后【最高的顶】(仅次于最高点H1的第二高点); 不许退而求其次取更低更晚的顶凑数。
-    # 2026-07-29 用户: 若真正的第二高点自身不合格(如反弹太深近双顶), 整条作废, 不许落到第三/四高点。
-    cands = [j for j in tops if _f(klines[j], "high") <= h1 * (1 + tol)]
-    if not cands:
-        return None
-    h2_idx = max(cands, key=lambda j: _f(klines[j], "high"))
-    leg_low_idx = min(range(h1_idx + 1, h2_idx + 1), key=lambda x: _f(klines[x], "low"))
-    leg_low = _f(klines[leg_low_idx], "low")
-    if _effective_bar_count(klines, h1_idx, leg_low_idx) < min_bars:
-        return None
-    if _effective_bar_count(klines, leg_low_idx, h2_idx) < min_bars:
-        return None
-    if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
-        return None
-    if not _leg_quality_ok(params, klines, h1, leg_low,
-                           _f(klines[h2_idx], "high"), h1_idx, leg_low_idx):
-        return None
-    return {"H1": h1, "L1": leg_low, "H2": _f(klines[h2_idx], "high"),
-            "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"]),
-            "H1_idx": h1_idx, "L1_idx": leg_low_idx, "H2_idx": h2_idx}
+    for h2_idx in tops:
+        if _f(klines[h2_idx], "high") > h1 * (1 + tol):
+            continue
+        leg_low_idx = min(range(h1_idx + 1, h2_idx + 1), key=lambda x: _f(klines[x], "low"))
+        leg_low = _f(klines[leg_low_idx], "low")
+        # 2026-07-29 用户: 二卖顶必须是"仅次于H1的第二高点"——即【回落低点之后最高的顶】。
+        # 若回落低点与该候选之间已存在更高的顶(它才是真二卖点却没成), 说明结构已降级, 该候选是第三/四高点 → 跳过。
+        if any(_f(klines[j], "high") > _f(klines[h2_idx], "high")
+               for j in tops if leg_low_idx < j < h2_idx):
+            continue
+        if _effective_bar_count(klines, h1_idx, leg_low_idx) < min_bars:
+            continue
+        if _effective_bar_count(klines, leg_low_idx, h2_idx) < min_bars:
+            continue
+        if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
+            continue
+        if not _leg_quality_ok(params, klines, h1, leg_low,
+                               _f(klines[h2_idx], "high"), h1_idx, leg_low_idx):
+            continue
+        return {"H1": h1, "L1": leg_low, "H2": _f(klines[h2_idx], "high"),
+                "H1_time": int(klines[h1_idx]["open_time"]), "H2_time": int(klines[h2_idx]["open_time"]),
+                "H1_idx": h1_idx, "L1_idx": leg_low_idx, "H2_idx": h2_idx}
+    return None
 
 
 def _stall_entry_idx(direction: str, klines: list, second: dict, params: dict) -> int | None:
