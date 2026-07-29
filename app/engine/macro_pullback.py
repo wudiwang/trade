@@ -245,6 +245,10 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
             continue
         if (leg_high - l1) / max(l1, 1e-12) < min_leg:
             continue
+        # 2026-07-29 用户: 回调段本身也要有像样幅度(同 min_leg_pct)。
+        # "成笔"只管根数, 管不了幅度 —— 横盘飘移能凑够根数却不是真回调。
+        if (leg_high - _f(klines[l2_idx], "low")) / max(leg_high, 1e-12) < min_leg:
+            continue
         eligible.append((l2_idx, leg_high_idx, leg_high))
     if not eligible:
         return None
@@ -279,6 +283,9 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
         if _effective_bar_count(klines, leg_low_idx, h2_idx) < min_bars:
             continue
         if (h1 - leg_low) / max(h1, 1e-12) < min_leg:
+            continue
+        # 2026-07-29 用户: 反弹段本身也要有像样幅度(同 min_leg_pct), 见 _long_second 同注。
+        if (_f(klines[h2_idx], "high") - leg_low) / max(leg_low, 1e-12) < min_leg:
             continue
         eligible.append((h2_idx, leg_low_idx, leg_low))
     if not eligible:
