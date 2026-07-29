@@ -249,6 +249,10 @@ def _long_second(klines: list, first: dict, params: dict) -> dict | None:
         # "成笔"只管根数, 管不了幅度 —— 横盘飘移能凑够根数却不是真回调。
         if (leg_high - _f(klines[l2_idx], "low")) / max(leg_high, 1e-12) < min_leg:
             continue
+        # 2026-07-29 用户: L2 必须是【它自己那段回调里真正的最低点】。
+        # 若 H1 与该候选之间存在更低的低点(那才是真二买位, 只是没成笔), 该候选就是变形结构 → 不合格。
+        if min(_f(klines[x], "low") for x in range(leg_high_idx + 1, l2_idx + 1)) < _f(klines[l2_idx], "low"):
+            continue
         eligible.append((l2_idx, leg_high_idx, leg_high))
     if not eligible:
         return None
@@ -286,6 +290,9 @@ def _short_second(klines: list, first: dict, params: dict) -> dict | None:
             continue
         # 2026-07-29 用户: 反弹段本身也要有像样幅度(同 min_leg_pct), 见 _long_second 同注。
         if (_f(klines[h2_idx], "high") - leg_low) / max(leg_low, 1e-12) < min_leg:
+            continue
+        # H2 必须是【它自己那段反弹里真正的最高点】(镜像 _long_second)。
+        if max(_f(klines[x], "high") for x in range(leg_low_idx + 1, h2_idx + 1)) > _f(klines[h2_idx], "high"):
             continue
         eligible.append((h2_idx, leg_low_idx, leg_low))
     if not eligible:
@@ -412,6 +419,9 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         sl = second["L2"] * (1 - float(params.get("stop_buffer_pct", 0.0)) / 100.0)
         if sl >= entry:
             return None
+        # 2026-07-29 用户: 二买不得买在【反弹高点H1之上】—— 那已是突破追高, 不再是回调买点。
+        if entry > float(second["H1"]):
+            return None
         if not _entry_near_second(direction, klines, second, entry, sl, params):
             return None
         label = "second_buy"
@@ -432,6 +442,9 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         entry = _f(klines[entry_idx], "close")
         sl = second["H2"] * (1 + float(params.get("stop_buffer_pct", 0.0)) / 100.0)
         if sl <= entry:
+            return None
+        # 2026-07-29 用户: 二卖不得卖在【回落低点L1之下】(镜像二买不得高于H1)。
+        if entry < float(second["L1"]):
             return None
         if not _entry_near_second(direction, klines, second, entry, sl, params):
             return None

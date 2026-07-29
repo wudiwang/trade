@@ -41,7 +41,7 @@ macro_pullback:
   max_signal_bars_after_second: 2   # (旧)保留兼容; 停顿死线现由 stall_max_gap_bars 控
   stall_max_gap_bars: 2             # 2026-07-29 停顿改用合并K右K极值判定, 分型确认后N根内出现即算(放宽死线)
   max_entry_leg_ratio: 0.5          # 入场相对L2/H2脱离不超过前一段振幅50%, 中位线只参考不一票否决
-  min_effective_bars_between: 5     # H1/L1/H2两两之间至少5根去包含后的有效K
+  min_effective_bars_between: 7     # 各段至少7根去包含K(含两端)。2026-07-29 用户由5提到7(5太松, ACE案例门门压线)
   # ↓ 2026-07-19 由 15 条人工触发反馈反推(ok组5条 vs bad组10条在这三项上几乎完全分离)
   retrace_min: 0.20         # 回调下限(2026-07-29 用户: 回调幅度落在20%~50%区间)
   retrace_max: 0.50          # 回调深度上限(2026-07-29 用户重定规则: 爆量K低点→第一波反弹高点, 回调50%以内即合格)
