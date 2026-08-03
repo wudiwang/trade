@@ -470,6 +470,63 @@ def build_zhongshu(seq, min_bis: int = 3):
     return out
 
 
+def significant_zhongshu(zs: list, ref_price: float, min_width_pct: float = 0.0,
+                         min_bis: int = 0) -> list:
+    """过滤掉噪音级微中枢。2026-08-01: 实测5m上会出现89个中枢, 部分宽度仅万分之一
+    (三笔勉强重叠出的极窄区间), 拿它们比高低判趋势纯属噪音。
+      min_width_pct: (ZG-ZD)/参考价 的最小百分比
+      min_bis:       中枢至少包含几笔(延伸得越久越有意义)
+    """
+    out = []
+    for z in zs:
+        if min_width_pct > 0 and ref_price > 0:
+            if (z["ZG"] - z["ZD"]) / ref_price * 100.0 < min_width_pct:
+                continue
+        if min_bis and z.get("bis", 0) < min_bis:
+            continue
+        out.append(z)
+    return out
+
+
+def trend_by_zhongshu(klines: list, min_merged: int = 5, min_bis: int = 3,
+                      min_width_pct: float = 0.0, zs_min_bis: int = 0):
+    """缠论正统趋势判定(2026-08-01)：**趋势 = 同方向至少两个中枢**。
+
+    - 上涨：后一个中枢【完全在前一个之上】(后枢下沿 ZD > 前枢上沿 ZG)
+    - 下跌：后一个中枢【完全在前一个之下】(后枢上沿 ZG < 前枢下沿 ZD)
+    - 只有一个中枢、或两枢有重叠 → 盘整(无序)
+    与均线法(trend_state/trend_direction)的区别：这是结构口径, 不会因为一根长阳/长阴
+    就翻向, 也不会在窄幅震荡里被均线斜率骗出方向。
+
+    返回 dict:
+      state      'up' / 'down' / 'range'
+      n_zs       中枢个数
+      last/prev  最近两个中枢 (ZG/ZD/GG/DD/bis/start_time/end_time)
+      pos        当前收盘相对【最后一个中枢】的位置: 'above'/'inside'/'below'
+                 (三买/三卖看这个: 离枢向上且回调不回枢 = 三买)
+    """
+    _, seq = build_bi(klines, min_merged)
+    zs = build_zhongshu(seq, min_bis)
+    close = float(klines[-1]["close"]) if klines else 0.0
+    if min_width_pct > 0 or zs_min_bis:
+        zs = significant_zhongshu(zs, close, min_width_pct, zs_min_bis)
+    out = {"state": "range", "n_zs": len(zs), "last": None, "prev": None, "pos": None}
+    if not zs:
+        return out
+    last = zs[-1]
+    out["last"] = last
+    out["pos"] = ("above" if close > last["ZG"] else
+                  "below" if close < last["ZD"] else "inside")
+    if len(zs) >= 2:
+        prev = zs[-2]
+        out["prev"] = prev
+        if last["ZD"] > prev["ZG"]:
+            out["state"] = "up"
+        elif last["ZG"] < prev["ZD"]:
+            out["state"] = "down"
+    return out
+
+
 def stall_after(klines, merged, fx, max_gap: int = 3):
     """通用停顿K(可枚举历史, 不要求是最后一根): 分型确认后 max_gap 根内, 第一根
     收盘突破右侧合并K极值的K。底分型→收盘>右合并K最高; 顶分型→收盘<右合并K最低。
