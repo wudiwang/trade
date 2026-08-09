@@ -56,14 +56,37 @@ async def amain() -> None:
             if t.tm_hour == 8 and day != last_day and bot.enabled:
                 last_day = day
                 log.info("daily report firing")
+                since = int(_t.time()) - 86400
                 n_sig = db.one("SELECT COUNT(*) c FROM signals WHERE created_at > ?",
-                               (int(_t.time()) - 86400,))["c"]
-                lines = [f"📅 <b>日报</b>（近24h）", f"信号: {n_sig} 个"]
-                for tr in ("buy1", "buy2"):
-                    t = engine.paper.stats(tr)
-                    if t["closed"] or t["open"]:
-                        lines.append(f"{tr}: {t['closed']}平/{t['open']}持 | 胜率 {t['win_rate']}% | "
-                                     f"累计 {t['total_pnl']}U | 期望 {t['expectancy_r']}R")
+                               (since,))["c"]
+                # 近24h【平仓】明细: 赚/亏笔数 + 当日盈亏 (2026-08-10 用户要求)
+                rows = db.query(
+                    "SELECT pnl, pnl_r, result, track FROM paper_trades "
+                    "WHERE closed_at > ? AND result IN ('tp','sl','rev')", (since,)) or []
+                win = sum(1 for r in rows if (r["pnl"] or 0) > 0)
+                loss = len(rows) - win
+                pnl = sum((r["pnl"] or 0) for r in rows)
+                n_open = (db.one("SELECT COUNT(*) c FROM paper_trades WHERE result='open'")
+                          or {"c": 0})["c"]
+                lines = [f"📅 <b>日报</b>（近24h）",
+                         f"触发信号: <b>{n_sig}</b> 个"]
+                if rows:
+                    wr = win / len(rows) * 100
+                    lines.append(f"已平仓: <b>{len(rows)}</b> 笔 — 赚 {win} / 亏 {loss}（胜率 {wr:.0f}%）")
+                    lines.append(f"当日盈亏: <b>{pnl:+.1f}U</b>")
+                    fee = len(rows) * 0.45      # 500U名义×双边0.045% ≈ 0.45U/笔
+                    lines.append(f"扣手续费后约: <b>{pnl - fee:+.1f}U</b>（费≈{fee:.1f}U）")
+                    # 按方向拆
+                    for tr in ("second_buy", "second_sell"):
+                        sub = [r for r in rows if r["track"] == tr]
+                        if sub:
+                            w = sum(1 for r in sub if (r["pnl"] or 0) > 0)
+                            nm = "二买(多)" if tr == "second_buy" else "二卖(空)"
+                            lines.append(f"　{nm}: {len(sub)}笔 赚{w}/亏{len(sub)-w} "
+                                         f"{sum((r['pnl'] or 0) for r in sub):+.1f}U")
+                else:
+                    lines.append("已平仓: 0 笔")
+                lines.append(f"当前持仓: {n_open} 笔")
                 await bot.notify("\n".join(lines))
                 log.info("daily report sent")
     asyncio.create_task(daily_report())
