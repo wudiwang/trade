@@ -10,3 +10,4 @@ venv/
 logs/
 .btcache/
 deploy/trade.tar.gz
+.worktrees/
