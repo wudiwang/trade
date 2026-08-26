@@ -1,6 +1,7 @@
 from decimal import Decimal
 
-from app.review.models import ClosedPnl, Execution, Transaction, beijing_day, summarize_ledger
+from app.review.models import (ClosedPnl, Execution, Transaction, beijing_day,
+                               transaction_reconciliation_difference, summarize_ledger)
 from app.review.store import ReviewStore
 
 
@@ -33,6 +34,27 @@ def test_transaction_change_is_financial_truth():
     assert result.funding == Decimal("-1")
     assert result.fees == Decimal("2")
     assert result.net_change == Decimal("9")
+
+
+def test_reconciliation_checks_bybit_transaction_identity_without_double_counting_costs():
+    assert transaction_reconciliation_difference([transaction()]) == Decimal("0")
+    assert transaction_reconciliation_difference([transaction(change=Decimal("8.99"))]) == Decimal("0.01")
+
+
+def test_transaction_reconciliation_errors_cannot_cancel_each_other():
+    rows = [transaction(tx_id="a", change=Decimal("10")),
+            transaction(tx_id="b", change=Decimal("8"))]
+    assert transaction_reconciliation_difference(rows) == Decimal("2")
+
+
+def test_liquidation_and_adl_are_trading_performance_not_external_transfers():
+    rows = [transaction(tx_id="liq", tx_type="LIQUIDATION", change=Decimal("-50"),
+                        cash_flow=Decimal("-50"), funding=Decimal("0"), fee=Decimal("0")),
+            transaction(tx_id="adl", tx_type="ADL", change=Decimal("-10"),
+                        cash_flow=Decimal("-10"), funding=Decimal("0"), fee=Decimal("0"))]
+    summary = summarize_ledger(rows)
+    assert summary.net_change == Decimal("-60")
+    assert summary.external_change == Decimal("0")
 
 
 def test_transfers_are_separate_from_trading_performance():
@@ -76,3 +98,13 @@ def test_store_persists_raw_rows_and_daily_review_idempotently(tmp_path):
     assert store.count("bybit_executions") == 1
     assert store.count("bybit_closed_pnl") == 1
     assert store.count("daily_trade_reviews") == 1
+
+
+def test_store_tracks_sync_failure_and_delivery_idempotency(tmp_path):
+    store = ReviewStore(tmp_path / "review.db")
+    run_id = store.start_sync(1, 2)
+    store.finish_sync(run_id, "failed", "missing credentials")
+    assert store.sync_status(run_id) == "failed"
+    assert store.was_delivered("2026-08-27", "hash") is False
+    store.mark_delivered("2026-08-27", "hash")
+    assert store.was_delivered("2026-08-27", "hash") is True

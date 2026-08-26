@@ -33,6 +33,11 @@ def sign_v5(secret: str, timestamp: str, api_key: str, recv_window: str, query: 
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
+def encode_query(params: dict[str, Any]) -> str:
+    clean = {key: value for key, value in params.items() if value not in (None, "")}
+    return urlencode(sorted(clean.items()))
+
+
 class BybitReadClient:
     def __init__(
         self,
@@ -50,8 +55,7 @@ class BybitReadClient:
         self._requester = requester or self._request
 
     async def _request(self, path: str, params: dict[str, Any], private: bool) -> dict[str, Any]:
-        clean = {key: value for key, value in params.items() if value not in (None, "")}
-        query = urlencode(sorted(clean.items()))
+        query = encode_query(params)
         headers = {}
         if private:
             timestamp = str(int(time.time() * 1000))
@@ -64,7 +68,8 @@ class BybitReadClient:
                 ),
             }
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
-            async with session.get(f"{self.base_url}{path}", params=clean, headers=headers) as response:
+            url = f"{self.base_url}{path}" + (f"?{query}" if query else "")
+            async with session.get(url, headers=headers) as response:
                 response.raise_for_status()
                 payload = await response.json()
         if int(payload.get("retCode", 0)) != 0:
@@ -95,11 +100,21 @@ class BybitReadClient:
         return list(rows.values())
 
     async def executions(self, category: str, start_ms: int, end_ms: int) -> list[Execution]:
-        raw = await self._pages(
-            "/v5/execution/list",
-            {"category": category, "startTime": start_ms, "endTime": end_ms, "limit": 100},
-            "execId",
-        )
+        raw_by_id: dict[str, dict] = {}
+        cursor_ms = start_ms
+        max_window = 7 * 86_400_000
+        while cursor_ms < end_ms:
+            chunk_end = min(end_ms, cursor_ms + max_window)
+            chunk = await self._pages(
+                "/v5/execution/list",
+                {"category": category, "startTime": cursor_ms,
+                 "endTime": chunk_end - 1, "limit": 100},
+                "execId",
+            )
+            for item in chunk:
+                raw_by_id[str(item.get("execId", ""))] = item
+            cursor_ms = chunk_end
+        raw = list(raw_by_id.values())
         rows = [
             Execution(
                 exec_id=str(item["execId"]),
@@ -118,6 +133,7 @@ class BybitReadClient:
             )
             for item in raw
         ]
+        rows = [row for row in rows if start_ms <= row.timestamp_ms < end_ms]
         return sorted(rows, key=lambda row: (row.timestamp_ms, row.exec_id, row.order_id, row.leaves_qty))
 
     async def transactions(self, category: str, start_ms: int, end_ms: int) -> list[Transaction]:
@@ -127,7 +143,7 @@ class BybitReadClient:
              "endTime": end_ms, "limit": 50},
             "id",
         )
-        return sorted([
+        rows = [
             Transaction(
                 tx_id=str(item["id"]), category=str(item.get("category") or category),
                 symbol=str(item.get("symbol", "")), timestamp_ms=int(item.get("transactionTime", 0)),
@@ -135,7 +151,9 @@ class BybitReadClient:
                 funding=decimal(item.get("funding")), fee=decimal(item.get("fee")),
                 change=decimal(item.get("change")), currency=str(item.get("currency", "")),
             ) for item in raw
-        ], key=lambda row: (row.timestamp_ms, row.tx_id))
+        ]
+        return sorted([row for row in rows if start_ms <= row.timestamp_ms < end_ms],
+                      key=lambda row: (row.timestamp_ms, row.tx_id))
 
     async def closed_pnl(self, category: str, start_ms: int, end_ms: int) -> list[ClosedPnl]:
         raw = await self._pages(
@@ -143,7 +161,7 @@ class BybitReadClient:
             {"category": category, "startTime": start_ms, "endTime": end_ms, "limit": 100},
             "orderId",
         )
-        return sorted([
+        rows = [
             ClosedPnl(
                 order_id=str(item["orderId"]), category=category,
                 symbol=str(item.get("symbol", "")), side=str(item.get("side", "")),
@@ -154,7 +172,34 @@ class BybitReadClient:
                 open_fee=decimal(item.get("openFee")), close_fee=decimal(item.get("closeFee")),
                 updated_ms=int(item.get("updatedTime", 0)),
             ) for item in raw
-        ], key=lambda row: (row.updated_ms, row.order_id))
+        ]
+        return sorted([row for row in rows if start_ms <= row.updated_ms < end_ms],
+                      key=lambda row: (row.updated_ms, row.order_id))
+
+    async def positions(self, category: str) -> dict[tuple[str, str, int], Any]:
+        result: dict[tuple[str, str, int], Any] = {}
+        cursor = ""
+        seen_cursors: set[str] = set()
+        while True:
+            params = {"category": category, "settleCoin": "USDT", "limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            payload = await self._requester("/v5/position/list", params, True)
+            page = payload.get("result") or {}
+            for item in (page.get("list") or []):
+                size = decimal(item.get("size"))
+                side = str(item.get("side", "")).lower()
+                signed = -size if side == "sell" else size
+                key = (category, str(item.get("symbol", "")),
+                       int(item.get("positionIdx", 0) or 0))
+                result[key] = signed
+            cursor = str(page.get("nextPageCursor") or "")
+            if not cursor:
+                break
+            if cursor in seen_cursors:
+                raise BybitError("position pagination cursor repeated")
+            seen_cursors.add(cursor)
+        return result
 
     async def wallet_balance(self) -> dict[str, Any]:
         payload = await self._requester(
@@ -173,15 +218,27 @@ class BybitReadClient:
     async def klines(
         self, category: str, symbol: str, interval: str, start_ms: int, end_ms: int
     ) -> list[Kline]:
-        payload = await self._requester(
-            "/v5/market/kline",
-            {"category": category, "symbol": symbol, "interval": interval,
-             "start": start_ms, "end": end_ms, "limit": 1000},
-            False,
+        interval_ms = {"1": 60_000, "3": 180_000, "5": 300_000, "15": 900_000,
+                       "30": 1_800_000, "60": 3_600_000}.get(str(interval))
+        if interval_ms is None:
+            raise ValueError(f"unsupported paged kline interval: {interval}")
+        cursor = start_ms // interval_ms * interval_ms
+        aligned_end = ((end_ms + interval_ms - 1) // interval_ms) * interval_ms
+        collected: dict[int, Kline] = {}
+        while cursor < aligned_end:
+            chunk_end = min(aligned_end, cursor + interval_ms * 1000)
+            payload = await self._requester(
+                "/v5/market/kline",
+                {"category": category, "symbol": symbol, "interval": interval,
+                 "start": cursor, "end": chunk_end - 1, "limit": 1000},
+                False,
+            )
+            for item in ((payload.get("result") or {}).get("list") or []):
+                row = Kline(int(item[0]), decimal(item[1]), decimal(item[2]), decimal(item[3]),
+                            decimal(item[4]), decimal(item[5]), decimal(item[6]))
+                collected[row.start_ms] = row
+            cursor = chunk_end
+        return sorted(
+            (row for row in collected.values() if row.start_ms < end_ms),
+            key=lambda row: row.start_ms,
         )
-        rows = [
-            Kline(int(item[0]), decimal(item[1]), decimal(item[2]), decimal(item[3]),
-                  decimal(item[4]), decimal(item[5]), decimal(item[6]))
-            for item in ((payload.get("result") or {}).get("list") or [])
-        ]
-        return sorted(rows, key=lambda row: row.start_ms)

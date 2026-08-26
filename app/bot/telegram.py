@@ -167,9 +167,10 @@ class TgBot:
                  f"pnl={trade['pnl']:.2f}U ({trade['pnl_r']:+.2f}R)",
         )
 
-    async def notify(self, text: str) -> None:
+    async def notify(self, text: str) -> dict:
         if self.enabled:
-            await self.api("sendMessage", chat_id=self.chat_id, text=text, parse_mode="HTML")
+            return await self.api("sendMessage", chat_id=self.chat_id, text=text, parse_mode="HTML")
+        return {"ok": False, "description": "telegram disabled"}
 
     async def _upload(self, method: str, field: str, path: str, caption: str = "") -> dict:
         if not self.enabled:

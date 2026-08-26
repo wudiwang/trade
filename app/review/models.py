@@ -7,7 +7,10 @@ from typing import Iterable
 
 
 BEIJING = timezone(timedelta(hours=8), name="Asia/Shanghai")
-TRADING_TYPES = {"TRADE", "SETTLEMENT", "SESSION_SETTLE_PNL", "MOVE_POSITION"}
+TRADING_TYPES = {
+    "TRADE", "SETTLEMENT", "SESSION_SETTLE_PNL", "MOVE_POSITION", "LIQUIDATION",
+    "ADL", "DELIVERY", "FEE_REFUND", "BLOCK_TRADE",
+}
 
 
 def decimal(value) -> Decimal:
@@ -58,6 +61,14 @@ def summarize_ledger(rows: Iterable[Transaction]) -> LedgerSummary:
         else:
             external += row.change
     return LedgerSummary(cash, funding, fees, net, external)
+
+
+def transaction_reconciliation_difference(rows: Iterable[Transaction]) -> Decimal:
+    """Verify Bybit's documented identity: change = cashFlow + funding - fee."""
+    return sum(
+        (abs(row.change - (row.cash_flow + row.funding - row.fee)) for row in rows),
+        Decimal("0"),
+    )
 
 
 @dataclass(frozen=True)
@@ -136,3 +147,4 @@ class TradeEpisode:
     fills: list[EpisodeFill] = field(default_factory=list)
     max_abs_qty: Decimal = Decimal("0")
     realized_pnl: Decimal = Decimal("0")
+    inherited_position: bool = False

@@ -9,15 +9,24 @@ def _money(value: float) -> str:
     return f"{value:+.2f}U"
 
 
+def _optional_money(value) -> str:
+    return "未结算" if value is None else _money(float(value))
+
+
+def _optional_percent(value) -> str:
+    return "暂缺午夜权益快照" if value is None else f"{float(value):+.2f}%"
+
+
 def telegram_summary(report: dict) -> str:
     counts = report.get("verdict_counts", {})
     return (
         f"🎬 <b>Bybit 每日复盘 · {html.escape(report['date'])}</b>\n"
         f"净盈亏 <b>{_money(float(report['net_pnl']))}</b> · "
-        f"账户收益 {float(report.get('account_return_pct', 0)):+.2f}%\n"
+        f"账户收益 {_optional_percent(report.get('account_return_pct'))}\n"
         f"手续费 {float(report.get('fees', 0)):.2f}U · 资金费 {float(report.get('funding', 0)):+.2f}U\n"
         f"合规 {counts.get('合规', 0)} · 部分合规 {counts.get('部分合规', 0)} · "
         f"冲动 {counts.get('冲动交易', 0)} · 严重变形 {counts.get('严重变形', 0)}\n"
+        f"证据不足 {counts.get('证据不足', 0)} · 暂不适用 {counts.get('暂不适用', 0)}\n"
         f"明天只改一件事：{html.escape(report.get('tomorrow_action', '保持纪律'))}"
     )
 
@@ -67,7 +76,7 @@ def render_html(report: dict) -> str:
         cards.append(f"""
         <article class="trade" id="trade-{index}">
           <header><div><b>{html.escape(episode['symbol'])}</b> · {'做空' if episode['direction']=='short' else '做多'}</div><span class="verdict">{html.escape(episode['verdict'])}</span></header>
-          <div class="columns"><section><h3>交易结果</h3><div class="money">{_money(float(episode['net_pnl']))}</div><p>标的价格收益 {float(episode.get('price_return_pct',0)):+.2f}%</p></section>
+          <div class="columns"><section><h3>交易结果</h3><div class="money">{_optional_money(episode.get('net_pnl'))}</div><p>标的价格收益 {_optional_percent(episode.get('price_return_pct'))}</p><p>状态：{html.escape(episode.get('status','closed'))}</p></section>
           <section><h3>纪律复盘</h3><p>{html.escape(episode['narrative']['summary'])}</p><p class="action">下一次：{html.escape(episode['narrative']['next_action'])}</p></section></div>
           <div class="tabs"><button onclick="showTf(this,'one-{index}')">1分钟</button><button onclick="showTf(this,'fifteen-{index}')">15分钟</button></div>
           <div id="one-{index}" class="chart">{_chart_svg(episode.get('k1m',[]), episode.get('fills',[]), '1分钟')}</div>
@@ -80,15 +89,22 @@ def render_html(report: dict) -> str:
 <title>Bybit 每日交易电影 · {html.escape(report['date'])}</title>
 <style>
 :root{{--bg:#0c1119;--card:#151d29;--line:#293546;--text:#eef3fa;--muted:#8d98aa;--green:#18b77c;--red:#ef5b66;--gold:#efb44a}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,"Microsoft YaHei",sans-serif}}main{{max-width:980px;margin:auto;padding:22px 14px 70px}}h1{{font-size:25px;margin:0}}.sub{{color:var(--muted)}}.stats{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:20px 0}}.stat,.trade{{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px}}.stat b,.money{{display:block;font-size:23px;font-variant-numeric:tabular-nums}}.trade{{margin:16px 0}}.trade header,.columns{{display:flex;justify-content:space-between;gap:14px}}.columns section{{flex:1;border-top:1px solid var(--line);margin-top:12px}}.verdict{{color:var(--gold)}}.action{{color:var(--gold)}}.chart svg{{width:100%;display:block}}.hidden{{display:none}}button{{background:#263247;color:var(--text);border:0;border-radius:8px;padding:7px 12px;margin-right:6px}}.evidence{{padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,1fr);gap:7px}}.evidence li{{display:flex;justify-content:space-between;background:#101721;padding:8px;border-radius:8px}}.present b{{color:var(--green)}}.absent b{{color:var(--red)}}.unknown b{{color:var(--muted)}}table{{width:100%;border-collapse:collapse}}td,th{{padding:7px;border-bottom:1px solid var(--line);text-align:left}}@media(max-width:650px){{.stats{{grid-template-columns:repeat(2,1fr)}}.columns{{display:block}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,"Microsoft YaHei",sans-serif}}main{{max-width:980px;margin:auto;padding:22px 14px 70px}}h1{{font-size:25px;margin:0}}.sub{{color:var(--muted)}}.warning{{background:#4a2026;border:1px solid var(--red);padding:12px;border-radius:10px;margin:14px 0}}.stats{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:20px 0}}.stat,.trade{{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px}}.stat b,.money{{display:block;font-size:23px;font-variant-numeric:tabular-nums}}.trade{{margin:16px 0}}.trade header,.columns{{display:flex;justify-content:space-between;gap:14px}}.columns section{{flex:1;border-top:1px solid var(--line);margin-top:12px}}.verdict{{color:var(--gold)}}.action{{color:var(--gold)}}.chart svg{{width:100%;display:block}}.hidden{{display:none}}button{{background:#263247;color:var(--text);border:0;border-radius:8px;padding:7px 12px;margin-right:6px}}.evidence{{padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,1fr);gap:7px}}.evidence li{{display:flex;justify-content:space-between;background:#101721;padding:8px;border-radius:8px}}.present b{{color:var(--green)}}.absent b{{color:var(--red)}}.unknown b{{color:var(--muted)}}table{{width:100%;border-collapse:collapse}}td,th{{padding:7px;border-bottom:1px solid var(--line);text-align:left}}@media(max-width:650px){{.stats{{grid-template-columns:repeat(2,1fr)}}.columns{{display:block}}}}
 </style><main><header><div class="sub">BYBIT DAILY REVIEW · 交易结果与纪律分开</div><h1>{html.escape(report['date'])} 每日交易电影</h1><p class="sub">{html.escape(report['window_label'])}</p></header>
-<section class="stats"><div class="stat">净盈亏<b>{_money(float(report['net_pnl']))}</b></div><div class="stat">账户收益<b>{float(report.get('account_return_pct',0)):+.2f}%</b></div><div class="stat">手续费<b>{float(report.get('fees',0)):.2f}U</b></div><div class="stat">交易回合<b>{len(report.get('episodes',[]))}</b></div></section>
+{'' if report.get('status') == 'reconciled' else '<div class="warning">⚠ 数据尚未通过对账，以下内容仅供排查，不是已核准日报。</div>'}
+<section class="stats"><div class="stat">净盈亏<b>{_money(float(report['net_pnl']))}</b></div><div class="stat">账户收益<b>{_optional_percent(report.get('account_return_pct'))}</b></div><div class="stat">手续费<b>{float(report.get('fees',0)):.2f}U</b></div><div class="stat">交易回合<b>{len(report.get('episodes',[]))}</b></div></section>
 {''.join(cards)}<script>const REPORT={payload};function showTf(btn,id){{const trade=btn.closest('.trade');trade.querySelectorAll('.chart').forEach(x=>x.classList.add('hidden'));document.getElementById(id).classList.remove('hidden')}}</script></main></html>"""
 
 
 async def deliver_review(bot, report: dict, png_path: Path, html_path: Path) -> None:
     caption = telegram_summary(report)
     photo = await bot.send_photo(str(png_path), caption=caption)
+    text_result = None
     if not photo.get("ok"):
-        await bot.notify(caption)
-        await bot.send_document(str(html_path), caption="完整交易电影")
+        text_result = await bot.notify(caption)
+    document = await bot.send_document(str(html_path), caption="完整交易电影")
+    text_ok = isinstance(text_result, dict) and text_result.get("ok")
+    if not document.get("ok"):
+        raise RuntimeError("Telegram 完整 HTML 交易电影发送失败")
+    if not photo.get("ok") and not text_ok and not document.get("ok"):
+        raise RuntimeError("Telegram 图片、文本和文档发送均失败")

@@ -31,7 +31,8 @@ def build_prompt(review: DisciplineReview) -> str:
     payload = json.dumps({"fixed_verdict": review.verdict, "evidence": evidence}, ensure_ascii=False)
     return (
         "你是交易纪律复盘助手。只能依据下面证据，不得改动固定结论，不得把盈利等同于正确。"
-        "输出严格 JSON，字段仅限 summary、reasons(最多3条)、next_action、confidence。\n"
+        "输出严格 JSON，字段仅限 summary、reasons(最多3条)、next_action、confidence；"
+        "每条 reason 必须以证据里的原始 label 开头。\n"
         + payload
     )
 
@@ -60,13 +61,21 @@ def deterministic_narrative(review: DisciplineReview) -> Narrative:
 def parse_or_fallback(raw: str, review: DisciplineReview) -> Narrative:
     try:
         value = json.loads(raw)
+        if not isinstance(value, dict) or set(value) != {
+            "summary", "reasons", "next_action", "confidence"
+        }:
+            raise ValueError("unexpected narrative fields")
         summary = str(value["summary"]).strip()
         reasons = tuple(str(item).strip() for item in value["reasons"][:3] if str(item).strip())
         next_action = str(value["next_action"]).strip()
         confidence = str(value["confidence"])
         if not summary or not reasons or not next_action or confidence not in {"low", "medium", "high"}:
             raise ValueError("invalid narrative")
-        return Narrative(summary, reasons, next_action, confidence, "ai")
+        labels = tuple(item.label for item in review.evidence.values())
+        if any(not reason.startswith(labels) for reason in reasons):
+            raise ValueError("AI reason does not cite an evidence label")
+        fixed_summary = f"本笔纪律结论为“{review.verdict}”。"
+        return Narrative(fixed_summary, reasons, next_action, confidence, "ai")
     except (ValueError, TypeError, KeyError, json.JSONDecodeError):
         return deterministic_narrative(review)
 

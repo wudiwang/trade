@@ -42,6 +42,12 @@ def test_report_separates_result_and_compliance():
     assert "部分合规" in html
 
 
+def test_mismatch_report_has_prominent_unapproved_warning():
+    report = sample_report()
+    report["status"] = "mismatch"
+    assert "不是已核准日报" in render_html(report)
+
+
 def test_report_contains_timeframes_and_every_execution_marker():
     html = render_html(sample_report())
     assert "1分钟" in html and "15分钟" in html
@@ -70,6 +76,38 @@ def test_photo_failure_falls_back_to_text_and_document(tmp_path):
     bot = Bot()
     asyncio.run(deliver_review(bot, sample_report(), png_path, html_path))
     assert bot.calls == ["photo", "text", "document"]
+
+
+def test_all_telegram_delivery_paths_failing_is_an_error(tmp_path):
+    class Bot:
+        async def send_photo(self, path, caption=""): return {"ok": False}
+        async def notify(self, text): return {"ok": False}
+        async def send_document(self, path, caption=""): return {"ok": False}
+
+    html_path = tmp_path / "report.html"
+    html_path.write_text(render_html(sample_report()), encoding="utf-8")
+    png_path = render_summary_png(sample_report(), tmp_path / "summary.png")
+    import pytest
+    with pytest.raises(RuntimeError):
+        asyncio.run(deliver_review(Bot(), sample_report(), png_path, html_path))
+
+
+def test_successful_photo_still_sends_complete_html_movie(tmp_path):
+    class Bot:
+        def __init__(self): self.calls = []
+        async def send_photo(self, path, caption=""):
+            self.calls.append("photo"); return {"ok": True}
+        async def notify(self, text):
+            self.calls.append("text"); return {"ok": True}
+        async def send_document(self, path, caption=""):
+            self.calls.append("document"); return {"ok": True}
+
+    html_path = tmp_path / "report.html"
+    html_path.write_text(render_html(sample_report()), encoding="utf-8")
+    png_path = render_summary_png(sample_report(), tmp_path / "summary.png")
+    bot = Bot()
+    asyncio.run(deliver_review(bot, sample_report(), png_path, html_path))
+    assert bot.calls == ["photo", "document"]
 
 
 def test_telegram_summary_is_concise():

@@ -29,7 +29,9 @@ def render_summary_png(report: dict, output: str | Path) -> Path:
     draw.rounded_rectangle((64, 190, 1016, 430), radius=28, fill=card)
     draw.text((105, 225), "今日交易净盈亏", font=_font(25), fill=muted)
     draw.text((105, 280), f"{pnl:+.2f} U", font=_font(74, True), fill=green if pnl >= 0 else red)
-    draw.text((700, 250), f"收益率 {float(report.get('account_return_pct',0)):+.2f}%", font=_font(28, True), fill=ink)
+    account_return = report.get("account_return_pct")
+    return_text = "收益率 暂缺快照" if account_return is None else f"收益率 {float(account_return):+.2f}%"
+    draw.text((700, 250), return_text, font=_font(28, True), fill=ink)
     draw.text((700, 310), f"手续费 {float(report.get('fees',0)):.2f}U", font=_font(23), fill=muted)
     draw.text((700, 350), f"资金费 {float(report.get('funding',0)):+.2f}U", font=_font(23), fill=muted)
     draw.text((64, 500), "纪律分布", font=_font(32, True), fill=ink)
@@ -48,5 +50,8 @@ def render_summary_png(report: dict, output: str | Path) -> Path:
     for i, line in enumerate(chunks[:4]):
         draw.text((100, 980 + i * 54), line, font=_font(31), fill=ink)
     draw.text((64, 1280), "结果不等于纪律 · 盈利不自动代表做对", font=_font(22), fill=muted)
+    if report.get("status") != "reconciled":
+        draw.rectangle((64, 155, 1016, 185), fill="#4a2026")
+        draw.text((76, 156), "数据未通过对账 · 仅供排查", font=_font(20, True), fill=red)
     image.save(output, format="PNG", optimize=True)
     return output

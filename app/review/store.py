@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
@@ -50,6 +51,10 @@ CREATE TABLE IF NOT EXISTS daily_trade_reviews (
 CREATE TABLE IF NOT EXISTS review_feedback (
   review_id TEXT, episode_id TEXT, verdict TEXT, note TEXT, updated_ms INTEGER,
   PRIMARY KEY(review_id, episode_id)
+);
+CREATE TABLE IF NOT EXISTS bybit_review_deliveries (
+  review_id TEXT, content_hash TEXT, sent_ms INTEGER,
+  PRIMARY KEY(review_id, content_hash)
 );
 """
 
@@ -102,6 +107,45 @@ class ReviewStore:
              json.dumps(report, ensure_ascii=False, sort_keys=True)),
         )
         self.connection.commit()
+
+    def start_sync(self, window_start_ms: int, window_end_ms: int) -> int:
+        cursor = self.connection.execute(
+            """INSERT INTO bybit_sync_runs
+            (started_ms,window_start_ms,window_end_ms,status) VALUES (?,?,?,?)""",
+            (int(time.time() * 1000), window_start_ms, window_end_ms, "running"),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def finish_sync(self, run_id: int, status: str, error: str = "") -> None:
+        self.connection.execute(
+            "UPDATE bybit_sync_runs SET finished_ms=?,status=?,error=? WHERE id=?",
+            (int(time.time() * 1000), status, error[:1000], run_id),
+        )
+        self.connection.commit()
+
+    def sync_status(self, run_id: int) -> str:
+        row = self.connection.execute(
+            "SELECT status FROM bybit_sync_runs WHERE id=?", (run_id,)
+        ).fetchone()
+        return str(row[0]) if row else ""
+
+    def was_delivered(self, review_id: str, content_hash: str) -> bool:
+        row = self.connection.execute(
+            "SELECT 1 FROM bybit_review_deliveries WHERE review_id=? AND content_hash=?",
+            (review_id, content_hash),
+        ).fetchone()
+        return row is not None
+
+    def mark_delivered(self, review_id: str, content_hash: str) -> None:
+        self.connection.execute(
+            "INSERT OR IGNORE INTO bybit_review_deliveries VALUES (?,?,?)",
+            (review_id, content_hash, int(time.time() * 1000)),
+        )
+        self.connection.commit()
+
+    def close(self) -> None:
+        self.connection.close()
 
     def count(self, table: str) -> int:
         allowed = {"bybit_transactions", "bybit_executions", "bybit_orders", "bybit_closed_pnl",

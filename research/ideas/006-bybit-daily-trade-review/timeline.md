@@ -8,7 +8,9 @@
 
 - 完成 Bybit V5 只读同步、交易回合重建、北京时间自然日账本、纪律证据、AI/确定性降级叙事、HTML/PNG/JSON 报告和 Telegram 发送包。
 - 模拟日报连续运行两次，同一自然日 SQLite 仅保留一条日报记录；模拟净盈亏为 +9.25 U，对账状态为 `reconciled`。
-- 全套 103 项测试通过；账目不一致时禁止发送“已核准”报告。
+- 全套 127 项测试通过；execution、Closed PnL、transaction ledger 按回合三源金额核对，账目不一致时禁止发送“已核准”报告。
+- 跨日老仓使用当前仓位和窗口后全部成交反推日初基线；继承仓位不评价窗口外入场纪律。
+- 首版自动核准口径刻意保守：资金费、未平仓、继承仓、空数据、快照不稳定或延迟宽限未结束时只生成排查报告，不自动推送。
 - 当前进程未配置 `BYBIT_API_KEY` / `BYBIT_API_SECRET`，因此没有拉取真实成交，也没有发送大仙机器人；未读取或修改 `.env`。
 - `review.enabled=false`、`review.telegram_enabled=false` 保持关闭；本次仅影响本地研究复盘，不影响 VPS、Binance 或 Bybit 实盘下单。
 

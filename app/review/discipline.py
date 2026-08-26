@@ -33,7 +33,7 @@ class DisciplineReview:
 
 
 def _bearish_shift(bars: list[Kline], entry_ms: int) -> Evidence:
-    past = [bar for bar in bars if bar.start_ms < entry_ms]
+    past = [bar for bar in bars if bar.start_ms + 900_000 <= entry_ms]
     highs = [i for i in range(1, len(past) - 1)
              if past[i].high > past[i - 1].high and past[i].high >= past[i + 1].high]
     lows = [i for i in range(1, len(past) - 1)
@@ -50,7 +50,7 @@ def _bearish_shift(bars: list[Kline], entry_ms: int) -> Evidence:
 
 
 def _large_body(bars: list[Kline], entry_ms: int) -> Evidence:
-    past = [bar for bar in bars if bar.start_ms < entry_ms]
+    past = [bar for bar in bars if bar.start_ms + 60_000 <= entry_ms]
     if len(past) < 6:
         return Evidence("large_1m_body", "1m实体放大", "reference", EvidenceState.UNKNOWN)
     current = abs(past[-1].close - past[-1].open)
@@ -107,12 +107,22 @@ def evaluate_episode(
     evidence["bearish_15m_shift"] = _bearish_shift(k15m, episode.opened_ms)
     evidence["large_1m_body"] = _large_body(k1m, episode.opened_ms)
 
-    hard_absent = [item for item in evidence.values() if item.group == "hard" and item.state is EvidenceState.ABSENT]
+    if episode.direction != "short":
+        return DisciplineReview(episode.episode_id, "暂不适用", evidence)
+
+    hard = [item for item in evidence.values() if item.group == "hard"]
+    hard_absent = [item for item in hard if item.state is EvidenceState.ABSENT]
+    hard_unknown = [item for item in hard if item.state is EvidenceState.UNKNOWN]
+    structure = evidence["bearish_15m_shift"]
     if any(item.key == "risk_boundary" for item in hard_absent):
         verdict = "严重变形"
     elif len(hard_absent) >= 2:
         verdict = "冲动交易"
     elif hard_absent:
+        verdict = "部分合规"
+    elif hard_unknown or structure.state is EvidenceState.UNKNOWN:
+        verdict = "证据不足"
+    elif structure.state is EvidenceState.ABSENT:
         verdict = "部分合规"
     else:
         verdict = "合规"

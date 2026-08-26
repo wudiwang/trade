@@ -53,6 +53,29 @@ def test_missing_historical_rank_is_unknown_not_absent():
     review = evaluate_episode(short_episode(), one_minute_large_body(), bearish_shift_bars(),
                               {}, {"has_risk_boundary": True})
     assert review.evidence["high_volatility_candidate"].state is EvidenceState.UNKNOWN
+    assert review.verdict == "证据不足"
+
+
+def test_incomplete_one_minute_bar_is_not_used_as_entry_evidence():
+    episode = short_episode()
+    rows = []
+    for i in range(20):
+        start = episode.opened_ms - (21 - i) * 60_000
+        rows.append(Kline(start, Decimal("100"), Decimal("101"), Decimal("99"),
+                          Decimal("100.2"), Decimal("1"), Decimal("1")))
+    rows.append(Kline(episode.opened_ms - 30_000, Decimal("100"), Decimal("110"),
+                      Decimal("99"), Decimal("109"), Decimal("1"), Decimal("1")))
+    review = evaluate_episode(episode, rows, bearish_shift_bars(),
+                              {"rank": 1}, {"has_risk_boundary": True,
+                                             "position_equity_pct": 1, "light_limit_pct": 2})
+    assert review.evidence["large_1m_body"].state is EvidenceState.ABSENT
+
+
+def test_long_trade_is_not_scored_by_short_reversal_playbook():
+    episode = short_episode()
+    episode.direction = "long"
+    review = evaluate_episode(episode, [], [], {}, {})
+    assert review.verdict == "暂不适用"
 
 
 def test_profit_does_not_change_compliance_verdict():
@@ -87,7 +110,7 @@ def test_ai_cannot_override_verdict_or_money_fields():
     raw = '{"summary":"ok","reasons":["x"],"next_action":"y","confidence":"high",' \
           '"verdict":"合规","pnl":999999}'
     narrative = parse_or_fallback(raw, review)
-    assert narrative.source == "ai"
+    assert narrative.source == "deterministic"
     assert not hasattr(narrative, "verdict")
     assert not hasattr(narrative, "pnl")
 
@@ -98,7 +121,7 @@ def test_local_ai_cli_is_used_when_valid_json_is_returned():
 
     class Result:
         returncode = 0
-        stdout = '{"summary":"结构有了但风控缺失","reasons":["未写失效价"],' \
+        stdout = '{"summary":"结构有了但风控缺失","reasons":["风险边界/止损：未写失效价"],' \
                  '"next_action":"先写失效价","confidence":"high"}'
 
     narrative = generate_narrative(review, executable="claude", runner=lambda *a, **k: Result())

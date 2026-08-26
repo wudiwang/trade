@@ -4,13 +4,18 @@ import hmac
 
 import pytest
 
-from app.review.bybit_client import BybitReadClient, ReadOnlyKeyRequired, sign_v5
+from app.review.bybit_client import BybitReadClient, ReadOnlyKeyRequired, encode_query, sign_v5
 
 
 def test_v5_signature_uses_sorted_query():
     query = "category=linear&endTime=2&startTime=1"
     expected = hmac.new(b"secret", b"1000key5000" + query.encode(), hashlib.sha256).hexdigest()
     assert sign_v5("secret", "1000", "key", "5000", query) == expected
+
+
+def test_signed_query_is_the_exact_sorted_query_sent_on_wire():
+    params = {"startTime": 1, "category": "linear", "empty": "", "endTime": 2}
+    assert encode_query(params) == "category=linear&endTime=2&startTime=1"
 
 
 def test_cursor_pagination_deduplicates_exec_id():
@@ -23,7 +28,7 @@ def test_cursor_pagination_deduplicates_exec_id():
         return {"result": {"nextPageCursor": "", "list": [execution("e1"), execution("e2")]}}
 
     client = BybitReadClient("key", "secret", requester=requester)
-    rows = asyncio.run(client.executions("linear", 1, 2))
+    rows = asyncio.run(client.executions("linear", 0, 2000))
     assert [row.exec_id for row in rows] == ["e1", "e2"]
     assert calls[1]["cursor"] == "next"
 
@@ -35,7 +40,7 @@ def test_string_false_is_not_treated_as_maker_fill():
         return {"result": {"nextPageCursor": "", "list": [row]}}
 
     rows = asyncio.run(BybitReadClient("key", "secret", requester=requester)
-                       .executions("linear", 1, 2))
+                       .executions("linear", 0, 2000))
     assert rows[0].is_maker is False
 
 
@@ -46,7 +51,7 @@ def test_position_index_is_preserved_for_hedge_mode():
         return {"result": {"nextPageCursor": "", "list": [row]}}
 
     rows = asyncio.run(BybitReadClient("key", "secret", requester=requester)
-                       .executions("linear", 1, 2))
+                       .executions("linear", 0, 2000))
     assert rows[0].position_idx == 2
 
 
@@ -85,11 +90,36 @@ def test_private_financial_endpoints_are_normalized():
         raise AssertionError(path)
 
     client = BybitReadClient("key", "secret", requester=requester)
-    txs = asyncio.run(client.transactions("linear", 1, 2))
-    pnls = asyncio.run(client.closed_pnl("linear", 1, 2))
+    txs = asyncio.run(client.transactions("linear", 0, 30))
+    pnls = asyncio.run(client.closed_pnl("linear", 0, 30))
     wallet = asyncio.run(client.wallet_balance())
     assert txs[0].change == pnls[0].closed_pnl == 9
     assert wallet["total_equity"] == 1009
+
+
+def test_private_rows_enforce_left_closed_right_open_window():
+    async def requester(path, params, private):
+        return {"result": {"nextPageCursor": "", "list": [
+            {**execution("inside"), "execTime": "100"},
+            {**execution("next-day"), "execTime": "200"},
+        ]}}
+
+    rows = asyncio.run(BybitReadClient("key", "secret", requester=requester)
+                       .executions("linear", 100, 200))
+    assert [row.exec_id for row in rows] == ["inside"]
+
+
+def test_current_positions_are_signed_and_keep_hedge_legs():
+    async def requester(path, params, private):
+        return {"result": {"list": [
+            {"symbol": "BTCUSDT", "side": "Buy", "size": "2", "positionIdx": 1},
+            {"symbol": "BTCUSDT", "side": "Sell", "size": "3", "positionIdx": 2},
+        ]}}
+
+    positions = asyncio.run(BybitReadClient("key", "secret", requester=requester)
+                            .positions("linear"))
+    assert positions[("linear", "BTCUSDT", 1)] == 2
+    assert positions[("linear", "BTCUSDT", 2)] == -3
 
 
 def test_public_klines_are_sorted_oldest_first():
@@ -103,6 +133,31 @@ def test_public_klines_are_sorted_oldest_first():
     client = BybitReadClient("", "", requester=requester)
     rows = asyncio.run(client.klines("linear", "BTCUSDT", "1", 1, 300))
     assert [row.start_ms for row in rows] == [100, 200]
+
+
+def test_public_klines_page_ranges_longer_than_1000_bars():
+    calls = []
+
+    async def requester(path, params, private):
+        calls.append(params)
+        return {"result": {"list": []}}
+
+    client = BybitReadClient("", "", requester=requester)
+    asyncio.run(client.klines("linear", "BTCUSDT", "1", 0, 1_200 * 60_000))
+    assert len(calls) == 2
+
+
+def test_kline_pages_align_non_round_context_start_without_a_gap():
+    calls = []
+
+    async def requester(path, params, private):
+        calls.append(params)
+        return {"result": {"list": []}}
+
+    client = BybitReadClient("", "", requester=requester)
+    asyncio.run(client.klines("linear", "BTCUSDT", "1", 30_000, 1_001 * 60_000))
+    assert calls[0]["start"] == 0
+    assert calls[1]["start"] == calls[0]["end"] + 1
 
 
 def execution(exec_id):
