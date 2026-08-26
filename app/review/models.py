@@ -136,4 +136,3 @@ class TradeEpisode:
     fills: list[EpisodeFill] = field(default_factory=list)
     max_abs_qty: Decimal = Decimal("0")
     realized_pnl: Decimal = Decimal("0")
-
