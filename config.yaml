@@ -189,3 +189,12 @@ binance:
   ws_base: wss://fstream.binance.com
   testnet: false
   recv_window: 5000
+
+# ---- Bybit 每日交易复盘（本地研究，只读；凭据不放配置文件） ----
+review:
+  enabled: false
+  timezone: Asia/Shanghai
+  db_path: data/bybit_review.db
+  output_dir: artifacts/bybit_reviews
+  ai_timeout_seconds: 120
+  telegram_enabled: false

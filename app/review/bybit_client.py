@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import aiohttp
 
-from .models import Execution, decimal
+from .models import ClosedPnl, Execution, Kline, Transaction, decimal
 
 
 Requester = Callable[[str, dict[str, Any], bool], Awaitable[dict[str, Any]]]
@@ -20,6 +20,12 @@ class BybitError(RuntimeError):
 
 class ReadOnlyKeyRequired(BybitError):
     pass
+
+
+def _boolean(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    return bool(value)
 
 
 def sign_v5(secret: str, timestamp: str, api_key: str, recv_window: str, query: str) -> str:
@@ -107,8 +113,75 @@ class BybitReadClient:
                 fee=decimal(item.get("execFee")),
                 timestamp_ms=int(item.get("execTime", 0)),
                 leaves_qty=decimal(item.get("leavesQty")),
-                is_maker=bool(item.get("isMaker", False)),
+                is_maker=_boolean(item.get("isMaker", False)),
+                position_idx=int(item.get("positionIdx", 0) or 0),
             )
             for item in raw
         ]
         return sorted(rows, key=lambda row: (row.timestamp_ms, row.exec_id, row.order_id, row.leaves_qty))
+
+    async def transactions(self, category: str, start_ms: int, end_ms: int) -> list[Transaction]:
+        raw = await self._pages(
+            "/v5/account/transaction-log",
+            {"accountType": "UNIFIED", "category": category, "startTime": start_ms,
+             "endTime": end_ms, "limit": 50},
+            "id",
+        )
+        return sorted([
+            Transaction(
+                tx_id=str(item["id"]), category=str(item.get("category") or category),
+                symbol=str(item.get("symbol", "")), timestamp_ms=int(item.get("transactionTime", 0)),
+                tx_type=str(item.get("type", "")), cash_flow=decimal(item.get("cashFlow")),
+                funding=decimal(item.get("funding")), fee=decimal(item.get("fee")),
+                change=decimal(item.get("change")), currency=str(item.get("currency", "")),
+            ) for item in raw
+        ], key=lambda row: (row.timestamp_ms, row.tx_id))
+
+    async def closed_pnl(self, category: str, start_ms: int, end_ms: int) -> list[ClosedPnl]:
+        raw = await self._pages(
+            "/v5/position/closed-pnl",
+            {"category": category, "startTime": start_ms, "endTime": end_ms, "limit": 100},
+            "orderId",
+        )
+        return sorted([
+            ClosedPnl(
+                order_id=str(item["orderId"]), category=category,
+                symbol=str(item.get("symbol", "")), side=str(item.get("side", "")),
+                qty=decimal(item.get("qty")), closed_size=decimal(item.get("closedSize")),
+                avg_entry_price=decimal(item.get("avgEntryPrice")),
+                avg_exit_price=decimal(item.get("avgExitPrice")),
+                closed_pnl=decimal(item.get("closedPnl")), leverage=decimal(item.get("leverage")),
+                open_fee=decimal(item.get("openFee")), close_fee=decimal(item.get("closeFee")),
+                updated_ms=int(item.get("updatedTime", 0)),
+            ) for item in raw
+        ], key=lambda row: (row.updated_ms, row.order_id))
+
+    async def wallet_balance(self) -> dict[str, Any]:
+        payload = await self._requester(
+            "/v5/account/wallet-balance", {"accountType": "UNIFIED"}, True
+        )
+        rows = (payload.get("result") or {}).get("list") or []
+        if not rows:
+            raise BybitError("wallet balance returned no account")
+        row = rows[0]
+        return {
+            "total_equity": decimal(row.get("totalEquity")),
+            "wallet_balance": decimal(row.get("totalWalletBalance")),
+            "unrealized_pnl": decimal(row.get("totalPerpUPL")),
+        }
+
+    async def klines(
+        self, category: str, symbol: str, interval: str, start_ms: int, end_ms: int
+    ) -> list[Kline]:
+        payload = await self._requester(
+            "/v5/market/kline",
+            {"category": category, "symbol": symbol, "interval": interval,
+             "start": start_ms, "end": end_ms, "limit": 1000},
+            False,
+        )
+        rows = [
+            Kline(int(item[0]), decimal(item[1]), decimal(item[2]), decimal(item[3]),
+                  decimal(item[4]), decimal(item[5]), decimal(item[6]))
+            for item in ((payload.get("result") or {}).get("list") or [])
+        ]
+        return sorted(rows, key=lambda row: row.start_ms)

@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 venv/
 logs/
+artifacts/bybit_reviews/
 .btcache/
 deploy/trade.tar.gz
 .worktrees/

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from dataclasses import dataclass
 
 from .discipline import DisciplineReview, EvidenceState
@@ -66,4 +68,31 @@ def parse_or_fallback(raw: str, review: DisciplineReview) -> Narrative:
             raise ValueError("invalid narrative")
         return Narrative(summary, reasons, next_action, confidence, "ai")
     except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return deterministic_narrative(review)
+
+
+def generate_narrative(
+    review: DisciplineReview,
+    *,
+    timeout_seconds: int = 120,
+    executable: str | None = None,
+    runner=subprocess.run,
+) -> Narrative:
+    """Ask a local AI CLI for prose while keeping verdict and money out of its control."""
+    command = executable or shutil.which("claude")
+    if not command:
+        return deterministic_narrative(review)
+    try:
+        result = runner(
+            [command, "-p", build_prompt(review)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout_seconds,
+            check=False,
+        )
+        if result.returncode != 0:
+            return deterministic_narrative(review)
+        return parse_or_fallback(result.stdout, review)
+    except (OSError, subprocess.SubprocessError, TimeoutError):
         return deterministic_narrative(review)

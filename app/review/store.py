@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from dataclasses import asdict
+from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
 
-from .models import Transaction
+from .models import ClosedPnl, Execution, Transaction
 
 
 SCHEMA = """
@@ -58,6 +61,21 @@ class ReviewStore:
         self.connection = sqlite3.connect(self.path)
         self.connection.executescript(SCHEMA)
 
+    @staticmethod
+    def _payload(row) -> str:
+        return json.dumps(
+            asdict(row), ensure_ascii=False, sort_keys=True,
+            default=lambda value: str(value) if isinstance(value, Decimal) else value,
+        )
+
+    def upsert_executions(self, rows: Iterable[Execution]) -> None:
+        self.connection.executemany(
+            """INSERT OR REPLACE INTO bybit_executions
+            (account_id,category,exec_id,payload) VALUES (?,?,?,?)""",
+            [(r.account_id, r.category, r.exec_id, self._payload(r)) for r in rows],
+        )
+        self.connection.commit()
+
     def upsert_transactions(self, rows: Iterable[Transaction]) -> None:
         self.connection.executemany(
             """INSERT OR REPLACE INTO bybit_transactions
@@ -68,8 +86,26 @@ class ReviewStore:
         )
         self.connection.commit()
 
+    def upsert_closed_pnl(self, rows: Iterable[ClosedPnl]) -> None:
+        self.connection.executemany(
+            """INSERT OR REPLACE INTO bybit_closed_pnl
+            (account_id,category,order_id,payload) VALUES (?,?,?,?)""",
+            [("default", r.category, r.order_id, self._payload(r)) for r in rows],
+        )
+        self.connection.commit()
+
+    def replace_review(self, review_id: str, report: dict) -> None:
+        self.connection.execute(
+            """INSERT OR REPLACE INTO daily_trade_reviews
+            (review_id,window_start_ms,window_end_ms,payload) VALUES (?,?,?,?)""",
+            (review_id, report.get("window_start_ms"), report.get("window_end_ms"),
+             json.dumps(report, ensure_ascii=False, sort_keys=True)),
+        )
+        self.connection.commit()
+
     def count(self, table: str) -> int:
-        allowed = {"bybit_transactions", "bybit_executions", "bybit_orders", "bybit_closed_pnl"}
+        allowed = {"bybit_transactions", "bybit_executions", "bybit_orders", "bybit_closed_pnl",
+                   "daily_trade_reviews"}
         if table not in allowed:
             raise ValueError("unsupported table")
         return int(self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])

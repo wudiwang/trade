@@ -4,7 +4,18 @@ import hashlib
 from dataclasses import replace
 from decimal import Decimal
 
-from .models import EpisodeFill, Execution, TradeEpisode
+from .models import ClosedPnl, EpisodeFill, Execution, TradeEpisode
+
+
+def closed_pnl_for_episode(episode: TradeEpisode, rows: list[ClosedPnl]) -> Decimal:
+    closing_orders = {
+        fill.execution.order_id for fill in episode.fills
+        if fill.action in {"reduce", "close"}
+    }
+    return sum(
+        (row.closed_pnl for row in rows if row.order_id in closing_orders),
+        Decimal("0"),
+    )
 
 
 def _signed(execution: Execution) -> Decimal:

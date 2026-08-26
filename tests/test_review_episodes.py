@@ -1,7 +1,7 @@
 from decimal import Decimal
 
-from app.review.episodes import reconstruct
-from app.review.models import Execution
+from app.review.episodes import closed_pnl_for_episode, reconstruct
+from app.review.models import ClosedPnl, Execution
 
 
 def fill(side, qty, *, exec_id, position_idx=0, timestamp_ms=1000):
@@ -63,3 +63,22 @@ def test_same_millisecond_order_is_stable_by_exec_id():
         fill("Sell", 1, exec_id="a", timestamp_ms=1),
     ])
     assert episodes[0].fills[0].execution.exec_id == "a"
+
+
+def test_closed_pnl_is_matched_by_closing_order_not_duplicated_by_symbol():
+    episodes = reconstruct([
+        fill("Sell", 1, exec_id="entry-1", timestamp_ms=1),
+        fill("Buy", 1, exec_id="close-1", timestamp_ms=2),
+        fill("Sell", 1, exec_id="entry-2", timestamp_ms=3),
+        fill("Buy", 1, exec_id="close-2", timestamp_ms=4),
+    ])
+    rows = [
+        ClosedPnl("order-close-1", "linear", "BTCUSDT", "Buy", Decimal("1"),
+                  Decimal("1"), Decimal("100"), Decimal("90"), Decimal("10"),
+                  Decimal("2"), Decimal("0"), Decimal("0"), 2),
+        ClosedPnl("order-close-2", "linear", "BTCUSDT", "Buy", Decimal("1"),
+                  Decimal("1"), Decimal("100"), Decimal("105"), Decimal("-5"),
+                  Decimal("2"), Decimal("0"), Decimal("0"), 4),
+    ]
+    assert closed_pnl_for_episode(episodes[0], rows) == Decimal("10")
+    assert closed_pnl_for_episode(episodes[1], rows) == Decimal("-5")

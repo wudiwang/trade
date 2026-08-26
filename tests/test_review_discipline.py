@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from app.review.discipline import EvidenceState, evaluate_episode
 from app.review.models import EpisodeFill, Execution, Kline, TradeEpisode
-from app.review.narrator import build_prompt, parse_or_fallback
+from app.review.narrator import build_prompt, generate_narrative, parse_or_fallback
 
 
 def bar(i, open_, high, low, close, interval=900_000):
@@ -90,3 +90,26 @@ def test_ai_cannot_override_verdict_or_money_fields():
     assert narrative.source == "ai"
     assert not hasattr(narrative, "verdict")
     assert not hasattr(narrative, "pnl")
+
+
+def test_local_ai_cli_is_used_when_valid_json_is_returned():
+    review = evaluate_episode(short_episode(), [], bearish_shift_bars(),
+                              {"rank": 2}, {"has_risk_boundary": False})
+
+    class Result:
+        returncode = 0
+        stdout = '{"summary":"结构有了但风控缺失","reasons":["未写失效价"],' \
+                 '"next_action":"先写失效价","confidence":"high"}'
+
+    narrative = generate_narrative(review, executable="claude", runner=lambda *a, **k: Result())
+    assert narrative.source == "ai"
+    assert narrative.next_action == "先写失效价"
+
+
+def test_local_ai_failure_falls_back_without_blocking_report():
+    review = evaluate_episode(short_episode(), [], bearish_shift_bars(), {}, {})
+
+    def fail(*args, **kwargs):
+        raise TimeoutError
+
+    assert generate_narrative(review, executable="claude", runner=fail).source == "deterministic"
