@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-08-27 · 代码链路完成，真实对账待只读凭据
+
+- 完成 Bybit V5 只读同步、交易回合重建、北京时间自然日账本、纪律证据、AI/确定性降级叙事、HTML/PNG/JSON 报告和 Telegram 发送包。
+- 模拟日报连续运行两次，同一自然日 SQLite 仅保留一条日报记录；模拟净盈亏为 +9.25 U，对账状态为 `reconciled`。
+- 全套 103 项测试通过；账目不一致时禁止发送“已核准”报告。
+- 当前进程未配置 `BYBIT_API_KEY` / `BYBIT_API_SECRET`，因此没有拉取真实成交，也没有发送大仙机器人；未读取或修改 `.env`。
+- `review.enabled=false`、`review.telegram_enabled=false` 保持关闭；本次仅影响本地研究复盘，不影响 VPS、Binance 或 Bybit 实盘下单。
+
 ## 2026-08-27 · 立项与设计冻结
 
 - 确认北京时间自然日口径。
