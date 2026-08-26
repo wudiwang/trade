@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from app.review.discipline import EvidenceState, evaluate_episode
 from app.review.models import EpisodeFill, Execution, Kline, TradeEpisode
+from app.review.narrator import build_prompt, parse_or_fallback
 
 
 def bar(i, open_, high, low, close, interval=900_000):
@@ -60,3 +61,32 @@ def test_profit_does_not_change_compliance_verdict():
     win = evaluate_episode(short_episode(Decimal("50")), [], bearish_shift_bars(), context, account)
     loss = evaluate_episode(short_episode(Decimal("-50")), [], bearish_shift_bars(), context, account)
     assert win.verdict == loss.verdict == "严重变形"
+
+
+def test_prompt_contains_evidence_but_no_secret_or_account_id():
+    review = evaluate_episode(short_episode(), one_minute_large_body(), bearish_shift_bars(),
+                              {"rank": 2}, {"has_risk_boundary": True})
+    prompt = build_prompt(review)
+    assert "15m趋势转换" in prompt
+    assert "api" not in prompt.lower()
+    assert "account" not in prompt.lower()
+
+
+def test_invalid_ai_json_falls_back_to_deterministic_summary():
+    review = evaluate_episode(short_episode(), [], bearish_shift_bars(),
+                              {"rank": 2}, {"has_risk_boundary": False})
+    narrative = parse_or_fallback("not json", review)
+    assert narrative.source == "deterministic"
+    assert narrative.summary
+    assert narrative.next_action
+
+
+def test_ai_cannot_override_verdict_or_money_fields():
+    review = evaluate_episode(short_episode(), [], bearish_shift_bars(),
+                              {"rank": 2}, {"has_risk_boundary": False})
+    raw = '{"summary":"ok","reasons":["x"],"next_action":"y","confidence":"high",' \
+          '"verdict":"合规","pnl":999999}'
+    narrative = parse_or_fallback(raw, review)
+    assert narrative.source == "ai"
+    assert not hasattr(narrative, "verdict")
+    assert not hasattr(narrative, "pnl")
