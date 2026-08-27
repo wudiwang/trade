@@ -15,3 +15,7 @@ Track BTC regime and macro backdrop. Include analyst video summaries and liquidi
 ## Strong Mover Top · Weak Rebound Continuation
 
 Archive strong coins whose final acceleration is followed by a sharp drop, a 5m rebound that cannot recover the reference midpoint, prolonged low consolidation, and a second breakdown. First case: `research/ideas/007-strong-mover-top-weak-rebound/`.
+
+## Life OS Trade Pattern Library
+
+2026-08-27: The Life OS project now mirrors `research/ideas/001–007` as a public/mobile review library and queues new screenshot + raw-word drafts for a guarded local writeback. This repository remains the sole research archive. The sync is documentation-only: it does not change strategies, signals, paper trading, or live execution.
