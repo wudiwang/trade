@@ -19,3 +19,5 @@ Archive strong coins whose final acceleration is followed by a sharp drop, a 5m 
 ## Life OS Trade Pattern Library
 
 2026-08-27: The Life OS project now mirrors `research/ideas/001–007` as a public/mobile review library and queues new screenshot + raw-word drafts for a guarded local writeback. This repository remains the sole research archive. The sync is documentation-only: it does not change strategies, signals, paper trading, or live execution.
+
+2026-08-28: Added the SOLUSDT early-exit case to idea 008. Working lesson: a 5m rebound is a warning, not automatically a full-exit trigger for a 15m thesis; exact execution remains pending the 5m chart and Bybit fills.
