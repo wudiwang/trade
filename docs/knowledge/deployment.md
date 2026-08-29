@@ -46,6 +46,29 @@ After deployment, verify:
 7. Runtime settings match expected mode and auto-trade state.
 8. No new errors in journal after restart.
 
+## Live Drawdown Breaker
+
+The live breaker compares the configured equity baseline with transfer-adjusted futures wallet
+equity, not the raw wallet balance:
+
+```text
+adjusted equity = totalWalletBalance - net USDT TRANSFER since risk.account_equity.updated_at
+```
+
+This keeps deposits from masking trading losses and keeps withdrawals from being mistaken for
+losses. Transfer history is read from Binance `GET /fapi/v1/income` with
+`incomeType=TRANSFER` and pagination. If wallet or transfer history cannot be verified, live
+automatic entry fails closed. Updating `risk.account_equity` starts a new transfer-adjustment
+baseline because the settings row receives a new `updated_at` value.
+
+Because Binance retains income history for only three months, the engine uses an 89-day safety
+window and fails closed when the baseline is missing, in the future, or older than that window.
+Wallet and adjusted-equity caches last five seconds. A process-wide async lock covers position
+count verification through order placement, and position-query failure also fails closed. The
+engine rechecks mode, automation, and direction after acquiring that lock, so queued signals obey
+hot shutdowns. Successful entries reserve a local position slot for 15 seconds while Binance
+position visibility catches up.
+
 ## Protected Files
 
 Never overwrite or delete without explicit user approval:

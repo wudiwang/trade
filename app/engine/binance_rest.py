@@ -162,10 +162,18 @@ class BinanceRest:
     async def position_risk(self) -> Any:
         return await self._signed("GET", "/fapi/v2/positionRisk", {})
 
-    async def income(self, start_ms: int | None = None, limit: int = 1000) -> Any:
+    async def income(self, start_ms: int | None = None, limit: int = 1000,
+                     end_ms: int | None = None, page: int | None = None,
+                     income_type: str | None = None) -> Any:
         p: dict = {"limit": limit}
         if start_ms:
             p["startTime"] = start_ms
+        if end_ms:
+            p["endTime"] = end_ms
+        if page is not None:
+            p["page"] = page
+        if income_type:
+            p["incomeType"] = income_type
         return await self._signed("GET", "/fapi/v1/income", p)
 
     async def set_leverage(self, symbol: str, leverage: int) -> Any:

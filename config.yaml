@@ -15,7 +15,7 @@ live:
   fixed_margin_u: 0      # 单笔固定保证金(U), >0时优先于fixed_margin_pct
   fixed_notional_u: 0    # 单笔固定名义额(U), 0=用风险算法
   max_positions: 10      # 实盘最大同时持仓数(达到不再自动开新仓)
-  max_loss_pct: 50       # 余额相对本金亏损达此%→熔断, 停止自动交易
+  max_loss_pct: 50       # 划转校正余额相对本金亏损达此%→熔断, 停止自动交易
 strategy: chan_bi      # chan_bi=缠论笔+停顿K(当前) / spring_v4=破位+底分型 / chan_v1=旧
 timeframes: ["5m", "15m", "1h"]   # 5m自身;15m结构用5m停顿触发;1h结构用15m停顿触发
 
