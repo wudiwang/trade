@@ -29,3 +29,19 @@ concurrent-position limit.
 Code paths changed: Binance income query parameters and live automatic risk checking. Strategy
 signal generation and historical paper settlement are unchanged. Deployment and final runtime
 verification are recorded in the handoff after activation.
+
+## Deployment Result
+
+- Previous VPS revision: `2a96f59a40122dba9c85e3266142d9fe14fba95a`.
+- Deployed code revision: `16e61a0604342d9be7694e8e0790c59ef07ac750`.
+- Rollback snapshot: `/opt/trade/data/deploy-backup-20260829-16e61a0.json`.
+- The first activation health command was incorrectly expanded by local PowerShell. The safety
+  handler wrote `live.auto_trade=false` and restarted successfully before the activation was
+  retried with separate health commands.
+- Final runtime values: `mode=live`, `live.auto_trade=true`, `trade_direction=short`,
+  `risk.leverage=5`, `live.fixed_margin_u=60`, fixed percent/notional fallbacks zero,
+  `live.max_positions=10`, `live.max_loss_pct=2`, equity baseline unchanged at `1479.41`.
+- Final read-only check: raw wallet `1108.81167704 U`, net transfer `-400 U`, adjusted equity
+  `1508.81167704 U`, breaker threshold `1449.8218 U`, no open positions, HTTP 200, service active,
+  fresh market data, and no warning/error journal entries after the final restart.
+- Verification before deployment: 13 focused automatic-risk tests and 81 full tests passed.
