@@ -164,6 +164,18 @@ def second_sell_without_stall():
     return vals[:-2]
 
 
+def second_buy_with_bearish_reversal_entry():
+    vals = list(spring_then_second_buy())
+    vals[-1] = k(100.6, 100.65, 100.2, 100.4, 110, t=len(vals) - 1)
+    return vals
+
+
+def second_sell_with_bullish_reclaim_entry():
+    vals = list(utad_then_second_sell())
+    vals[-1] = k(101.7, 102.1, 101.4, 101.9, 110, t=len(vals) - 1)
+    return vals
+
+
 def second_buy_without_entry_bar_after_stall():
     vals = list(spring_then_second_buy())
     return vals[:-1]
@@ -317,6 +329,16 @@ def test_second_buy_enters_on_bar_after_stall_not_stall_bar():
 
 def test_second_sell_requires_stall_after_h2_confirmation():
     assert detect_macro_pullback("SOLUSDT", "short", second_sell_without_stall(), second_sell_without_stall(), cfg()) is None
+
+
+def test_second_buy_rejects_bearish_entry_candle_after_bullish_stall():
+    bars = second_buy_with_bearish_reversal_entry()
+    assert detect_macro_pullback("SOLUSDT", "long", bars, bars, cfg()) is None
+
+
+def test_second_sell_rejects_bullish_reclaim_entry_after_bearish_stall():
+    bars = second_sell_with_bullish_reclaim_entry()
+    assert detect_macro_pullback("SOLUSDT", "short", bars, bars, cfg()) is None
 
 
 def test_volume_l1_uses_completed_chan_bottom_not_mid_leg_sweep():

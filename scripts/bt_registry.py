@@ -170,7 +170,7 @@ def _settle_signal(s: dict, k5: list):
 def scan_macro_pullback(C):
     from app.engine.chan import find_fractals, merge_klines
     from app.engine.macro_pullback import (
-        _body_reclaim_level, _effective_bar_count, _entry_near_second, _f,
+        _body_reclaim_level, _effective_bar_count, _entry_bar_confirms, _entry_near_second, _f,
         _leg_quality_ok, _tp_for, _vol_ratio,
     )
     params = _macro_params()
@@ -198,6 +198,8 @@ def scan_macro_pullback(C):
         def emit(direction, first, second):
             label = "second_buy" if direction == "long" else "second_sell"
             entry_idx = second["entry_idx"]
+            if not _entry_bar_confirms(direction, k5, entry_idx - 1, entry_idx):
+                return
             entry = _f(k5[entry_idx], "close")
             sl = second["L2"] * (1 - stop_buf) if direction == "long" else second["H2"] * (1 + stop_buf)
             if direction == "long" and sl >= entry:
