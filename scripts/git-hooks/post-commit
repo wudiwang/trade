@@ -1,0 +1,53 @@
+#!/bin/sh
+# post-commit: 提交后自动推送到 GitHub —— 用户 2026-10-12 要求「不需要再碰命令行」。
+#
+# 设计铁律:
+#   1. 永远 exit 0 —— 推送失败绝不阻断提交，本地提交永远先成功。
+#   2. 绝不 force push。
+#   3. 变基/合并/拣选/分离头指针进行中一律跳过（那些中间态推上去是灾难）。
+#   4. 被拒(远端有新提交)时自动 pull --rebase 再试一次；冲突就中止并原样退回，交给人处理。
+#
+# 安装: scripts/install-git-hooks.sh（或把本文件拷到 .git/hooks/post-commit 并 chmod +x）
+
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+
+# 分离头指针：不推
+[ "$BRANCH" = "HEAD" ] && exit 0
+
+# 任何中间态：不推
+for f in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    if [ -e "$GIT_DIR/$f" ]; then exit 0; fi
+done
+
+# 没有 origin：不推
+git remote get-url origin >/dev/null 2>&1 || exit 0
+
+printf '[auto-push] → origin/%s ... ' "$BRANCH"
+
+if git push --quiet origin "$BRANCH" >/dev/null 2>&1; then
+    printf '✓ 已同步 %s\n' "$(git rev-parse --short HEAD)"
+    exit 0
+fi
+
+# 推送被拒：多半是远端有新提交。工作区干净才敢自动变基。
+if [ -n "$(git status --porcelain)" ]; then
+    printf '⚠ 远端有新提交，但工作区不干净，未自动变基。\n'
+    printf '[auto-push]   请先处理改动，再跑: git pull --rebase; git push\n'
+    exit 0
+fi
+
+printf '远端有新提交，自动变基重试... '
+if git pull --rebase --quiet origin "$BRANCH" >/dev/null 2>&1; then
+    if git push --quiet origin "$BRANCH" >/dev/null 2>&1; then
+        printf '✓ 已同步 %s\n' "$(git rev-parse --short HEAD)"
+        exit 0
+    fi
+    printf '✗ 变基成功但推送仍失败。\n'
+    exit 0
+fi
+
+git rebase --abort >/dev/null 2>&1
+printf '✗ 变基冲突，已中止并退回原状。\n'
+printf '[auto-push]   需人工处理: git pull --rebase\n'
+exit 0
