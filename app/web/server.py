@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import re
 import logging
 import os
 import secrets
@@ -529,6 +530,9 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     return app
 
 
+_SECRET_KEY_RE = re.compile(r"token|secret|passw|api_?key|private|auth|cookie|session|credential", re.I)
+
+
 def load_setting_overrides(cfg, db) -> None:
     """启动时把 settings 表里的覆盖值灌回 cfg。
 
@@ -559,5 +563,8 @@ def load_setting_overrides(cfg, db) -> None:
                 db.log("warning", "config", msg)
             except Exception:
                 log.exception("写事件日志失败")
-    detail = ", ".join(f"{k}: {b}→{a}" for k, b, a in changed)
+    # 凭据类的值只报"被覆盖了", 不打明文 —— 日志会被留存、转发、贴给别人看
+    def _shown(k, v):
+        return "***" if v is not None and _SECRET_KEY_RE.search(k) else v
+    detail = ", ".join(f"{k}: {_shown(k, b)}→{_shown(k, a)}" for k, b, a in changed)
     log.warning("settings 覆盖 config.yaml 共 %d 项: %s", len(changed), detail)
