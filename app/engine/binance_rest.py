@@ -116,6 +116,15 @@ class BinanceRest:
         except Exception:
             return []
 
+    async def funding_rate_hist(self, symbol: str, limit: int = 100) -> list[tuple]:
+        """资金费率历史(免费, 每8小时一期)。返回 [(fundingTime_ms, rate), ...] 升序。"""
+        try:
+            data = await self._get("/fapi/v1/fundingRate",
+                                   {"symbol": symbol, "limit": min(limit, 1000)})
+            return [(int(d["fundingTime"]), float(d["fundingRate"])) for d in data]
+        except Exception:
+            return []
+
     async def funding_rates(self) -> dict[str, float]:
         """symbol -> 最新资金费率（小数，如 -0.0003 = -0.03%）。"""
         data = await self._get("/fapi/v1/premiumIndex")

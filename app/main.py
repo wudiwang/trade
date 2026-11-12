@@ -91,6 +91,33 @@ async def amain() -> None:
                 log.info("daily report sent")
     asyncio.create_task(daily_report())
 
+    async def orderflow_brief():
+        """曼谷时间每天 09:00 / 21:00 推送 BTC 订单流简报（用户 2026-11-12）。
+        内容：CVD×价格背离(1h线)、资金费率(按天)、持仓量 OI 四象限。"""
+        import time as _t
+        from .engine.orderflow import brief_payload, build_brief
+        HOURS = (9, 21)
+        last = None
+        while True:
+            await asyncio.sleep(60)
+            t = _t.gmtime(_t.time() + 7 * 3600)          # 曼谷 UTC+7
+            slot = (t.tm_year, t.tm_yday, t.tm_hour)
+            if t.tm_hour not in HOURS or slot == last or not bot.enabled:
+                continue
+            last = slot
+            try:
+                payload = await brief_payload(engine.rest, "BTCUSDT")
+                await bot.notify(build_brief(payload))
+                log.info("orderflow brief sent (bkk %02d:00)", t.tm_hour)
+            except Exception as e:                        # 取数失败不该拖垮主进程
+                log.warning("orderflow brief failed: %s", e)
+                try:
+                    await bot.notify(f"⚠️ BTC 订单流简报生成失败：{e}")
+                except Exception:
+                    pass
+    asyncio.create_task(orderflow_brief())
+
+
     server = uvicorn.Server(uvicorn.Config(
         app, host=cfg.get("web.host", "0.0.0.0"), port=cfg.get("web.port", 8488),
         log_level="warning",
