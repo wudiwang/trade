@@ -338,6 +338,20 @@ def _stall_entry_idx(direction: str, klines: list, second: dict, params: dict) -
     return entry_idx if _f(klines[stall_idx], "close") < merged[rk].low else None
 
 
+def _entry_bar_confirms(direction: str, klines: list, stall_idx: int, entry_idx: int) -> bool:
+    """入场 K 必须继续沿停顿方向收盘，不能在等待期间反向收回。"""
+    if not (0 <= stall_idx < entry_idx < len(klines)):
+        return False
+    stall_close = _f(klines[stall_idx], "close")
+    entry_open = _f(klines[entry_idx], "open")
+    entry_close = _f(klines[entry_idx], "close")
+    if direction == "long":
+        return entry_close >= entry_open and entry_close >= stall_close
+    if direction == "short":
+        return entry_close <= entry_open and entry_close <= stall_close
+    return False
+
+
 def _entry_near_second(direction: str, klines: list, second: dict, entry: float, sl: float, params: dict) -> bool:
     """入场价是否【紧贴】第二极值(价格维度)。
 
@@ -410,6 +424,8 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
         entry_idx = _stall_entry_idx("long", klines, second, params)
         if entry_idx is None:
             return None
+        if not _entry_bar_confirms("long", klines, entry_idx - 1, entry_idx):
+            return None
         second["entry_idx"] = entry_idx
         second["stall_idx"] = entry_idx - 1
         second["stall_time"] = int(klines[entry_idx - 1]["open_time"])
@@ -433,6 +449,8 @@ def detect_macro_pullback(symbol: str, macro_direction: str, struct_klines: list
             return None
         entry_idx = _stall_entry_idx("short", klines, second, params)
         if entry_idx is None:
+            return None
+        if not _entry_bar_confirms("short", klines, entry_idx - 1, entry_idx):
             return None
         second["entry_idx"] = entry_idx
         second["stall_idx"] = entry_idx - 1

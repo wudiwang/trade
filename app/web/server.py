@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import re
 import logging
 import math
 import re
@@ -1129,12 +1130,41 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     return app
 
 
+_SECRET_KEY_RE = re.compile(r"token|secret|passw|api_?key|private|auth|cookie|session|credential", re.I)
+
+
 def load_setting_overrides(cfg, db) -> None:
-    """启动时把 settings 表里的覆盖值灌回 cfg。"""
+    """启动时把 settings 表里的覆盖值灌回 cfg。
+
+    覆盖是静默的: config.yaml 写 mode: paper, settings 里却是 live, 只看文件会误判
+    "模拟盘不会真下单"(2026-10-26 真实踩过)。所以凡是改变了生效值的覆盖,
+    都写进启动日志 + 事件日志, mode 单独一行醒目提示。
+    """
+    changed = []
     for k, v in db.get_settings().items():
         if k.startswith("_"):
             continue
+        before = cfg.get(k)          # 此刻尚未覆盖 = config.yaml 里的原值(没有则 None)
         try:
-            cfg.set_override(k, json.loads(v))
+            val = json.loads(v)
         except (ValueError, TypeError):
-            cfg.set_override(k, v)
+            val = v
+        cfg.set_override(k, val)
+        if val != before:
+            changed.append((k, before, val))
+    if not changed:
+        return
+    log = logging.getLogger("config")
+    for k, before, val in changed:
+        if k == "mode":
+            msg = f"⚠️ 生效模式 mode={val} (来自数据库 settings, 覆盖了 config.yaml 的 {before})"
+            log.warning(msg)
+            try:
+                db.log("warning", "config", msg)
+            except Exception:
+                log.exception("写事件日志失败")
+    # 凭据类的值只报"被覆盖了", 不打明文 —— 日志会被留存、转发、贴给别人看
+    def _shown(k, v):
+        return "***" if v is not None and _SECRET_KEY_RE.search(k) else v
+    detail = ", ".join(f"{k}: {_shown(k, b)}→{_shown(k, a)}" for k, b, a in changed)
+    log.warning("settings 覆盖 config.yaml 共 %d 项: %s", len(changed), detail)

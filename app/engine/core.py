@@ -13,6 +13,9 @@ from .signals import SignalEngine
 log = logging.getLogger("core")
 
 COLS = ("open_time", "open", "high", "low", "close", "volume", "quote_volume", "taker_buy", "closed")
+RISK_CACHE_SECONDS = 5
+TRANSFER_HISTORY_MAX_AGE_SECONDS = 89 * 24 * 60 * 60
+POSITION_RESERVATION_SECONDS = 15
 
 
 class Engine:
@@ -36,7 +39,10 @@ class Engine:
         self.squeeze: dict[str, dict] = {}   # 逼空候选 symbol -> 明细
         self.trader = None                   # live 模式注入 LiveTrader(main.py)
         self._auto_halt = False              # 熔断标志(达最大亏损后停自动)
-        self._bal_cache = (0.0, 0.0)         # (余额, 取数时间) 60s缓存
+        self._bal_cache = (0.0, 0.0)         # (余额, 取数时间) 短缓存
+        self._risk_equity_cache = (None, 0.0)  # (划转校正余额明细, 取数时间)
+        self._auto_order_lock = asyncio.Lock()  # 风控检查到下单必须串行
+        self._position_reservations: dict[str, float] = {}  # 等待交易所持仓可见
 
     # ---------- 生命周期 ----------
     async def start(self) -> None:
@@ -356,9 +362,9 @@ class Engine:
                         (_json.dumps(ex, ensure_ascii=False), sid))
 
     async def _wallet_balance(self):
-        """合约总钱包余额, 60s缓存。失败返回 None。"""
+        """合约总钱包余额, 短缓存。失败返回 None。"""
         bal, ts = self._bal_cache
-        if time.time() - ts < 60:
+        if time.time() - ts < RISK_CACHE_SECONDS:
             return bal
         try:
             acc = await self.rest.account_info()
@@ -368,33 +374,131 @@ class Engine:
         except Exception:
             return None
 
+    async def _transfer_adjusted_wallet(self):
+        """返回划转校正后的钱包明细；外部资金进出不计作交易盈亏。"""
+        cached, ts = self._risk_equity_cache
+        if cached is not None and time.time() - ts < RISK_CACHE_SECONDS:
+            return cached
+        raw = await self._wallet_balance()
+        if raw is None:
+            return None
+        end_ms = int(time.time() * 1000)
+        row = self.db.one(
+            "SELECT updated_at FROM settings WHERE key=?", ("risk.account_equity",))
+        if not row or not row["updated_at"]:
+            raise RuntimeError("risk.account_equity 缺少有效基准时间")
+        baseline_s = int(row["updated_at"])
+        now_s = int(time.time())
+        if baseline_s > now_s:
+            raise RuntimeError("risk.account_equity 基准时间位于未来")
+        if baseline_s < now_s - TRANSFER_HISTORY_MAX_AGE_SECONDS:
+            raise RuntimeError("risk.account_equity 基准超过 Binance 89天安全查询窗口")
+        start_ms = baseline_s * 1000
+        transfer_net = 0.0
+        page = 1
+        while True:
+            batch = await self.rest.income(
+                start_ms=start_ms, end_ms=end_ms, limit=1000, page=page,
+                income_type="TRANSFER")
+            transfer_net += sum(
+                float(item.get("income") or 0)
+                for item in batch
+                if item.get("asset") == "USDT"
+                and item.get("incomeType") == "TRANSFER"
+            )
+            if len(batch) < 1000:
+                break
+            page += 1
+        result = {
+            "raw": raw,
+            "transfer_net": transfer_net,
+            "adjusted": raw - transfer_net,
+        }
+        self._risk_equity_cache = (result, time.time())
+        return result
+
     async def _auto_execute(self, sid: int, sig) -> bool:
         """自动下单(带熔断+持仓上限)。返回是否已下单(False→回退人工确认)。"""
         if self.trader is None or self.cfg.mode != "live" or not self.cfg.get("live.auto_trade", False):
             return False
-        # 安全阀1: 亏损熔断(余额跌破本金的 1-max_loss_pct%)
+        async with self._auto_order_lock:
+            return await self._auto_execute_locked(sid, sig)
+
+    async def _auto_execute_locked(self, sid: int, sig) -> bool:
+        """串行完成风控检查与下单，避免并发信号突破持仓上限。"""
+        if self.trader is None or self.cfg.mode != "live" or not self.cfg.get("live.auto_trade", False):
+            return False
+        trade_direction = self.cfg.get("trade_direction", "both")
+        if trade_direction != "both" and sig.direction != trade_direction:
+            self.db.log("info", "auto", f"方向已切换为{trade_direction}, 跳过 {sig.symbol} {sig.direction}")
+            return False
+        # 安全阀1: 亏损熔断。资金划转不计作交易盈亏。
         base = float(self.cfg.get("risk.account_equity", 100) or 100)
         loss_pct = float(self.cfg.get("live.max_loss_pct", 50) or 50)
-        bal = await self._wallet_balance()
-        if bal is not None and base > 0 and bal < base * (1 - loss_pct / 100.0):
+        try:
+            equity = await self._transfer_adjusted_wallet()
+        except Exception as exc:
+            log.exception("transfer-adjusted equity check failed")
             if not self._auto_halt:
                 self._auto_halt = True
-                self.db.log("error", "auto", f"熔断: 余额{bal:.2f}<本金{base}的{100-loss_pct:.0f}%, 停自动")
+                self.db.log("error", "auto", f"熔断: 无法核验划转校正余额，停自动: {exc}")
                 for sub in self.notice_subscribers:
-                    await sub(f"🛑熔断: 余额{bal:.2f}U 跌破本金{base}的{100-loss_pct:.0f}%, 已停止自动交易")
+                    await sub("🛑熔断: 无法核验划转校正余额，已停止自动交易")
             return False
+        if equity is None:
+            if not self._auto_halt:
+                self._auto_halt = True
+                self.db.log("error", "auto", "熔断: 无法读取合约钱包余额，停自动")
+                for sub in self.notice_subscribers:
+                    await sub("🛑熔断: 无法读取合约钱包余额，已停止自动交易")
+            return False
+        adjusted = equity["adjusted"]
+        if base > 0 and adjusted < base * (1 - loss_pct / 100.0):
+            if not self._auto_halt:
+                self._auto_halt = True
+                detail = (f"熔断: 校正余额{adjusted:.2f}<本金{base}的{100-loss_pct:.0f}% "
+                          f"(钱包{equity['raw']:.2f}, 划转{equity['transfer_net']:+.2f}), 停自动")
+                self.db.log("error", "auto", detail)
+                for sub in self.notice_subscribers:
+                    await sub(f"🛑熔断: 校正余额{adjusted:.2f}U 跌破本金{base}的"
+                              f"{100-loss_pct:.0f}%, 已停止自动交易")
+            return False
+        if self._auto_halt:
+            self._auto_halt = False
+            self.db.log("info", "auto", f"熔断解除: 划转校正余额{adjusted:.2f}U")
+            for sub in self.notice_subscribers:
+                await sub(f"✅熔断解除: 划转校正余额{adjusted:.2f}U，自动交易恢复")
         # 安全阀2: 最大同时持仓
         try:
             raw = await self.rest.position_risk()
             nopen = sum(1 for p in raw if float(p.get("positionAmt") or 0) != 0)
-        except Exception:
-            nopen = 0
+        except Exception as exc:
+            self.db.log("error", "auto", f"持仓核验失败，跳过 {sig.symbol}: {exc}")
+            for sub in self.notice_subscribers:
+                await sub(f"🛑持仓核验失败，已跳过 {sig.symbol} 自动下单")
+            return False
+        now_mono = time.monotonic()
+        self._position_reservations = {
+            symbol: expires for symbol, expires in self._position_reservations.items()
+            if expires > now_mono
+        }
+        visible_symbols = {
+            p.get("symbol") for p in raw
+            if float(p.get("positionAmt") or 0) != 0 and p.get("symbol")
+        }
+        for symbol in visible_symbols:
+            self._position_reservations.pop(symbol, None)
+        nopen += sum(1 for symbol in self._position_reservations
+                     if symbol not in visible_symbols)
         if nopen >= int(self.cfg.get("live.max_positions", 10)):
             self.db.log("info", "auto", f"持仓达上限{nopen}, 跳过 {sig.symbol}")
             return False
         # 下单
         row = sig.to_db(); row["id"] = sid
         res = await self.trader.execute_signal(sid, row)
+        if res.get("ok"):
+            self._position_reservations[sig.symbol] = (
+                time.monotonic() + POSITION_RESERVATION_SECONDS)
         self.db.update_signal(sid, status=("confirmed" if res.get("ok") else "error"))
         for sub in self.notice_subscribers:
             await sub(("🚀自动下单 " if res.get("ok") else "⚠️自动下单失败 ") + res.get("message", ""))
