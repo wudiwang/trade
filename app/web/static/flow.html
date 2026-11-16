@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#161b24">
+<meta name="color-scheme" content="dark">
+<title>订单流 · BTC</title>
+<!-- 不引 style.css：它的 table/td/header 等全局选择器会波及图表库内部的表格布局；配色在 flow.css 里对齐 -->
+<link rel="stylesheet" href="/flow.css?v=1">
+</head>
+<body class="flow">
+
+<!-- 0. 顶栏 -->
+<div class="fl-top" role="banner">
+  <h1>订单流 <span class="fl-dim">· BTC</span></h1>
+  <div class="fl-top-right">
+    <button type="button" class="fl-status" id="hl-btn" aria-expanded="false" aria-controls="hl-pop" title="服务状态">
+      <span class="fl-dot" id="hl-dot"></span><span id="hl-time">--:--:--</span>
+    </button>
+    <a class="fl-link" id="nav-console" href="/">控制台</a>
+  </div>
+  <div class="fl-pop" id="hl-pop" hidden></div>
+</div>
+
+<div class="fl-main" role="main">
+
+  <!-- A. 状态卡 -->
+  <section class="fl-block fl-a" id="blk-summary">
+    <div class="fl-price-row">
+      <span class="fl-sym">BTC</span>
+      <span class="fl-price" id="s-price">–</span>
+      <span class="fl-chgs">
+        <span class="fl-chg" id="s-chg24"><i>24h</i><b>–</b></span>
+        <span class="fl-chg" id="s-chg7"><i>7d</i><b>–</b></span>
+      </span>
+      <span class="fl-err" data-err></span>
+    </div>
+    <div class="fl-stats">
+      <div class="fl-stat" id="st-cvd">
+        <h3>CVD × 价格</h3>
+        <div class="fl-stat-main" id="s-div">–</div>
+        <div class="fl-pills" id="s-divs"></div>
+        <div class="fl-stat-sub" id="s-cvd">&nbsp;</div>
+      </div>
+      <div class="fl-stat" id="st-fund">
+        <h3>资金费</h3>
+        <div class="fl-stat-main" id="s-fund">–</div>
+        <div class="fl-bars" id="s-fund-bars"></div>
+        <div class="fl-stat-sub" id="s-fund-label">&nbsp;</div>
+      </div>
+      <div class="fl-stat" id="st-oi">
+        <h3>OI 四象限</h3>
+        <div class="fl-stat-main" id="s-quad">–</div>
+        <div class="fl-quad-wrap">
+          <svg class="fl-quad" viewBox="0 0 76 44" aria-hidden="true">
+            <rect class="q" data-q="short_cover" x="0" y="0" width="38" height="22"/>
+            <rect class="q" data-q="new_longs" x="38" y="0" width="38" height="22"/>
+            <rect class="q" data-q="long_squeeze" x="0" y="22" width="38" height="22"/>
+            <rect class="q" data-q="new_shorts" x="38" y="22" width="38" height="22"/>
+            <line x1="38" y1="0" x2="38" y2="44"/><line x1="0" y1="22" x2="76" y2="22"/>
+            <circle id="s-quad-dot" cx="38" cy="22" r="4"/>
+          </svg>
+          <div class="fl-quad-key"><span>↑价</span><span>OI→</span></div>
+        </div>
+        <div class="fl-stat-sub" id="s-oi">&nbsp;</div>
+      </div>
+    </div>
+    <div class="fl-summary" id="s-summary"></div>
+  </section>
+
+  <!-- B. 深度热力图 -->
+  <section class="fl-block fl-b" id="blk-depth">
+    <div class="fl-head">
+      <h2>深度热力图</h2>
+      <span class="fl-err" data-err></span>
+      <div class="fl-seg" id="d-hours" role="group" aria-label="时间窗口">
+        <button type="button" data-v="1">1h</button>
+        <button type="button" data-v="6">6h</button>
+        <button type="button" data-v="24">24h</button>
+        <button type="button" data-v="72">3d</button>
+        <button type="button" data-v="168">7d</button>
+      </div>
+    </div>
+    <div class="fl-srcs" id="d-srcs" role="group" aria-label="数据源">
+      <button type="button" data-src="all"><b>全部</b><i>合并</i></button>
+      <button type="button" data-src="binance"><b>币安</b><i>–</i></button>
+      <button type="button" data-src="bybit"><b>Bybit</b><i>–</i></button>
+      <button type="button" data-src="okx"><b>OKX</b><i>–</i></button>
+      <button type="button" data-src="binance_spot"><b><span class="fl-xs-hide">币安</span>现货</b><i>–</i></button>
+    </div>
+    <div class="fl-heat fl-heat-depth" id="d-chart"></div>
+    <div class="fl-foot">
+      <div class="fl-legend" id="d-legend"></div>
+      <div class="fl-key"><span class="k-bid">买盘</span><span class="k-ask">卖盘</span></div>
+      <div class="fl-meta" id="d-meta"></div>
+    </div>
+    <div class="fl-note" id="d-note" hidden></div>
+  </section>
+
+  <!-- C. 清算热力图(估算) -->
+  <section class="fl-block fl-c" id="blk-liq">
+    <div class="fl-head">
+      <h2>清算热力图</h2>
+      <span class="fl-badge">估算</span>
+      <button type="button" class="fl-info" id="l-info" aria-expanded="false" aria-controls="l-assume" title="估算假设">i</button>
+      <span class="fl-err" data-err></span>
+      <div class="fl-seg" id="l-days" role="group" aria-label="回看天数">
+        <button type="button" data-v="3">3d</button>
+        <button type="button" data-v="7">7d</button>
+        <button type="button" data-v="14">14d</button>
+        <button type="button" data-v="30">30d</button>
+      </div>
+    </div>
+    <div class="fl-note" id="l-assume" hidden></div>
+    <div class="fl-heat fl-heat-liq" id="l-chart"></div>
+    <div class="fl-foot">
+      <div class="fl-legend" id="l-legend"></div>
+      <div class="fl-key"><span class="k-bid">多单清算</span><span class="k-ask">空单清算</span></div>
+    </div>
+    <div class="fl-clusters">
+      <div class="fl-cl fl-cl-up"><h3>上方 · 空单 <span>BTC</span></h3><div id="l-above"></div></div>
+      <div class="fl-cl fl-cl-dn"><h3>下方 · 多单 <span>BTC</span></h3><div id="l-below"></div></div>
+    </div>
+  </section>
+
+  <!-- D. CVD 对比 -->
+  <section class="fl-block fl-d" id="blk-cvd">
+    <div class="fl-head">
+      <h2>CVD 对比</h2>
+      <span class="fl-err" data-err></span>
+      <button type="button" class="fl-toggle" id="c-shared" aria-pressed="false" title="各线共用一个纵轴，比较绝对量">同轴</button>
+      <div class="fl-seg" id="c-tf" role="group" aria-label="周期">
+        <button type="button" data-v="5m">5m</button>
+        <button type="button" data-v="15m">15m</button>
+        <button type="button" data-v="1h">1h</button>
+        <button type="button" data-v="4h">4h</button>
+      </div>
+    </div>
+    <div class="fl-chips" id="c-divs"></div>
+    <div class="fl-note" id="c-div-text" hidden></div>
+    <div class="fl-lines" id="c-legend"></div>
+    <div class="fl-cvd" id="c-chart"></div>
+  </section>
+
+</div>
+
+<script src="/lib/lwc.js" defer></script>
+<script src="/flow.js?v=2" defer></script>
+</body>
+</html>

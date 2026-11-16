@@ -3,11 +3,10 @@ const $ = id => document.getElementById(id);
 const fmtT = ts => new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 const fmtP = p => p == null ? '–' : (p >= 100 ? p.toLocaleString('en', {maximumFractionDigits: 2}) : Number(p.toPrecision(6)));
 
-async function api(path, opts) {
-  const r = await fetch(path, opts);
-  if (r.status === 401) { location.href = '/login.html'; throw new Error('401'); }
-  return r.json();
-}
+// 用户录入的文本(备注/标题)进 innerHTML 前先转义
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+// 放进 onclick="fn('…')" 这种 JS 字符串里的币种名：只留安全字符
+const symSafe = s => String(s ?? '').replace(/[^\p{L}\p{N}_.-]/gu, '');
 
 function toast(msg) {
   const d = document.createElement('div');
@@ -16,7 +15,59 @@ function toast(msg) {
   setTimeout(() => d.remove(), 6000);
 }
 
-async function logout() { await fetch('/api/logout', {method: 'POST'}); location.href = '/login.html'; }
+// ---------- 登录态 ----------
+// 页面免登录可看；控制类功能(实盘持仓/自动下单/参数/关注增删/大盘观点保存/预演/回测)只在登录后出现。
+// 匿名时根本不去请求需要登录的接口；任何接口 401 只让对应面板降级，绝不跳登录页。
+let ME = {logged_in: false, user: null};
+class ApiError extends Error {
+  constructor(status, body) { super('HTTP ' + status); this.status = status; this.body = body; }
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const isAction = !!(opts && opts.method && opts.method !== 'GET');
+  let body = null;
+  try { body = await r.json(); } catch (e) {}
+  if (r.status === 401) { onSessionLost(isAction); throw new ApiError(401, body); }
+  if (r.status === 403 || r.status === 429 || r.status >= 500 || body === null) {
+    if (isAction) toast('❌ ' + ((body && body.error) || '请求失败 ' + r.status));
+    throw new ApiError(r.status, body);
+  }
+  return body;      // 其余(含 400/409 的 {error})交给调用方自己提示
+}
+function onSessionLost(isAction) {
+  if (ME.logged_in) {                       // 会话中途失效：收起控制区，留在当前页
+    ME = {logged_in: false, user: null};
+    applyAuthUI();
+    run(loadWatch);                         // 重画关注列表(去掉 ✕)
+    toast('🔒 登录已失效，请重新登录');
+  } else if (isAction) {
+    toast('🔒 请先登录');
+  }
+}
+function needLogin() {
+  if (ME.logged_in) return true;
+  toast('🔒 请先登录');
+  return false;
+}
+function applyAuthUI() {
+  document.body.classList.remove('auth-pending');
+  document.body.classList.toggle('authed', !!ME.logged_in);
+  const link = $('login-link');
+  if (link) link.href = '/login.html?next=' + encodeURIComponent(location.pathname + location.search);
+}
+// 面板级容错：某个接口失败(401/429/网络)只影响它自己那块；被限流(429)稍后自动重试一次
+function run(fn, retried) {
+  return Promise.resolve().then(fn).catch(e => {
+    if (e instanceof ApiError) {
+      if (e.status === 429 && !retried) setTimeout(() => run(fn, true), 3000 + Math.random() * 2000);
+    } else console.warn(fn.name, e);
+  });
+}
+
+async function logout() {
+  try { await fetch('/api/logout', {method: 'POST'}); } catch (e) {}
+  location.reload();                        // 退出后留在本页，变回只读视图
+}
 
 // ---------- 状态与统计 ----------
 const TRACK_NAMES = {
@@ -108,7 +159,7 @@ async function loadSignals() {
       <td><span class="tag ${s.direction}">${s.direction === 'long' ? '多' : '空'}</span></td>
       <td><span class="tag ${stateClass(s.state)}">${dispType(sigType(s), s.direction, s.state, s.extra)} ${sigScore(s)}</span></td>
       <td>${fmtP(s.entry)}</td><td class="red">${fmtP(s.sl)}</td><td class="green">${fmtP(s.tp)}</td>
-      <td><b>${s.rr}</b></td><td>${s.vol_ratio}x</td><td>${s.status}</td>
+      <td><b>${s.rr}</b></td><td>${s.vol_ratio}x</td><td>${s.status || '–'}</td>
     </tr>`).join('');
   maybeOpenSignalFromUrl();
 }
@@ -155,12 +206,13 @@ function openChartFromTrade(id) {
 async function loadWatch() {
   const rows = await api('/api/watchlist');
   $('watch-chips').innerHTML = rows.map(w => `
-    <span class="pill" title="${w.note || ''}" style="cursor:pointer" onclick="openChart('${w.symbol}','15m')">
-      ${w.symbol}${w.note ? ' · ' + w.note : ''}
-      <span style="color:var(--red);margin-left:6px" onclick="event.stopPropagation();removeWatch('${w.symbol}')">✕</span>
-    </span>`).join('') || '<span class="muted">还没关注的币，加一个（会强制纳入监控，即使成交额不达标）</span>';
+    <span class="pill" title="${esc(w.note)}" style="cursor:pointer" onclick="openChart('${symSafe(w.symbol)}','15m')">
+      ${esc(w.symbol)}${w.note ? ' · ' + esc(w.note) : ''}
+      ${ME.logged_in ? `<span style="color:var(--red);margin-left:6px" onclick="event.stopPropagation();removeWatch('${symSafe(w.symbol)}')">✕</span>` : ''}
+    </span>`).join('') || `<span class="muted">${ME.logged_in ? '还没关注的币，加一个（会强制纳入监控，即使成交额不达标）' : '暂无关注'}</span>`;
 }
 async function addWatch() {
+  if (!needLogin()) return;
   const sym = $('watch-symbol').value, note = $('watch-note').value;
   if (!sym) { toast('❌ 请填币种'); return; }
   toast('⏳ 加入并回填K线中…');
@@ -169,6 +221,7 @@ async function addWatch() {
   else toast('❌ ' + (r.error || '失败'));
 }
 async function removeWatch(sym) {
+  if (!needLogin()) return;
   await api('/api/watchlist/remove', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol: sym})});
   loadWatch();
 }
@@ -185,6 +238,7 @@ async function loadMacro() {
   $('macro-dir').value = m.direction;
 }
 async function saveMacro() {
+  if (!needLogin()) return;
   const r = await api('/api/macro', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({direction: $('macro-dir').value, note: $('macro-input').value, source: 'manual'})});
   if (r.ok) { toast('✅ 大盘观点已更新'); $('macro-input').value = ''; loadMacro(); }
@@ -196,6 +250,7 @@ const PB_STATUS = {active: '⏳监控中', triggered: '🎬已触发', done: '�
 const PB_TRIG = {price_reach: '到价', sweep_reclaim: '假突破回收'};
 function togglePbForm() { const f = $('pb-form'); f.style.display = f.style.display === 'none' ? 'flex' : 'none'; }
 async function savePlaybook() {
+  if (!needLogin()) return;
   const body = {
     symbol: $('pb-symbol').value, tf: $('pb-tf').value, direction: $('pb-dir').value,
     trigger_type: $('pb-trig').value, trigger_price: $('pb-trigprice').value,
@@ -207,6 +262,7 @@ async function savePlaybook() {
   else toast('❌ ' + (r.error || '失败'));
 }
 async function pbAction(id, status) {
+  if (!needLogin()) return;
   await api('/api/playbooks/' + id, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({status})});
   loadPlaybooks();
 }
@@ -219,8 +275,8 @@ async function loadPlaybooks() {
       <td>${PB_TRIG[p.trigger_type] || p.trigger_type}</td>
       <td class="gold">${fmtP(p.trigger_price)}</td><td>${fmtP(p.entry)}</td>
       <td class="green">${fmtP(p.tp)}</td><td class="red">${fmtP(p.sl)}</td>
-      <td>${PB_STATUS[p.status] || p.status}</td><td class="muted">${p.title || ''}</td>
-      <td onclick="event.stopPropagation()">${p.status === 'active'
+      <td>${PB_STATUS[p.status] || p.status}</td><td class="muted">${esc(p.title)}</td>
+      <td onclick="event.stopPropagation()">${!ME.logged_in ? '' : p.status === 'active'
         ? `<button class="btn" style="padding:2px 8px" onclick="pbAction(${p.id},'cancelled')">取消</button>`
         : `<button class="btn" style="padding:2px 8px;background:var(--panel2)" onclick="pbAction(${p.id},'done')">归档</button>`}</td>
     </tr>`).join('') || '<tr><td colspan="12" class="muted">还没有预演，点「+ 新建预演」记录一个剧本</td></tr>';
@@ -229,6 +285,7 @@ async function loadPlaybooks() {
 // ---------- 策略回测 ----------
 let btTimer = null;
 async function runBacktest() {
+  if (!needLogin()) return;
   const days = $('bt-days').value;
   const r = await api('/api/backtest', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({days: Number(days)})});
@@ -460,6 +517,7 @@ const SETTING_LABELS = {
 const BOOL_SETTINGS = ['chan.require_divergence', 'chan.strong_reversal_15m', 'spring.btc_filter', 'live.auto_trade'];
 // 顶部一键自动交易开关
 async function loadAutoSwitch() {
+  if (!ME.logged_in) return;
   const s = await api('/api/settings'), btn = $('auto-switch');
   if (!btn) return;
   const on = !!s['live.auto_trade'], live = s.mode === 'live';
@@ -469,6 +527,7 @@ async function loadAutoSwitch() {
   btn.dataset.on = on ? '1' : '0';
 }
 async function toggleAuto() {
+  if (!needLogin()) return;
   const btn = $('auto-switch'), turnOn = btn.dataset.on !== '1';
   if (turnOn && !confirm('确认开启【自动下单】? 信号将免Telegram确认直接真实下单(受熔断/持仓/单笔名义额限制)。')) return;
   const r = await api('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -494,6 +553,7 @@ function renderField(k, v) {
   return `<label>${label}<input data-k="${k}" value="${v}"></label>`;
 }
 async function loadSettings() {
+  if (!ME.logged_in) return;
   const s = await api('/api/settings');
   const title = (t, c) => `<div style="flex-basis:100%;width:100%;font-weight:600;color:${c};margin:8px 0 2px">${t}</div>`;
   const live = LIVE_KEYS.filter(k => k in s).map(k => renderField(k, s[k])).join('');
@@ -503,6 +563,7 @@ async function loadSettings() {
     title('🧪 策略 / 回测参数', '#8b949e') + other;
 }
 async function saveSettings() {
+  if (!needLogin()) return;
   const body = {};
   document.querySelectorAll('#settings [data-k]').forEach(el => body[el.dataset.k] = el.value);
   const r = await api('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
@@ -510,24 +571,35 @@ async function saveSettings() {
 }
 
 // ---------- 实时推送 ----------
+// 匿名也能连(只收推送)；服务端对匿名连接数有上限，连不上就退避重试，期间靠定时轮询兜底
+let wsUp = false, wsFails = 0;
 function connectWS() {
   const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/ws');
+  let ping = null;
   ws.onmessage = e => {
     const {kind, data} = JSON.parse(e.data);
     if (kind === 'signal') {
       toast(`📡 新信号 #${data.id} ${data.symbol} ${data.tf} ${data.direction === 'long' ? '做多' : '做空'} RR=${data.rr}`);
-      loadSignals(); loadStatus();
+      run(loadSignals); run(loadStatus);
     } else if (kind === 'trade_close') {
       toast(`${data.result === 'tp' ? '🎯' : '🛑'} ${data.symbol} ${data.result.toUpperCase()} ${data.pnl?.toFixed(2)}U`);
-      loadTrades(); loadStatus();
+      run(loadTrades); run(loadStatus);
     }
   };
-  ws.onopen = () => setInterval(() => ws.readyState === 1 && ws.send('ping'), 30000);
-  ws.onclose = () => setTimeout(connectWS, 5000);
+  ws.onopen = () => {
+    wsUp = true; wsFails = 0;
+    ping = setInterval(() => ws.readyState === 1 && ws.send('ping'), 30000);
+  };
+  ws.onclose = () => {
+    wsUp = false; wsFails++;
+    if (ping) clearInterval(ping);
+    setTimeout(connectWS, Math.min(60000, 5000 * wsFails));
+  };
 }
 
 // ---------- 实盘持仓 ----------
 async function loadPositions() {
+  if (!ME.logged_in) return;
   const d = await api('/api/positions');
   const note = $('pos-note'), tb = $('t-positions');
   if (!d.live) { note.textContent = 'paper 模式(未实盘)'; tb.innerHTML = '<tr><td colspan="8" class="muted">切到 live 模式后显示真实持仓</td></tr>'; return; }
@@ -546,7 +618,7 @@ async function loadPositions() {
 // ---------- 实盘数据(真实盈亏/胜率/手续费, 与模拟盘区分) ----------
 async function loadLiveStats() {
   const el = $('live-stats');
-  if (!el) return;
+  if (!el || !ME.logged_in) return;
   const d = await api('/api/live_stats?days=30');
   if (!d.live) { el.textContent = '💰 实盘数据: 切到 live 模式后显示真实盈亏/手续费'; return; }
   if (d.error) { el.textContent = '💰 实盘数据读取失败: ' + d.error; return; }
@@ -637,9 +709,48 @@ async function loadStrategyStatus() {
 }
 loadStatus = loadStrategyStatus;
 
-removeLegacySummaryPanels();
-loadMacro(); loadWatch(); loadStatus(); loadSignals(); loadTrades(); loadSettings(); loadPositions(); loadAutoSwitch(); loadBtcChart(); connectWS();
-setInterval(loadStatus, 15000);
-setInterval(loadAutoSwitch, 20000);
-setInterval(loadPositions, 15000);
-setInterval(loadBtcChart, 60000);
+// ---------- 账号(仅登录后)：初始密码提醒 + 修改密码 ----------
+async function loadAccount() {
+  if (!ME.logged_in) return;
+  const a = await api('/api/account');
+  const w = $('pwd-warn');
+  if (w) w.style.display = a.default_password ? '' : 'none';
+}
+function togglePwdForm(show) {
+  const f = $('pwd-form');
+  if (!f) return;
+  f.style.display = (show === true || f.style.display === 'none') ? 'flex' : 'none';
+  if (f.style.display !== 'none') f.scrollIntoView({block: 'center'});
+}
+async function changePassword() {
+  if (!needLogin()) return;
+  const oldp = $('pwd-old').value, newp = $('pwd-new').value;
+  if (newp.length < 8) { toast('❌ 新密码至少8位'); return; }
+  if (newp !== $('pwd-new2').value) { toast('❌ 两次输入的新密码不一致'); return; }
+  const r = await api('/api/password', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({old: oldp, new: newp})});
+  if (r.ok) {
+    toast('✅ 密码已修改，其它设备上的登录已全部失效');
+    ['pwd-old', 'pwd-new', 'pwd-new2'].forEach(i => $(i).value = '');
+    $('pwd-form').style.display = 'none';
+    run(loadAccount);
+  } else toast('❌ ' + (r.error || '修改失败'));
+}
+
+async function boot() {
+  removeLegacySummaryPanels();
+  try {
+    const m = await api('/api/me');
+    ME = {logged_in: !!m.logged_in, user: m.user || null};
+  } catch (e) { ME = {logged_in: false, user: null}; }
+  applyAuthUI();
+  [loadMacro, loadWatch, loadStatus, loadSignals, loadTrades, loadBtcChart].forEach(f => run(f));
+  if (ME.logged_in) [loadSettings, loadPositions, loadAutoSwitch, loadAccount].forEach(f => run(f));
+  connectWS();
+  setInterval(() => run(loadStatus), 15000);
+  setInterval(() => ME.logged_in && run(loadAutoSwitch), 20000);
+  setInterval(() => ME.logged_in && run(loadPositions), 15000);
+  setInterval(() => run(loadBtcChart), 60000);
+  setInterval(() => { if (!wsUp) { run(loadSignals); run(loadTrades); } }, 60000);   // 推送不通时的兜底刷新
+}
+boot();

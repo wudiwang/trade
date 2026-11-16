@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>登录 · 缠论交易系统</title>
-<link rel="stylesheet" href="/style.css?v=34">
+<link rel="stylesheet" href="/style.css?v=35">
 </head>
 <body class="login-body">
 <div class="login-box">
@@ -14,8 +14,19 @@
   <input id="p" type="password" placeholder="密码" autocomplete="current-password">
   <button id="btn" onclick="doLogin()">登 录</button>
   <p id="err" class="err"></p>
+  <p style="margin:6px 0 0"><a id="back" href="/" style="color:var(--muted);font-size:13px">← 不登录，先看看</a></p>
 </div>
 <script>
+// 登录后回到来源页：解析成绝对地址后必须仍是本站，否则回首页（防开放重定向）
+const NEXT = (() => {
+  try {
+    const u = new URL(new URLSearchParams(location.search).get('next') || '/', location.origin);
+    return u.origin === location.origin ? u.href : '/';
+  } catch (e) { return '/'; }
+})();
+document.getElementById('back').href = NEXT;
+// 已登录就不用再登一次
+fetch('/api/me').then(r => r.json()).then(m => { if (m && m.logged_in) location.replace(NEXT); }).catch(() => {});
 async function doLogin() {
   const err = document.getElementById('err');
   const btn = document.getElementById('btn');
@@ -27,8 +38,10 @@ async function doLogin() {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({username: u.value.trim(), password: p.value})
     });
-    if (r.ok) { location.replace('/'); return; }
-    err.textContent = (await r.json()).error || '登录失败';
+    if (r.ok) { location.replace(NEXT); return; }
+    let msg = '';
+    try { msg = (await r.json()).error || ''; } catch (e) {}
+    err.textContent = msg || (r.status === 429 ? '尝试次数过多，请稍后再试' : '登录失败');
   } catch (e) {
     err.textContent = '网络错误: ' + e.message;
   } finally {

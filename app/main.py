@@ -117,6 +117,15 @@ async def amain() -> None:
                     pass
     asyncio.create_task(orderflow_brief())
 
+    # 订单流页(/flow.html)的后台任务：深度记录器 + 状态卡/CVD/清算图刷新。
+    # 与引擎隔离：这里只是 create_task，不 await 任何触网的东西；启动失败只记日志；
+    # 任务内部每一轮都有 try/except + 超时 + 退避，重计算在线程里，永远不会把异常带到这里。
+    try:
+        from .flow.api import start_flow_tasks
+        flow_tasks = start_flow_tasks(cfg, engine)
+        log.info("flow tasks started: %d", len(flow_tasks))
+    except Exception:
+        log.exception("订单流后台任务启动失败（不影响交易引擎）")
 
     server = uvicorn.Server(uvicorn.Config(
         app, host=cfg.get("web.host", "0.0.0.0"), port=cfg.get("web.port", 8488),
@@ -126,8 +135,15 @@ async def amain() -> None:
     try:
         await server.serve()
     finally:
-        await bot.stop()
-        await engine.stop()
+        try:
+            try:                              # 先停订单流任务（最多等 5 秒）
+                from .flow.api import stop_flow_tasks
+                await asyncio.wait_for(stop_flow_tasks(), 5)
+            except Exception:
+                log.warning("订单流后台任务收尾异常", exc_info=True)
+        finally:                              # 它停不停得干净，都不能挡住 bot / 引擎收尾
+            await bot.stop()
+            await engine.stop()
 
 
 if __name__ == "__main__":

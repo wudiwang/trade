@@ -169,13 +169,22 @@ web:
   username: admin
   # 首次启动若 users 表为空, 用这个初始密码创建账号(登录后请修改)
   initial_password: "trade@2026"
-  session_hours: 72
+  session_hours: 4320
 
 # ---- 数据 ----
 data:
   db_path: data/trade.db
   backfill_bars: 500           # 启动时每币每级别回填500根K
   kline_keep_bars: 1500        # 每币每级别最多保留1500根(自动清理)
+
+# ---- 订单流页 (/flow.html)：深度热力图记录器 + 状态卡/CVD/清算图缓存 ----
+flow:
+  enabled: true                     # false=接口只回空载荷, 不起记录器/刷新任务, 不发任何上游请求
+  db_path: data/flow_depth.sqlite   # 深度快照独立 sqlite(不进 trade.db); 约 7MB/天, 稳态 ~20MB
+  interval_s: 30                    # 盘口快照间隔(秒)。币安合约权重 = 20 × 60/interval 每分钟
+  keep_days: 8                      # 5分钟均值档保留天数(7天窗口要 ≥8); 原始30s快照固定只留2天
+  half_range_pct: 2.5               # 只记录各交易所中间价 ±该百分比以内的挂单
+  sources: [binance, bybit, okx, binance_spot]   # 录哪些源; 页面「全部」只合并三个合约源, 现货需手动点选
 
 # ---- Telegram ----
 telegram:
