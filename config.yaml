@@ -255,3 +255,49 @@ binance:
   ws_base: wss://fstream.binance.com
   testnet: false
   recv_window: 5000
+
+# ---- 日报开关 ----
+reports:
+  paper_daily: false           # 每天 08:00 的「模拟信号统计日报」。重心已转到下面的实盘复盘, 默认不发; 改 true 恢复
+
+# ---- 每日实盘复盘: 今天我有没有按规矩做? (Bybit 手动实盘, 对交易所严格只读) ----
+# 开启步骤: ① 在 Bybit 新建一个【只读】API Key  ② 自己把 BYBIT_API_KEY / BYBIT_API_SECRET 两行写进服务器 .env
+#           ③ 把下面 enabled 和 telegram_enabled 改成 true 并重启。密钥不是只读的会被拒绝使用。
+# 用法: 每天 send_time 自动推送上一自然日的复盘; Telegram 发「复盘」「复盘 昨天」「复盘 2026-11-16」随时要;
+#       登录控制台后看 /api/reviews (列表) 与 /api/reviews/2026-11-16 (某天完整页)。
+review:
+  enabled: false               # 总开关: false 时不联网、不生成, Telegram「复盘」指令只回一句怎么开启
+  timezone: Asia/Shanghai      # 「一天」按哪个时区切, 报告里的钟点也用它 (可改 Asia/Bangkok)
+  send_time: "00:10"           # 每天几点推送刚结束那一天的复盘 (timezone 下; 留 10 分钟等流水到齐; 要带引号)
+  telegram_enabled: false      # 自动推送开关; false 时只在你发「复盘」时才发
+  db_path: data/bybit_review.db
+  output_dir: artifacts/bybit_reviews
+  lookback_days: 7             # 往前多看几天成交: 隔夜拿到今天才离场的单子, 也能看到当初的进场和止损
+  order_sync_minutes: 30       # 每隔多少分钟留存一次挂单快照(只读); 0=不留。交易所只留订单最新状态, 已取消的
+                               #   止损单 24 小时后就查不到, 不留快照就没法判断「止损有没有被放宽」
+  max_late_hours: 6            # 到点时程序没在跑: 之后这么多小时内启动仍会补发, 再晚就不发了
+  ai_timeout_seconds: 120      # 可选的 AI 润色(默认关, 需环境变量 REVIEW_NARRATOR_AI=1)整份报告合计的时限; 结论永远由规则给出
+  kline_timeout_seconds: 240   # 取 K 线合计最多花多久; 到点就按已取到的出报告(硬规矩只看订单, 不受影响)
+  # -- 第一准则「只有止盈与止损」的判定口径 (硬规矩只看订单, 盈亏不参与) --
+  principles:
+    sl_grace_seconds: 120      # 进场后多少秒内挂好止损算「进场即设止损」; 超过算没设
+    entry_window_seconds: 120  # 首笔成交后多少秒内的同向成交仍算同一次进场(分批吃单), 不算加仓
+    sl_gap_seconds: 120        # 止损被撤掉后, 仓位裸奔超过多少秒算「止损被放宽」
+    min_rr: 2.0                # 计划盈亏比参考线(仅参考, 不影响合规结论)
+    horizon_hours: 72          # 手动平仓后往后看多久, 看价格先到原止盈还是原止损(中途下车的代价)
+    flip_minutes: 30           # 平仓后多少分钟内在同一品种反向开仓, 记为当日「反手」
+    reentry_minutes: 30        # 止损后多少分钟内同品种同方向重进, 记为「止损后立刻重进」
+    max_trades_per_day: 0      # 每日开仓笔数上限; 0=不设上限, 只报数
+    assume_single_stop_snapshot_unchanged: false  # 止损/止盈单挂出时的价位没有记录(只有成交或被撤时那一行)时:
+                               #   false=记「未知」(证据不足); true=当作挂出后没改过
+    target_min_rest_seconds: 300   # 进场时没有止盈位、中途才挂的止盈单: 挂出后不到这么多秒就成交, 算手动平仓
+    stop_into_profit_is_exit: true # 止损被移到盈利一侧后触发 / 中途才加的追踪止损: true=算中途下车; false=算止损离场(只加注)
+    breakeven_band_pct: 0.2        # 进场价盈利一侧这么多百分比以内的止损仍算保本止损(留出手续费)
+  # -- 系统匹配(只描述这笔单在交易系统里的位置, 不改变合规结论) --
+  match:
+    min_trend_bars: 120        # 1h/4h 入场前连续K线少于这么多根, 趋势记「未知」
+    fallback_to_1h_when_4h_range: true   # 4h 无序时改由 1h 定方向(报告的标签上会写明「按 1h」)
+    range_when_price_left_last_centre: true  # 两个中枢给出方向、但价格已走到后枢反方向一侧: 记「无序」
+    trigger_lookback_bars: 6   # 小级别触发(分型+停顿)必须出现在入场前几根K线内
+    imbalance_lookback_bars: 12  # 入场前几根内找位移K(失衡)
+    imbalance_body_mult: 3     # 位移K: 实体 ≥ 此前20根实体中位数的几倍

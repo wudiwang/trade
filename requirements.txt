@@ -3,3 +3,5 @@ fastapi>=0.110
 uvicorn>=0.29
 pyyaml>=6.0
 python-dotenv>=1.0
+pillow>=10.0
+tzdata>=2025.1

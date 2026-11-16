@@ -275,6 +275,20 @@ _TF_RE = re.compile(r"^(\d{1,2}[mhd])?$")
 _SYMBOL_RE = re.compile(r"^\w{2,32}$")                      # 币种：字母数字下划线(含中文名合约)，不含任何符号
 
 
+_REVIEW_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")          # /api/reviews/{day}：只认 YYYY-MM-DD
+
+
+def _valid_review_day(day: str) -> bool:
+    """严格校验复盘日期：恰好 YYYY-MM-DD 且是真实存在的日期（纯 ASCII 数字）。"""
+    if not isinstance(day, str) or not day.isascii() or not _REVIEW_DAY_RE.fullmatch(day):
+        return False
+    try:
+        time.strptime(day, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
 def _clamp(v: int, lo: int, hi: int) -> int:
     return max(lo, min(int(v), hi))
 
@@ -1549,6 +1563,32 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     async def events(limit: int = 100):
         return [dict(r) for r in db.query(
             "SELECT * FROM event_log ORDER BY id DESC LIMIT ?", (_clamp(limit, 1, 500),))]
+
+    # ---------- 每日实盘复盘（真实账户数据：只给登录用户，绝不进 PUBLIC_GET） ----------
+    # 只读本地复盘库（app/review 生成好的结果），不在请求路径上调用交易所；sqlite 读放线程里。
+    def review_db_path() -> Path:
+        p = Path(str(cfg.get("review.db_path", "data/bybit_review.db")))
+        return p if p.is_absolute() else Path(__file__).resolve().parents[2] / p
+
+    @app.get("/api/reviews", dependencies=LOGIN)
+    async def reviews(limit: int = 60):
+        """已生成的每日复盘列表（最近的在前）：日期、几笔、几笔合规、是否已对账。"""
+        from app.review.store import read_pages
+        rows = await asyncio.to_thread(read_pages, review_db_path(), _clamp(limit, 1, 366))
+        return {"reviews": [r for r in rows if _REVIEW_DAY_RE.fullmatch(str(r.get("day") or ""))]}
+
+    @app.get("/api/reviews/{day}", dependencies=LOGIN)
+    async def review_page(day: str):
+        """某一天的完整复盘页（自包含 HTML：内联样式与 SVG，无脚本、无外链）。"""
+        if not _valid_review_day(day):
+            return _err(400, "日期格式应为 YYYY-MM-DD")
+        from app.review.store import read_page_html
+        page = await asyncio.to_thread(read_page_html, review_db_path(), day)
+        if page is None:
+            return _err(404, "这一天没有复盘")
+        return Response(content=page, media_type="text/html; charset=utf-8", headers={
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+        })
 
     @app.websocket("/api/ws")
     async def ws_endpoint(ws: WebSocket):

@@ -80,6 +80,17 @@ def daily_close_lines(rows, hidden=frozenset()) -> list[str]:
     return lines
 
 
+def paper_daily_due(cfg, bot_enabled: bool, hour: int, day, last_day) -> bool:
+    """08:00 的模拟信号统计日报这一分钟该不该发。
+
+    reports.paper_daily 默认 false：重心已转到「每日实盘复盘」（app/review/），模拟信号的
+    统计只在显式打开时才推送。代码和数据都保留，改回 true 即恢复。
+    """
+    if not cfg.get("reports.paper_daily", False):
+        return False
+    return hour == 8 and day != last_day and bool(bot_enabled)
+
+
 async def amain() -> None:
     cfg = get_config()
     db = DB(cfg.db_path)
@@ -105,14 +116,14 @@ async def amain() -> None:
         )
 
     async def daily_report():
-        """每天北京时间08:00发送双轨统计日报。"""
+        """每天北京时间08:00发送双轨统计日报（模拟信号；仅 reports.paper_daily=true 时发）。"""
         import time as _t
         last_day = None
         while True:
             await asyncio.sleep(60)
             t = _t.gmtime(_t.time() + 8 * 3600)  # UTC+8
             day = (t.tm_year, t.tm_yday)
-            if t.tm_hour == 8 and day != last_day and bot.enabled:
+            if paper_daily_due(cfg, bot.enabled, t.tm_hour, day, last_day):
                 last_day = day
                 log.info("daily report firing")
                 since = int(_t.time()) - 86400
@@ -158,6 +169,25 @@ async def amain() -> None:
                 except Exception:
                     pass
     asyncio.create_task(orderflow_brief())
+
+    async def live_review():
+        """每日实盘复盘：到 review.send_time（review.timezone）推送刚结束那一天的复盘，
+        并定时留存 Bybit 挂单快照。对交易所只读；只在 review.enabled 且有只读密钥时才联网，
+        推送还要 review.telegram_enabled。取数是 await 的网络 I/O，重建/判定/渲染在工作线程里，
+        不占交易引擎的事件循环；任何异常只记日志。"""
+        try:
+            from .review.daily import SchedulerState, scheduler_tick
+        except Exception:                                 # 复盘模块加载失败不影响交易
+            log.exception("实盘复盘模块加载失败（不影响交易引擎）")
+            return
+        state = SchedulerState()
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await scheduler_tick(cfg, bot, state)
+            except Exception as e:                        # 复盘失败不该拖垮主进程
+                log.warning("live review tick failed: %s", e)
+    asyncio.create_task(live_review())
 
     # 订单流页(/flow.html)的后台任务：深度记录器 + 状态卡/CVD/清算图刷新。
     # 与引擎隔离：这里只是 create_task，不 await 任何触网的东西；启动失败只记日志；

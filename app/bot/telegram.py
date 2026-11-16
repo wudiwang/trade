@@ -352,6 +352,7 @@ class TgBot:
         self._session: aiohttp.ClientSession | None = None
         self._offset = 0
         self._task: asyncio.Task | None = None
+        self._review_task: asyncio.Task | None = None   # 「复盘」指令触发的后台生成任务
         self.enabled = bool(self.token and self.chat_id and cfg.get("telegram.enabled", True))
 
     async def session(self) -> aiohttp.ClientSession:
@@ -442,6 +443,30 @@ class TgBot:
         self.notify_retry_after = wait        # Telegram 要求的等待秒数(429 时才有), 供重试方参考
         return ok
 
+    async def _upload(self, method: str, field: str, path: str, caption: str = "") -> dict:
+        if not self.enabled:
+            return {"ok": False, "description": "telegram disabled"}
+        s = await self.session()
+        url = API.format(token=self.token, method=method)
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(self.chat_id))
+        if caption:
+            form.add_field("caption", caption)
+            form.add_field("parse_mode", "HTML")
+        with open(path, "rb") as handle:
+            form.add_field(field, handle, filename=path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+            async with s.post(url, data=form) as resp:
+                data = await resp.json()
+        if not data.get("ok"):
+            log.warning("tg %s failed: %s", method, data.get("description", "unknown"))
+        return data
+
+    async def send_photo(self, path: str, caption: str = "") -> dict:
+        return await self._upload("sendPhoto", "photo", path, caption)
+
+    async def send_document(self, path: str, caption: str = "") -> dict:
+        return await self._upload("sendDocument", "document", path, caption)
+
     # ---------- 回调处理 ----------
     async def start(self) -> None:
         if not self.enabled:
@@ -455,6 +480,8 @@ class TgBot:
     async def stop(self) -> None:
         if self._task:
             self._task.cancel()
+        if self._review_task and not self._review_task.done():
+            self._review_task.cancel()
         if self._session and not self._session.closed:
             await self._session.close()
 
@@ -488,6 +515,8 @@ class TgBot:
             return
         raw = (m.get("text") or "").strip()
         text = raw.lower()
+        if await self._maybe_review(text):
+            return
         if text in ("/status", "status", "状态"):
             eng = self._engine()
             if eng:
@@ -523,6 +552,64 @@ class TgBot:
             await self.notify(reply)
         except Exception:
             log.exception("alert reply send failed")
+
+    # ---------- 实盘复盘指令：「复盘」/「/review」[今天|昨天|日期] ----------
+    async def _maybe_review(self, text: str) -> bool:
+        """是复盘指令就处理并返回 True。调用方已核对过 chat_id（只认本人）。
+        这里只回一句「生成中…」就返回：真正的生成放到后台任务里，不堵住轮询
+        （下单确认按钮也走同一个轮询）。对 Bybit 只读。"""
+        if not text.lstrip("/").startswith(("复盘", "review")):
+            return False                                  # 其它消息完全不碰复盘模块
+        try:
+            from datetime import datetime
+            from ..review import daily
+            settings = daily.settings_from_config(self.cfg)
+            now = datetime.now(settings.tz)
+            command = daily.parse_review_command(text, now.date())
+            if command is None:
+                return False
+            if command.error:
+                await self.notify(command.error)
+                return True
+            problem = daily.precheck(settings)            # 没密钥 / 没开启：一句话说清该做什么
+            if problem:
+                await self.notify(problem)
+                return True
+            if self._review_task and not self._review_task.done():
+                await self.notify(daily.BUSY_TEXT)
+                return True
+            request = daily.make_request(command.day, settings, int(now.timestamp() * 1000))
+            tail = "（今天还没结束，只算到现在）" if request.partial else ""
+            await self.notify(f"⏳ {request.day} 的实盘复盘生成中…{tail}")
+            self._review_task = asyncio.create_task(self._run_review(settings, request))
+        except Exception as e:
+            log.exception("review command failed")
+            try:
+                from ..review.daily import describe_failure
+                await self.notify(f"复盘没有生成：{describe_failure(e)}")
+            except Exception:
+                pass
+        return True
+
+    async def _run_review(self, settings, request) -> None:
+        from ..review import daily
+        try:
+            result = await daily.run_review(settings, request)
+            await daily.deliver(self, result, settings)
+        except asyncio.CancelledError:
+            raise
+        except daily.DeliveryIncomplete as e:             # 复盘已生成，只是没发全：如实说
+            log.warning("on-demand review partly delivered: %s", daily.describe_failure(e))
+            try:
+                await self.notify(f"{request.day} 的复盘已生成，但没有发全：{daily.describe_failure(e)}")
+            except Exception:
+                pass
+        except Exception as e:                            # 失败只回一句话，不影响其它功能
+            log.warning("on-demand review failed: %s", daily.describe_failure(e))
+            try:
+                await self.notify(f"{request.day} 的复盘没有生成：{daily.describe_failure(e)}")
+            except Exception:
+                pass
 
     async def _on_callback(self, cq: dict) -> None:
         data = cq.get("data", "")
