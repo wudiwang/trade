@@ -1,0 +1,287 @@
+{
+  "about": "限价开空成交时没有止损, 10 分钟后才在仓位上补设止损; 仓位仍未平, 止损单处于未触发状态。",
+  "note": "Invented data shaped after the official Bybit V5 docs; not captured from a real account.",
+  "docs": {
+    "order_history": "https://bybit-exchange.github.io/docs/v5/order/order-list",
+    "open_orders": "https://bybit-exchange.github.io/docs/v5/order/open-order",
+    "executions": "https://bybit-exchange.github.io/docs/v5/order/execution",
+    "positions": "https://bybit-exchange.github.io/docs/v5/position",
+    "enums": "https://bybit-exchange.github.io/docs/v5/enum"
+  },
+  "window": {
+    "start_ms": 1794758400000,
+    "end_ms": 1794844800000,
+    "day": "2026-11-16",
+    "timezone": "Asia/Shanghai"
+  },
+  "responses": {
+    "/v5/order/history": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [
+            {
+              "orderId": "c-entry",
+              "orderLinkId": "",
+              "parentOrderLinkId": "",
+              "blockTradeId": "",
+              "symbol": "SOLUSDT",
+              "price": "238.50",
+              "qty": "12.0",
+              "side": "Sell",
+              "isLeverage": "",
+              "positionIdx": 0,
+              "orderStatus": "Filled",
+              "createType": "CreateByUser",
+              "cancelType": "UNKNOWN",
+              "rejectReason": "EC_NoError",
+              "avgPrice": "238.50",
+              "leavesQty": "0",
+              "leavesValue": "0",
+              "cumExecQty": "12.0",
+              "cumExecValue": "0",
+              "cumExecFee": "0",
+              "timeInForce": "GTC",
+              "orderType": "Limit",
+              "stopOrderType": "UNKNOWN",
+              "orderIv": "",
+              "marketUnit": "",
+              "slippageToleranceType": "UNKNOWN",
+              "slippageTolerance": "",
+              "triggerPrice": "0.00",
+              "takeProfit": "0.00",
+              "stopLoss": "0.00",
+              "tpslMode": "",
+              "ocoTriggerBy": "",
+              "tpLimitPrice": "",
+              "slLimitPrice": "",
+              "tpTriggerBy": "UNKNOWN",
+              "slTriggerBy": "UNKNOWN",
+              "triggerDirection": 0,
+              "triggerBy": "UNKNOWN",
+              "lastPriceOnCreated": "0.00",
+              "basePrice": "",
+              "reduceOnly": false,
+              "closeOnTrigger": false,
+              "placeType": "",
+              "smpType": "None",
+              "smpGroup": 0,
+              "smpOrderId": "",
+              "createdTime": "1794805450000",
+              "updatedTime": "1794805500000",
+              "extraFees": "",
+              "cumFeeDetail": {},
+              "rpiTakerAccess": false,
+              "rpiMatchedQty": "0"
+            }
+          ],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ],
+    "/v5/order/realtime": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [
+            {
+              "orderId": "c-sl",
+              "orderLinkId": "",
+              "parentOrderLinkId": "",
+              "blockTradeId": "",
+              "symbol": "SOLUSDT",
+              "price": "0",
+              "qty": "12.0",
+              "side": "Buy",
+              "isLeverage": "",
+              "positionIdx": 0,
+              "orderStatus": "Untriggered",
+              "createType": "CreateByStopLoss",
+              "cancelType": "UNKNOWN",
+              "rejectReason": "EC_NoError",
+              "avgPrice": "",
+              "leavesQty": "12.0",
+              "leavesValue": "0",
+              "cumExecQty": "0",
+              "cumExecValue": "0",
+              "cumExecFee": "0",
+              "timeInForce": "IOC",
+              "orderType": "Market",
+              "stopOrderType": "StopLoss",
+              "orderIv": "",
+              "marketUnit": "",
+              "slippageToleranceType": "UNKNOWN",
+              "slippageTolerance": "",
+              "triggerPrice": "243.00",
+              "takeProfit": "0.00",
+              "stopLoss": "0.00",
+              "tpslMode": "Full",
+              "ocoTriggerBy": "",
+              "tpLimitPrice": "",
+              "slLimitPrice": "",
+              "tpTriggerBy": "UNKNOWN",
+              "slTriggerBy": "UNKNOWN",
+              "triggerDirection": 1,
+              "triggerBy": "LastPrice",
+              "lastPriceOnCreated": "0.00",
+              "basePrice": "",
+              "reduceOnly": true,
+              "closeOnTrigger": true,
+              "placeType": "",
+              "smpType": "None",
+              "smpGroup": 0,
+              "smpOrderId": "",
+              "createdTime": "1794806100000",
+              "updatedTime": "1794806100000",
+              "extraFees": "",
+              "cumFeeDetail": {},
+              "rpiTakerAccess": false,
+              "rpiMatchedQty": "0"
+            }
+          ],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ],
+    "/v5/execution/list": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [
+            {
+              "symbol": "SOLUSDT",
+              "orderType": "Limit",
+              "underlyingPrice": "",
+              "orderLinkId": "",
+              "side": "Sell",
+              "indexPrice": "",
+              "orderId": "c-entry",
+              "stopOrderType": "UNKNOWN",
+              "leavesQty": "0",
+              "execTime": "1794805500000",
+              "feeCurrency": "",
+              "isMaker": true,
+              "execFee": "0.57240000",
+              "feeRate": "0.0002",
+              "execId": "c-entry-1",
+              "tradeIv": "",
+              "blockTradeId": "",
+              "markPrice": "238.50",
+              "execPrice": "238.50",
+              "markIv": "",
+              "orderQty": "12.0",
+              "orderPrice": "238.50",
+              "execValue": "2862",
+              "execType": "Trade",
+              "execQty": "12.0",
+              "closedSize": "0",
+              "extraFees": "",
+              "seq": 4688002127,
+              "createType": "CreateByUser"
+            }
+          ],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ],
+    "/v5/position/list": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [
+            {
+              "positionIdx": 0,
+              "riskId": 1,
+              "riskLimitValue": "2000000",
+              "symbol": "SOLUSDT",
+              "side": "Sell",
+              "size": "12.0",
+              "avgPrice": "238.50",
+              "positionValue": "",
+              "tradeMode": 0,
+              "positionStatus": "Normal",
+              "autoAddMargin": 0,
+              "adlRankIndicator": 2,
+              "leverage": "10",
+              "positionBalance": "",
+              "markPrice": "238.50",
+              "liqPrice": "",
+              "bustPrice": "",
+              "positionMM": "",
+              "positionIM": "",
+              "tpslMode": "Full",
+              "takeProfit": "0.00",
+              "stopLoss": "243.00",
+              "trailingStop": "0.00",
+              "unrealisedPnl": "0",
+              "curRealisedPnl": "0",
+              "cumRealisedPnl": "0",
+              "seq": 5723621632,
+              "isReduceOnly": false,
+              "mmrSysUpdatedTime": "",
+              "leverageSysUpdatedTime": "",
+              "sessionAvgPrice": "",
+              "createdTime": "1794805500000",
+              "updatedTime": "1794806100000"
+            }
+          ],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ]
+  },
+  "expect": {
+    "orders": {
+      "c-entry": {
+        "origin": "user",
+        "status": "filled",
+        "attached_sl": null,
+        "attached_tp": null,
+        "order_type": "Limit",
+        "price": "238.50"
+      },
+      "c-sl": {
+        "origin": "stop_loss",
+        "status": "untriggered",
+        "reduce_only": true,
+        "close_position": true,
+        "trigger_price": "243.00",
+        "filled_qty": "0",
+        "avg_fill_price": null,
+        "created_ms": 1794806100000
+      }
+    },
+    "executions": {
+      "c-entry-1": {
+        "origin": "user",
+        "closed_size": "0"
+      }
+    },
+    "entry_fill_ms": 1794805500000,
+    "stop_delay_ms": 600000,
+    "position": {
+      "symbol": "SOLUSDT",
+      "position_idx": 0,
+      "size": "-12.0",
+      "stop_loss": "243.00",
+      "take_profit": null,
+      "trailing_stop": null
+    }
+  }
+}

@@ -1,0 +1,1741 @@
+{
+ "about": "一个完整的示例交易日：合规(止盈触发)、中途下车、无止损、反手后止损触发 各一笔。",
+ "note": "Invented data shaped after the official Bybit V5 docs; not captured from a real account.",
+ "docs": {
+  "order_history": "https://bybit-exchange.github.io/docs/v5/order/order-list",
+  "open_orders": "https://bybit-exchange.github.io/docs/v5/order/open-order",
+  "executions": "https://bybit-exchange.github.io/docs/v5/order/execution",
+  "positions": "https://bybit-exchange.github.io/docs/v5/position",
+  "transaction_log": "https://bybit-exchange.github.io/docs/v5/account/transaction-log",
+  "closed_pnl": "https://bybit-exchange.github.io/docs/v5/position/close-pnl",
+  "api_key_info": "https://bybit-exchange.github.io/docs/v5/user/apikey-info",
+  "kline": "https://bybit-exchange.github.io/docs/v5/market/kline",
+  "enums": "https://bybit-exchange.github.io/docs/v5/enum"
+ },
+ "window": {
+  "start_ms": 1794758400000,
+  "end_ms": 1794844800000,
+  "day": "2026-11-16",
+  "timezone": "Asia/Shanghai"
+ },
+ "now_ms": 1794845700000,
+ "responses": {
+  "/v5/user/query-api": {
+   "retCode": 0,
+   "retMsg": "",
+   "result": {
+    "id": "fixture",
+    "note": "fixture",
+    "readOnly": 1
+   },
+   "retExtInfo": {},
+   "time": 1794845700000
+  },
+  "/v5/execution/list": [
+   {
+    "retCode": 0,
+    "retMsg": "OK",
+    "result": {
+     "list": [
+      {
+       "symbol": "BTCUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Sell",
+       "indexPrice": "",
+       "orderId": "a-entry",
+       "stopOrderType": "UNKNOWN",
+       "leavesQty": "0",
+       "execTime": "1794792600124",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "1.0451364000",
+       "feeRate": "0.00055",
+       "execId": "a-entry-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "95012.40",
+       "execPrice": "95012.40",
+       "markIv": "",
+       "orderQty": "0.020",
+       "orderPrice": "95012.40",
+       "execValue": "1900.24800",
+       "execType": "Trade",
+       "execQty": "0.020",
+       "closedSize": "0",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByUser"
+      },
+      {
+       "symbol": "BTCUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Buy",
+       "indexPrice": "",
+       "orderId": "a-tp",
+       "stopOrderType": "TakeProfit",
+       "leavesQty": "0",
+       "execTime": "1794807737528",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "1.0185835000",
+       "feeRate": "0.00055",
+       "execId": "a-tp-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "92598.50",
+       "execPrice": "92598.50",
+       "markIv": "",
+       "orderQty": "0.020",
+       "orderPrice": "92598.50",
+       "execValue": "1851.97000",
+       "execType": "Trade",
+       "execQty": "0.020",
+       "closedSize": "0.020",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByTakeProfit"
+      },
+      {
+       "symbol": "ETHUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Buy",
+       "indexPrice": "",
+       "orderId": "b-entry",
+       "stopOrderType": "UNKNOWN",
+       "leavesQty": "0",
+       "execTime": "1794794710004",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "0.880000000",
+       "feeRate": "0.00055",
+       "execId": "b-entry-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "3200.00",
+       "execPrice": "3200.00",
+       "markIv": "",
+       "orderQty": "0.50",
+       "orderPrice": "3200.00",
+       "execValue": "1600.0000",
+       "execType": "Trade",
+       "execQty": "0.50",
+       "closedSize": "0",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByUser"
+      },
+      {
+       "symbol": "ETHUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Sell",
+       "indexPrice": "",
+       "orderId": "b-close",
+       "stopOrderType": "UNKNOWN",
+       "leavesQty": "0",
+       "execTime": "1794799230950",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "0.886160000",
+       "feeRate": "0.00055",
+       "execId": "b-close-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "3222.40",
+       "execPrice": "3222.40",
+       "markIv": "",
+       "orderQty": "0.50",
+       "orderPrice": "3222.40",
+       "execValue": "1611.2000",
+       "execType": "Trade",
+       "execQty": "0.50",
+       "closedSize": "0.50",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByClosing"
+      },
+      {
+       "symbol": "SOLUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Sell",
+       "indexPrice": "",
+       "orderId": "c-entry",
+       "stopOrderType": "UNKNOWN",
+       "leavesQty": "0",
+       "execTime": "1794808925004",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "1.5840000",
+       "feeRate": "0.00055",
+       "execId": "c-entry-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "240.00",
+       "execPrice": "240.00",
+       "markIv": "",
+       "orderQty": "12",
+       "orderPrice": "240.00",
+       "execValue": "2880.00",
+       "execType": "Trade",
+       "execQty": "12",
+       "closedSize": "0",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByUser"
+      },
+      {
+       "symbol": "SOLUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Buy",
+       "indexPrice": "",
+       "orderId": "c-close",
+       "stopOrderType": "UNKNOWN",
+       "leavesQty": "0",
+       "execTime": "1794811212005",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "1.5958800",
+       "feeRate": "0.00055",
+       "execId": "c-close-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "241.80",
+       "execPrice": "241.80",
+       "markIv": "",
+       "orderQty": "12",
+       "orderPrice": "241.80",
+       "execValue": "2901.60",
+       "execType": "Trade",
+       "execQty": "12",
+       "closedSize": "12",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByClosing"
+      },
+      {
+       "symbol": "SOLUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Buy",
+       "indexPrice": "",
+       "orderId": "d-entry",
+       "stopOrderType": "UNKNOWN",
+       "leavesQty": "0",
+       "execTime": "1794811580004",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "1.5965400",
+       "feeRate": "0.00055",
+       "execId": "d-entry-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "241.90",
+       "execPrice": "241.90",
+       "markIv": "",
+       "orderQty": "12",
+       "orderPrice": "241.90",
+       "execValue": "2902.80",
+       "execType": "Trade",
+       "execQty": "12",
+       "closedSize": "0",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByUser"
+      },
+      {
+       "symbol": "SOLUSDT",
+       "orderType": "Market",
+       "underlyingPrice": "",
+       "orderLinkId": "",
+       "side": "Sell",
+       "indexPrice": "",
+       "orderId": "d-sl",
+       "stopOrderType": "StopLoss",
+       "leavesQty": "0",
+       "execTime": "1794814304305",
+       "feeCurrency": "",
+       "isMaker": false,
+       "execFee": "1.5799080",
+       "feeRate": "0.00055",
+       "execId": "d-sl-1",
+       "tradeIv": "",
+       "blockTradeId": "",
+       "markPrice": "239.38",
+       "execPrice": "239.38",
+       "markIv": "",
+       "orderQty": "12",
+       "orderPrice": "239.38",
+       "execValue": "2872.56",
+       "execType": "Trade",
+       "execQty": "12",
+       "closedSize": "12",
+       "extraFees": "",
+       "seq": 4688002127,
+       "createType": "CreateByStopLoss"
+      }
+     ],
+     "nextPageCursor": "",
+     "category": "linear"
+    },
+    "retExtInfo": {},
+    "time": 1794845700000
+   }
+  ],
+  "/v5/order/history": [
+   {
+    "retCode": 0,
+    "retMsg": "OK",
+    "result": {
+     "list": [
+      {
+       "orderId": "a-entry",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "BTCUSDT",
+       "price": "95012.40",
+       "qty": "0.020",
+       "side": "Sell",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByUser",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "95012.40",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0.020",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "UNKNOWN",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "0.00",
+       "takeProfit": "92600.00",
+       "stopLoss": "95900.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "LastPrice",
+       "slTriggerBy": "LastPrice",
+       "triggerDirection": 0,
+       "triggerBy": "UNKNOWN",
+       "lastPriceOnCreated": "95012.40",
+       "basePrice": "",
+       "reduceOnly": false,
+       "closeOnTrigger": false,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794792600120",
+       "updatedTime": "1794792600126",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "a-sl",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "BTCUSDT",
+       "price": "0",
+       "qty": "0.020",
+       "side": "Buy",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Deactivated",
+       "createType": "CreateByStopLoss",
+       "cancelType": "CancelByTpSlTsClear",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "StopLoss",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "95900.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 1,
+       "triggerBy": "LastPrice",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": true,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794792600126",
+       "updatedTime": "1794807737540",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "a-tp",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "BTCUSDT",
+       "price": "0",
+       "qty": "0.020",
+       "side": "Buy",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByTakeProfit",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "92598.50",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0.020",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "TakeProfit",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "92600.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 2,
+       "triggerBy": "LastPrice",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": true,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794792600126",
+       "updatedTime": "1794807737530",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "b-entry",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "ETHUSDT",
+       "price": "3200.00",
+       "qty": "0.50",
+       "side": "Buy",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByUser",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "3200.00",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0.50",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "UNKNOWN",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "0.00",
+       "takeProfit": "3280.00",
+       "stopLoss": "3168.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "LastPrice",
+       "slTriggerBy": "LastPrice",
+       "triggerDirection": 0,
+       "triggerBy": "UNKNOWN",
+       "lastPriceOnCreated": "3200.00",
+       "basePrice": "",
+       "reduceOnly": false,
+       "closeOnTrigger": false,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794794710000",
+       "updatedTime": "1794794710006",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "b-sl",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "ETHUSDT",
+       "price": "0",
+       "qty": "0.50",
+       "side": "Sell",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Deactivated",
+       "createType": "CreateByStopLoss",
+       "cancelType": "CancelByTpSlTsClear",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "StopLoss",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "3168.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 2,
+       "triggerBy": "LastPrice",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": true,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794794710006",
+       "updatedTime": "1794799231020",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "b-tp",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "ETHUSDT",
+       "price": "0",
+       "qty": "0.50",
+       "side": "Sell",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Deactivated",
+       "createType": "CreateByTakeProfit",
+       "cancelType": "CancelByTpSlTsClear",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "TakeProfit",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "3280.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 1,
+       "triggerBy": "LastPrice",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": true,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794794710006",
+       "updatedTime": "1794799231020",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "b-close",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "ETHUSDT",
+       "price": "3222.40",
+       "qty": "0.50",
+       "side": "Sell",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByClosing",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "3222.40",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0.50",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "UNKNOWN",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "0.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 0,
+       "triggerBy": "UNKNOWN",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": false,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794799230900",
+       "updatedTime": "1794799230909",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "c-entry",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "SOLUSDT",
+       "price": "240.00",
+       "qty": "12",
+       "side": "Sell",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByUser",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "240.00",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "12",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "UNKNOWN",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "0.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 0,
+       "triggerBy": "UNKNOWN",
+       "lastPriceOnCreated": "240.00",
+       "basePrice": "",
+       "reduceOnly": false,
+       "closeOnTrigger": false,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794808925000",
+       "updatedTime": "1794808925006",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "c-close",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "SOLUSDT",
+       "price": "241.80",
+       "qty": "12",
+       "side": "Buy",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByClosing",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "241.80",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "12",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "UNKNOWN",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "0.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 0,
+       "triggerBy": "UNKNOWN",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": false,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794811212000",
+       "updatedTime": "1794811212009",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "d-entry",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "SOLUSDT",
+       "price": "241.90",
+       "qty": "12",
+       "side": "Buy",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByUser",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "241.90",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "12",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "UNKNOWN",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "0.00",
+       "takeProfit": "247.00",
+       "stopLoss": "239.40",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "LastPrice",
+       "slTriggerBy": "LastPrice",
+       "triggerDirection": 0,
+       "triggerBy": "UNKNOWN",
+       "lastPriceOnCreated": "241.90",
+       "basePrice": "",
+       "reduceOnly": false,
+       "closeOnTrigger": false,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794811580000",
+       "updatedTime": "1794811580006",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "d-sl",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "SOLUSDT",
+       "price": "0",
+       "qty": "12",
+       "side": "Sell",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Filled",
+       "createType": "CreateByStopLoss",
+       "cancelType": "UNKNOWN",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "239.38",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "12",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "StopLoss",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "239.40",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 2,
+       "triggerBy": "LastPrice",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": true,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794811580006",
+       "updatedTime": "1794814304310",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      },
+      {
+       "orderId": "d-tp",
+       "orderLinkId": "",
+       "parentOrderLinkId": "",
+       "blockTradeId": "",
+       "symbol": "SOLUSDT",
+       "price": "0",
+       "qty": "12",
+       "side": "Sell",
+       "isLeverage": "",
+       "positionIdx": 0,
+       "orderStatus": "Deactivated",
+       "createType": "CreateByTakeProfit",
+       "cancelType": "CancelByTpSlTsClear",
+       "rejectReason": "EC_NoError",
+       "avgPrice": "",
+       "leavesQty": "0",
+       "leavesValue": "0",
+       "cumExecQty": "0",
+       "cumExecValue": "0",
+       "cumExecFee": "0",
+       "timeInForce": "IOC",
+       "orderType": "Market",
+       "stopOrderType": "TakeProfit",
+       "orderIv": "",
+       "marketUnit": "",
+       "slippageToleranceType": "UNKNOWN",
+       "slippageTolerance": "",
+       "triggerPrice": "247.00",
+       "takeProfit": "0.00",
+       "stopLoss": "0.00",
+       "tpslMode": "Full",
+       "ocoTriggerBy": "",
+       "tpLimitPrice": "",
+       "slLimitPrice": "",
+       "tpTriggerBy": "UNKNOWN",
+       "slTriggerBy": "UNKNOWN",
+       "triggerDirection": 1,
+       "triggerBy": "LastPrice",
+       "lastPriceOnCreated": "0.00",
+       "basePrice": "",
+       "reduceOnly": true,
+       "closeOnTrigger": true,
+       "placeType": "",
+       "smpType": "None",
+       "smpGroup": 0,
+       "smpOrderId": "",
+       "createdTime": "1794811580006",
+       "updatedTime": "1794814304320",
+       "extraFees": "",
+       "cumFeeDetail": {},
+       "rpiTakerAccess": false,
+       "rpiMatchedQty": "0"
+      }
+     ],
+     "nextPageCursor": "",
+     "category": "linear"
+    },
+    "retExtInfo": {},
+    "time": 1794845700000
+   }
+  ],
+  "/v5/order/realtime": [
+   {
+    "retCode": 0,
+    "retMsg": "OK",
+    "result": {
+     "list": [],
+     "nextPageCursor": "",
+     "category": "linear"
+    },
+    "retExtInfo": {},
+    "time": 1794845700000
+   }
+  ],
+  "/v5/account/transaction-log": [
+   {
+    "retCode": 0,
+    "retMsg": "OK",
+    "result": {
+     "list": [
+      {
+       "id": "tx-a-entry-1",
+       "symbol": "BTCUSDT",
+       "category": "linear",
+       "side": "Sell",
+       "transactionTime": "1794792600124",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "0.020",
+       "size": "-0.020",
+       "currency": "USDT",
+       "tradePrice": "95012.40",
+       "funding": "0",
+       "fee": "1.0451364000",
+       "cashFlow": "0",
+       "change": "-1.0451364000",
+       "cashBalance": "4998.9548636000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "a-entry-1",
+       "orderId": "a-entry",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      },
+      {
+       "id": "tx-a-tp-1",
+       "symbol": "BTCUSDT",
+       "category": "linear",
+       "side": "Buy",
+       "transactionTime": "1794807737528",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "0.020",
+       "size": "0",
+       "currency": "USDT",
+       "tradePrice": "92598.50",
+       "funding": "0",
+       "fee": "1.0185835000",
+       "cashFlow": "48.27800",
+       "change": "47.2594165000",
+       "cashBalance": "5046.2142801000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "a-tp-1",
+       "orderId": "a-tp",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      },
+      {
+       "id": "tx-b-entry-1",
+       "symbol": "ETHUSDT",
+       "category": "linear",
+       "side": "Buy",
+       "transactionTime": "1794794710004",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "0.50",
+       "size": "0.50",
+       "currency": "USDT",
+       "tradePrice": "3200.00",
+       "funding": "0",
+       "fee": "0.880000000",
+       "cashFlow": "0",
+       "change": "-0.880000000",
+       "cashBalance": "5045.3342801000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "b-entry-1",
+       "orderId": "b-entry",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      },
+      {
+       "id": "tx-b-close-1",
+       "symbol": "ETHUSDT",
+       "category": "linear",
+       "side": "Sell",
+       "transactionTime": "1794799230950",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "0.50",
+       "size": "0",
+       "currency": "USDT",
+       "tradePrice": "3222.40",
+       "funding": "0",
+       "fee": "0.886160000",
+       "cashFlow": "11.2000",
+       "change": "10.313840000",
+       "cashBalance": "5055.6481201000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "b-close-1",
+       "orderId": "b-close",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      },
+      {
+       "id": "tx-c-entry-1",
+       "symbol": "SOLUSDT",
+       "category": "linear",
+       "side": "Sell",
+       "transactionTime": "1794808925004",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "12",
+       "size": "-12",
+       "currency": "USDT",
+       "tradePrice": "240.00",
+       "funding": "0",
+       "fee": "1.5840000",
+       "cashFlow": "0",
+       "change": "-1.5840000",
+       "cashBalance": "5054.0641201000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "c-entry-1",
+       "orderId": "c-entry",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      },
+      {
+       "id": "tx-c-close-1",
+       "symbol": "SOLUSDT",
+       "category": "linear",
+       "side": "Buy",
+       "transactionTime": "1794811212005",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "12",
+       "size": "0",
+       "currency": "USDT",
+       "tradePrice": "241.80",
+       "funding": "0",
+       "fee": "1.5958800",
+       "cashFlow": "-21.60",
+       "change": "-23.1958800",
+       "cashBalance": "5030.8682401000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "c-close-1",
+       "orderId": "c-close",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      },
+      {
+       "id": "tx-d-entry-1",
+       "symbol": "SOLUSDT",
+       "category": "linear",
+       "side": "Buy",
+       "transactionTime": "1794811580004",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "12",
+       "size": "12",
+       "currency": "USDT",
+       "tradePrice": "241.90",
+       "funding": "0",
+       "fee": "1.5965400",
+       "cashFlow": "0",
+       "change": "-1.5965400",
+       "cashBalance": "5029.2717001000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "d-entry-1",
+       "orderId": "d-entry",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      },
+      {
+       "id": "tx-d-sl-1",
+       "symbol": "SOLUSDT",
+       "category": "linear",
+       "side": "Sell",
+       "transactionTime": "1794814304305",
+       "type": "TRADE",
+       "transSubType": "",
+       "qty": "12",
+       "size": "0",
+       "currency": "USDT",
+       "tradePrice": "239.38",
+       "funding": "0",
+       "fee": "1.5799080",
+       "cashFlow": "-30.24",
+       "change": "-31.8199080",
+       "cashBalance": "4997.4517921000",
+       "feeRate": "0.00055",
+       "bonusChange": "0",
+       "tradeId": "d-sl-1",
+       "orderId": "d-sl",
+       "orderLinkId": "",
+       "extraFees": "",
+       "displayType": ""
+      }
+     ],
+     "nextPageCursor": "",
+     "category": "linear"
+    },
+    "retExtInfo": {},
+    "time": 1794845700000
+   }
+  ],
+  "/v5/position/closed-pnl": [
+   {
+    "retCode": 0,
+    "retMsg": "OK",
+    "result": {
+     "list": [
+      {
+       "symbol": "BTCUSDT",
+       "orderType": "Market",
+       "leverage": "10",
+       "updatedTime": "1794807737528",
+       "side": "Buy",
+       "orderId": "a-tp",
+       "closedPnl": "46.2142801000",
+       "avgEntryPrice": "95012.40",
+       "qty": "0.020",
+       "cumEntryValue": "1900.24800",
+       "createdTime": "1794807737528",
+       "orderPrice": "92598.50",
+       "closedSize": "0.020",
+       "avgExitPrice": "92598.50",
+       "execType": "Trade",
+       "fillCount": "1",
+       "cumExitValue": "1851.97000",
+       "openFee": "1.0451364000",
+       "closeFee": "1.0185835000"
+      },
+      {
+       "symbol": "ETHUSDT",
+       "orderType": "Market",
+       "leverage": "10",
+       "updatedTime": "1794799230950",
+       "side": "Sell",
+       "orderId": "b-close",
+       "closedPnl": "9.433840000",
+       "avgEntryPrice": "3200.00",
+       "qty": "0.50",
+       "cumEntryValue": "1600.0000",
+       "createdTime": "1794799230950",
+       "orderPrice": "3222.40",
+       "closedSize": "0.50",
+       "avgExitPrice": "3222.40",
+       "execType": "Trade",
+       "fillCount": "1",
+       "cumExitValue": "1611.2000",
+       "openFee": "0.880000000",
+       "closeFee": "0.886160000"
+      },
+      {
+       "symbol": "SOLUSDT",
+       "orderType": "Market",
+       "leverage": "10",
+       "updatedTime": "1794811212005",
+       "side": "Buy",
+       "orderId": "c-close",
+       "closedPnl": "-24.7798800",
+       "avgEntryPrice": "240.00",
+       "qty": "12",
+       "cumEntryValue": "2880.00",
+       "createdTime": "1794811212005",
+       "orderPrice": "241.80",
+       "closedSize": "12",
+       "avgExitPrice": "241.80",
+       "execType": "Trade",
+       "fillCount": "1",
+       "cumExitValue": "2901.60",
+       "openFee": "1.5840000",
+       "closeFee": "1.5958800"
+      },
+      {
+       "symbol": "SOLUSDT",
+       "orderType": "Market",
+       "leverage": "10",
+       "updatedTime": "1794814304305",
+       "side": "Sell",
+       "orderId": "d-sl",
+       "closedPnl": "-33.4164480",
+       "avgEntryPrice": "241.90",
+       "qty": "12",
+       "cumEntryValue": "2902.80",
+       "createdTime": "1794814304305",
+       "orderPrice": "239.38",
+       "closedSize": "12",
+       "avgExitPrice": "239.38",
+       "execType": "Trade",
+       "fillCount": "1",
+       "cumExitValue": "2872.56",
+       "openFee": "1.5965400",
+       "closeFee": "1.5799080"
+      }
+     ],
+     "nextPageCursor": "",
+     "category": "linear"
+    },
+    "retExtInfo": {},
+    "time": 1794845700000
+   }
+  ],
+  "/v5/position/list": [
+   {
+    "retCode": 0,
+    "retMsg": "OK",
+    "result": {
+     "list": [],
+     "nextPageCursor": "",
+     "category": "linear"
+    },
+    "retExtInfo": {},
+    "time": 1794845700000
+   }
+  ]
+ },
+ "market": {
+  "BTCUSDT": {
+   "tick": "0.1",
+   "wiggle": 0.0004,
+   "path": [
+    [
+     1789920000000,
+     112000
+    ],
+    [
+     1790136000000,
+     107500
+    ],
+    [
+     1790352000000,
+     111200
+    ],
+    [
+     1790568000000,
+     107000
+    ],
+    [
+     1790784000000,
+     110600
+    ],
+    [
+     1791000000000,
+     106500
+    ],
+    [
+     1791216000000,
+     99800
+    ],
+    [
+     1791432000000,
+     100600
+    ],
+    [
+     1791648000000,
+     96500
+    ],
+    [
+     1791864000000,
+     100100
+    ],
+    [
+     1792080000000,
+     96000
+    ],
+    [
+     1792296000000,
+     99700
+    ],
+    [
+     1792512000000,
+     96300
+    ],
+    [
+     1792728000000,
+     92400
+    ],
+    [
+     1792944000000,
+     95700
+    ],
+    [
+     1793160000000,
+     92000
+    ],
+    [
+     1793376000000,
+     95300
+    ],
+    [
+     1793592000000,
+     91800
+    ],
+    [
+     1793808000000,
+     95000
+    ],
+    [
+     1794024000000,
+     92200
+    ],
+    [
+     1794240000000,
+     94600
+    ],
+    [
+     1794456000000,
+     92300
+    ],
+    [
+     1794772800000,
+     93100
+    ],
+    [
+     1794785400000,
+     94300
+    ],
+    [
+     1794788400000,
+     94550
+    ],
+    [
+     1794791400000,
+     95180
+    ],
+    [
+     1794792600000,
+     95010
+    ],
+    [
+     1794796200000,
+     94250
+    ],
+    [
+     1794798600000,
+     94600
+    ],
+    [
+     1794803400000,
+     93300
+    ],
+    [
+     1794807720000,
+     92585
+    ],
+    [
+     1794810600000,
+     92380
+    ],
+    [
+     1794823200000,
+     92900
+    ],
+    [
+     1794844740000,
+     92650
+    ],
+    [
+     1794848400000,
+     92700
+    ]
+   ]
+  },
+  "ETHUSDT": {
+   "tick": "0.01",
+   "wiggle": 0.0004,
+   "path": [
+    [
+     1789920000000,
+     2550
+    ],
+    [
+     1790136000000,
+     2740
+    ],
+    [
+     1790352000000,
+     2600
+    ],
+    [
+     1790568000000,
+     2760
+    ],
+    [
+     1790784000000,
+     2620
+    ],
+    [
+     1791000000000,
+     2780
+    ],
+    [
+     1791216000000,
+     2990
+    ],
+    [
+     1791432000000,
+     2900
+    ],
+    [
+     1791648000000,
+     3060
+    ],
+    [
+     1791864000000,
+     2920
+    ],
+    [
+     1792080000000,
+     3080
+    ],
+    [
+     1792296000000,
+     2940
+    ],
+    [
+     1792512000000,
+     3090
+    ],
+    [
+     1792728000000,
+     3230
+    ],
+    [
+     1792944000000,
+     3120
+    ],
+    [
+     1793160000000,
+     3260
+    ],
+    [
+     1793376000000,
+     3130
+    ],
+    [
+     1793592000000,
+     3270
+    ],
+    [
+     1793808000000,
+     3140
+    ],
+    [
+     1794024000000,
+     3265
+    ],
+    [
+     1794240000000,
+     3150
+    ],
+    [
+     1794456000000,
+     3250
+    ],
+    [
+     1794769200000,
+     3228
+    ],
+    [
+     1794786000000,
+     3243
+    ],
+    [
+     1794793500000,
+     3187.5
+    ],
+    [
+     1794794700000,
+     3200
+    ],
+    [
+     1794796800000,
+     3190.5
+    ],
+    [
+     1794799200000,
+     3222.4
+    ],
+    [
+     1794800160000,
+     3211.5
+    ],
+    [
+     1794803760000,
+     3282
+    ],
+    [
+     1794807000000,
+     3291
+    ],
+    [
+     1794823200000,
+     3270
+    ],
+    [
+     1794844740000,
+     3276
+    ],
+    [
+     1794848400000,
+     3275
+    ]
+   ]
+  },
+  "SOLUSDT": {
+   "tick": "0.01",
+   "wiggle": 0.0004,
+   "path": [
+    [
+     1789920000000,
+     236
+    ],
+    [
+     1790121600000,
+     245
+    ],
+    [
+     1790323200000,
+     233.5
+    ],
+    [
+     1790524800000,
+     244.5
+    ],
+    [
+     1790726400000,
+     233
+    ],
+    [
+     1790928000000,
+     245.5
+    ],
+    [
+     1791129600000,
+     234
+    ],
+    [
+     1791331200000,
+     244
+    ],
+    [
+     1791532800000,
+     232.5
+    ],
+    [
+     1791734400000,
+     245
+    ],
+    [
+     1791936000000,
+     233.5
+    ],
+    [
+     1792137600000,
+     244.5
+    ],
+    [
+     1792339200000,
+     234
+    ],
+    [
+     1792540800000,
+     245
+    ],
+    [
+     1792742400000,
+     233
+    ],
+    [
+     1792944000000,
+     244
+    ],
+    [
+     1793145600000,
+     234.5
+    ],
+    [
+     1793347200000,
+     245
+    ],
+    [
+     1793548800000,
+     233.5
+    ],
+    [
+     1793750400000,
+     244
+    ],
+    [
+     1793952000000,
+     234
+    ],
+    [
+     1794153600000,
+     243
+    ],
+    [
+     1794355200000,
+     236
+    ],
+    [
+     1794556800000,
+     241.5
+    ],
+    [
+     1794780000000,
+     237.2
+    ],
+    [
+     1794798000000,
+     239.4
+    ],
+    [
+     1794805200000,
+     238.4
+    ],
+    [
+     1794807600000,
+     239.0
+    ],
+    [
+     1794808920000,
+     240.0
+    ],
+    [
+     1794811200000,
+     241.8
+    ],
+    [
+     1794811560000,
+     241.9
+    ],
+    [
+     1794812520000,
+     242.7
+    ],
+    [
+     1794814260000,
+     239.35
+    ],
+    [
+     1794817800000,
+     238.1
+    ],
+    [
+     1794830400000,
+     240.2
+    ],
+    [
+     1794844740000,
+     239.6
+    ],
+    [
+     1794848400000,
+     239.7
+    ]
+   ]
+  }
+ }
+}

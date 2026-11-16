@@ -87,6 +87,15 @@ class Execution:
     is_maker: bool = False
     account_id: str = "default"
     position_idx: int = 0
+    # --- fill classification, straight from GET /v5/execution/list (added 2026-11; all optional) ---
+    # Raw Bybit enums are kept verbatim; "" means the exchange did not send the field.
+    exec_type: str = ""          # execType: Trade | AdlTrade | BustTrade | Delivery | Settle | ...
+    stop_order_type: str = ""    # stopOrderType: StopLoss | TakeProfit | TrailingStop | Stop | ... ("" / UNKNOWN = not a stop order)
+    create_type: str = ""        # createType: CreateByUser | CreateByStopLoss | CreateByClosing | CreateByLiq | ...
+    closed_size: Decimal = Decimal("0")   # closedSize: position size closed by this fill (0 = opening fill)
+    order_type: str = ""         # orderType: Market | Limit
+    # Normalised with the same vocabulary as OrderRecord.origin; see app/review/bybit_client.py docstring.
+    origin: str = "unknown"
 
 
 @dataclass(frozen=True)
@@ -98,6 +107,45 @@ class Order:
     position_idx: int = 0
     order_type: str = ""
     stop_order_type: str = ""
+
+
+ORDER_STATUSES = (
+    "filled", "partially_filled", "cancelled", "untriggered", "new", "rejected", "expired",
+)
+ORDER_ORIGINS = (
+    "user", "stop_loss", "take_profit", "trailing_stop", "liquidation", "adl", "system", "unknown",
+)
+
+
+@dataclass(frozen=True)
+class OrderRecord:
+    """One row of normalized order history, exchange-neutral.
+
+    The Bybit mapping (with the official doc URL beside every rule) lives in the module
+    docstring of app/review/bybit_client.py.  Prices and quantities are Decimal; a price that
+    the exchange reports as "", "0" or "0.00" is None ("not set"), never Decimal("0").
+    """
+
+    exchange: str                  # "bybit"
+    account_id: str
+    order_id: str
+    symbol: str
+    side: str                      # "Buy" | "Sell"
+    position_idx: int              # 0 one-way, 1 hedge-long, 2 hedge-short
+    order_type: str                # "Market" | "Limit"
+    qty: Decimal
+    filled_qty: Decimal
+    price: Decimal | None
+    avg_fill_price: Decimal | None
+    trigger_price: Decimal | None  # conditional / stop / tp orders
+    reduce_only: bool
+    close_position: bool           # closes the whole position when triggered
+    status: str                    # one of ORDER_STATUSES ("unknown" only for an undocumented exchange status)
+    origin: str                    # one of ORDER_ORIGINS
+    attached_sl: Decimal | None    # stop-loss / take-profit carried on this (entry) order itself
+    attached_tp: Decimal | None
+    created_ms: int
+    updated_ms: int
 
 
 @dataclass(frozen=True)

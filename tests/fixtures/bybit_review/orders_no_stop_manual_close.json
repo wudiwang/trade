@@ -1,0 +1,277 @@
+{
+  "about": "开仓没有任何止损/止盈, 43 分钟后在持仓区手动市价平仓。整段持仓期间没有保护单。",
+  "note": "Invented data shaped after the official Bybit V5 docs; not captured from a real account.",
+  "docs": {
+    "order_history": "https://bybit-exchange.github.io/docs/v5/order/order-list",
+    "open_orders": "https://bybit-exchange.github.io/docs/v5/order/open-order",
+    "executions": "https://bybit-exchange.github.io/docs/v5/order/execution",
+    "positions": "https://bybit-exchange.github.io/docs/v5/position",
+    "enums": "https://bybit-exchange.github.io/docs/v5/enum"
+  },
+  "window": {
+    "start_ms": 1794758400000,
+    "end_ms": 1794844800000,
+    "day": "2026-11-16",
+    "timezone": "Asia/Shanghai"
+  },
+  "responses": {
+    "/v5/order/history": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [
+            {
+              "orderId": "b-entry",
+              "orderLinkId": "",
+              "parentOrderLinkId": "",
+              "blockTradeId": "",
+              "symbol": "ETHUSDT",
+              "price": "3391.20",
+              "qty": "0.50",
+              "side": "Buy",
+              "isLeverage": "",
+              "positionIdx": 0,
+              "orderStatus": "Filled",
+              "createType": "CreateByUser",
+              "cancelType": "UNKNOWN",
+              "rejectReason": "EC_NoError",
+              "avgPrice": "3360.15",
+              "leavesQty": "0",
+              "leavesValue": "0",
+              "cumExecQty": "0.50",
+              "cumExecValue": "0",
+              "cumExecFee": "0",
+              "timeInForce": "IOC",
+              "orderType": "Market",
+              "stopOrderType": "",
+              "orderIv": "",
+              "marketUnit": "",
+              "slippageToleranceType": "UNKNOWN",
+              "slippageTolerance": "",
+              "triggerPrice": "",
+              "takeProfit": "",
+              "stopLoss": "",
+              "tpslMode": "",
+              "ocoTriggerBy": "",
+              "tpLimitPrice": "",
+              "slLimitPrice": "",
+              "tpTriggerBy": "",
+              "slTriggerBy": "",
+              "triggerDirection": 0,
+              "triggerBy": "",
+              "lastPriceOnCreated": "0.00",
+              "basePrice": "",
+              "reduceOnly": false,
+              "closeOnTrigger": false,
+              "placeType": "",
+              "smpType": "None",
+              "smpGroup": 0,
+              "smpOrderId": "",
+              "createdTime": "1794794703000",
+              "updatedTime": "1794794703007",
+              "extraFees": "",
+              "cumFeeDetail": {},
+              "rpiTakerAccess": false,
+              "rpiMatchedQty": "0"
+            },
+            {
+              "orderId": "b-close",
+              "orderLinkId": "",
+              "parentOrderLinkId": "",
+              "blockTradeId": "",
+              "symbol": "ETHUSDT",
+              "price": "3301.90",
+              "qty": "0.50",
+              "side": "Sell",
+              "isLeverage": "",
+              "positionIdx": 0,
+              "orderStatus": "Filled",
+              "createType": "CreateByClosing",
+              "cancelType": "UNKNOWN",
+              "rejectReason": "EC_NoError",
+              "avgPrice": "3334.80",
+              "leavesQty": "0",
+              "leavesValue": "0",
+              "cumExecQty": "0.50",
+              "cumExecValue": "0",
+              "cumExecFee": "0",
+              "timeInForce": "IOC",
+              "orderType": "Market",
+              "stopOrderType": "",
+              "orderIv": "",
+              "marketUnit": "",
+              "slippageToleranceType": "UNKNOWN",
+              "slippageTolerance": "",
+              "triggerPrice": "",
+              "takeProfit": "",
+              "stopLoss": "",
+              "tpslMode": "",
+              "ocoTriggerBy": "",
+              "tpLimitPrice": "",
+              "slLimitPrice": "",
+              "tpTriggerBy": "UNKNOWN",
+              "slTriggerBy": "UNKNOWN",
+              "triggerDirection": 0,
+              "triggerBy": "UNKNOWN",
+              "lastPriceOnCreated": "0.00",
+              "basePrice": "",
+              "reduceOnly": true,
+              "closeOnTrigger": false,
+              "placeType": "",
+              "smpType": "None",
+              "smpGroup": 0,
+              "smpOrderId": "",
+              "createdTime": "1794797320000",
+              "updatedTime": "1794797320009",
+              "extraFees": "",
+              "cumFeeDetail": {},
+              "rpiTakerAccess": false,
+              "rpiMatchedQty": "0"
+            }
+          ],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ],
+    "/v5/order/realtime": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ],
+    "/v5/execution/list": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [
+            {
+              "symbol": "ETHUSDT",
+              "orderType": "Market",
+              "underlyingPrice": "",
+              "orderLinkId": "",
+              "side": "Buy",
+              "indexPrice": "",
+              "orderId": "b-entry",
+              "stopOrderType": "",
+              "leavesQty": "0",
+              "execTime": "1794794703005",
+              "feeCurrency": "",
+              "isMaker": false,
+              "execFee": "0.92404125",
+              "feeRate": "0.00055",
+              "execId": "b-entry-1",
+              "tradeIv": "",
+              "blockTradeId": "",
+              "markPrice": "3360.15",
+              "execPrice": "3360.15",
+              "markIv": "",
+              "orderQty": "0.50",
+              "orderPrice": "3360.15",
+              "execValue": "1680.075",
+              "execType": "Trade",
+              "execQty": "0.50",
+              "closedSize": "0",
+              "extraFees": "",
+              "seq": 4688002127,
+              "createType": "CreateByUser"
+            },
+            {
+              "symbol": "ETHUSDT",
+              "orderType": "Market",
+              "underlyingPrice": "",
+              "orderLinkId": "",
+              "side": "Sell",
+              "indexPrice": "",
+              "orderId": "b-close",
+              "stopOrderType": "",
+              "leavesQty": "0",
+              "execTime": "1794797320006",
+              "feeCurrency": "",
+              "isMaker": false,
+              "execFee": "0.91707000",
+              "feeRate": "0.00055",
+              "execId": "b-close-1",
+              "tradeIv": "",
+              "blockTradeId": "",
+              "markPrice": "3334.80",
+              "execPrice": "3334.80",
+              "markIv": "",
+              "orderQty": "0.50",
+              "orderPrice": "3334.80",
+              "execValue": "1667.4",
+              "execType": "Trade",
+              "execQty": "0.50",
+              "closedSize": "0.50",
+              "extraFees": "",
+              "seq": 4688002127,
+              "createType": "CreateByClosing"
+            }
+          ],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ],
+    "/v5/position/list": [
+      {
+        "retCode": 0,
+        "retMsg": "OK",
+        "result": {
+          "list": [],
+          "nextPageCursor": "",
+          "category": "linear"
+        },
+        "retExtInfo": {},
+        "time": 1794844740000
+      }
+    ]
+  },
+  "expect": {
+    "orders": {
+      "b-entry": {
+        "origin": "user",
+        "status": "filled",
+        "reduce_only": false,
+        "close_position": false,
+        "trigger_price": null,
+        "attached_sl": null,
+        "attached_tp": null
+      },
+      "b-close": {
+        "origin": "user",
+        "status": "filled",
+        "reduce_only": true,
+        "close_position": false,
+        "trigger_price": null,
+        "order_type": "Market",
+        "avg_fill_price": "3334.80"
+      }
+    },
+    "executions": {
+      "b-entry-1": {
+        "origin": "user",
+        "closed_size": "0"
+      },
+      "b-close-1": {
+        "origin": "user",
+        "closed_size": "0.50",
+        "create_type": "CreateByClosing"
+      }
+    },
+    "protective_order_ids": []
+  }
+}
