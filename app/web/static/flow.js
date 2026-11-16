@@ -682,6 +682,7 @@ const DIV_STATE = {
   confirm_up: {label: '同向上涨', glyph: '↑', cls: 'up'},
   confirm_down: {label: '同向下跌', glyph: '↓', cls: 'down'},
   flat: {label: '横盘', glyph: '–', cls: 'flat'},
+  balanced: {label: '买卖平衡', glyph: '=', cls: 'flat'},   // 价格动了但 CVD 净额在噪音内
   insufficient: {label: '数据不足', glyph: '…', cls: 'flat'},
   // 合约 CVD 对 现货 CVD（/api/flow/cvd 的 fut_vs_spot）：两边反向才算背离
   both_up: {label: '同步买入', glyph: '↑', cls: 'up'},

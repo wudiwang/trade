@@ -98,3 +98,44 @@ def test_summarize_不给方向建议():
     assert "主动买不足" in s and "未出清" in s and "新空" in s
     for banned in ("建议", "应该", "买入", "卖出", "做多", "做空"):
         assert banned not in s
+
+
+def test_divergence_噪音门_净量太小不报背离():
+    """价涨、CVD 只是略负（占成交不到门槛）→ balanced，不该叫顶背离。"""
+    ks = [K(i, 100 + i, 101 + i, 1000.0, 499.0) for i in range(30)]   # 每根 delta=-2, 占成交 0.2%
+    assert divergence(ks, 24)["state"] == "bear_div"                  # 默认不启用门槛 → 行为不变
+    d = divergence(ks, 24, weak_cvd_pct=0.8)
+    assert d["state"] == "balanced" and "基本平衡" in d["text"] and "背离" not in d["text"]
+    strong = [K(i, 100 + i, 101 + i, 1000.0, 400.0) for i in range(30)]  # delta=-200, 占 20%
+    assert divergence(strong, 24, weak_cvd_pct=0.8)["state"] == "bear_div"
+
+
+def test_summarize_缺数据与平衡态不乱下结论():
+    ks = [K(i, 100 + i, 101 + i, 1000.0, 499.0) for i in range(30)]
+    bal = divergence(ks, 24, weak_cvd_pct=0.8)
+    s = summarize(bal, funding_state([]), "")
+    assert "基本平衡" in s and "资金费数据不可用" in s
+    assert "转负" not in s and "主动买不足" not in s
+
+
+def test_build_brief_缺资金费与OI不崩():
+    from app.engine.orderflow import build_brief
+    ks = [K(i, 100 + i, 101 + i, 10, 7) for i in range(30)]
+    d = divergence(ks, 24)
+    text = build_brief({
+        "price": 65000.0, "chg_24h": 1.0, "chg_7d": 2.0, "divs": [d],
+        "cvd_24h": 120.0, "cvd_ratio_24h": 1.2, "oi": 0.0, "oi_24h": 0.0, "oi_7d": 0.0,
+        "quadrant": "", "quadrant_text": "持仓量数据暂不可用",
+        "funding": funding_state([]), "funding_days": [],
+        "summary": summarize(d, funding_state([]), ""),
+    })
+    assert "资金费数据暂不可用" in text and "持仓量数据暂不可用" in text
+    assert "0 BTC" not in text
+
+
+def test_summarize_横盘时不丢OI变动():
+    flat = divergence([K(i, 100, 100.01, 10, 5) for i in range(30)], 24)
+    fund = funding_state([(i, 0.0001) for i in range(21)])
+    assert "持仓减少 5.1%" in summarize(flat, fund, "flat", -5.1)
+    assert "持仓变化不明显" in summarize(flat, fund, "flat", 0.2)
+    assert "持仓变化不明显" in summarize(flat, fund, "flat")

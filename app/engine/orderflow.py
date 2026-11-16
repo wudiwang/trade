@@ -21,6 +21,11 @@ _T, _O, _H, _L, _C, _V, _QV, _TB, _CLOSED = range(9)
 
 BKK_OFFSET = 7 * 3600          # 曼谷 UTC+7
 
+# 简报/状态卡用的 CVD 噪音门：|CVD净额| 占该段成交量不到这个百分比时，不叫"背离/同向"，
+# 而叫"主动买卖基本平衡"。取值与 app/flow/cvd.py 的 1h 合约档一致(样本约 20 分位)。
+# 这只是【显示用】的降噪门槛，没有做过前瞻边际检验，不是信号阈值。
+WEAK_CVD_PCT = 0.8
+
 
 def bar_delta(k: tuple) -> float:
     """单根 K 线的主动买卖差：主动买 - 主动卖。"""
@@ -42,12 +47,15 @@ def pct(a: float, b: float) -> float:
     return (a - b) / b * 100.0 if b else 0.0
 
 
-def divergence(klines: list[tuple], bars: int, min_price_pct: float = 0.3) -> dict:
+def divergence(klines: list[tuple], bars: int, min_price_pct: float = 0.3,
+               weak_cvd_pct: float = 0.0) -> dict:
     """比较最近 bars 根内【价格方向】与【CVD 方向】。
 
     min_price_pct: 价格变动小于该幅度视为"横盘"，此时不判背离（避免把噪音叫成信号）。
+    weak_cvd_pct: >0 时启用噪音门 —— 价格动了、但 |CVD净额| 占成交量不到该百分比，
+                  判为 balanced(主动买卖基本平衡)，不报背离也不报同向。默认 0 = 不启用。
     返回 {bars, price_pct, cvd_chg, cvd_pct_of_vol, state, text}
-      state ∈ bear_div(顶背离) / bull_div(底背离) / confirm_up / confirm_down / flat
+      state ∈ bear_div(顶背离) / bull_div(底背离) / confirm_up / confirm_down / flat / balanced
     """
     if len(klines) < bars + 1:
         return {"bars": bars, "state": "insufficient", "text": "数据不足"}
@@ -62,6 +70,10 @@ def divergence(klines: list[tuple], bars: int, min_price_pct: float = 0.3) -> di
     if abs(p) < min_price_pct:
         state = "flat"
         text = f"价格横盘({p:+.2f}%)，CVD {_arrow(cvd)}"
+    elif abs(ratio) < weak_cvd_pct:
+        state = "balanced"
+        text = (f"价{'涨' if p > 0 else '跌'} {p:+.2f}%，CVD 净额仅占成交 {ratio:+.2f}% "
+                "—— 主动买卖基本平衡")
     elif p > 0 and cvd < 0:
         state = "bear_div"
         text = f"⚠️ 顶背离：价涨 {p:+.2f}% 但 CVD 下降 —— 主动买没跟上"
@@ -163,16 +175,20 @@ def build_brief(payload: dict) -> str:
     # 资金费（按天）
     f = p["funding"]
     L.append("<b>━ 资金费率（按天）━</b>")
-    for day, avg, n in p["funding_days"][-3:]:
-        L.append(f"{day[5:]}  {avg*100:+.4f}%  ({n}期)")
-    L.append(f"近{f['look']}期均 <b>{f['avg']*100:+.4f}%</b>，"
-             f"其中 {f['neg']} 期为负")
-    L.append(f"状态：<b>{f['label']}</b>")
+    if f.get("state") == "unknown":
+        L.append("资金费数据暂不可用")
+    else:
+        for day, avg, n in p["funding_days"][-3:]:
+            L.append(f"{day[5:]}  {avg*100:+.4f}%  ({n}期)")
+        L.append(f"近{f['look']}期均 <b>{f['avg']*100:+.4f}%</b>，"
+                 f"其中 {f['neg']} 期为负")
+        L.append(f"状态：<b>{f['label']}</b>")
     L.append("")
 
     # OI
     L.append("<b>━ 持仓量 OI ━</b>")
-    L.append(f"{p['oi']:,.0f} BTC   24h {p['oi_24h']:+.1f}%   7d {p['oi_7d']:+.1f}%")
+    if p["oi"]:
+        L.append(f"{p['oi']:,.0f} BTC   24h {p['oi_24h']:+.1f}%   7d {p['oi_7d']:+.1f}%")
     L.append(f"<b>{p['quadrant_text']}</b>")
     L.append("")
 
@@ -184,8 +200,10 @@ def build_brief(payload: dict) -> str:
     return "\n".join(L)
 
 
-def summarize(div24: dict, fund: dict, quad_key: str) -> str:
-    """三者合成一句话。只描述状态，不给方向建议。"""
+def summarize(div24: dict, fund: dict, quad_key: str, oi_pct: float | None = None) -> str:
+    """三者合成一句话。只描述状态，不给方向建议。
+    oi_pct: 24h OI 变动%。价格横盘(quad_key=flat)时用它说明"横盘里在增仓/减仓"，
+            否则会出现 OI 明明变了 5% 却写"持仓变化不明显"的自相矛盾。"""
     bits = []
     if div24["state"] == "bear_div":
         bits.append("价格上行但主动买不足")
@@ -195,10 +213,15 @@ def summarize(div24: dict, fund: dict, quad_key: str) -> str:
         bits.append("主动卖推动下跌")
     elif div24["state"] == "confirm_up":
         bits.append("主动买推动上涨")
+    elif div24["state"] == "balanced":
+        up = div24.get("price_pct", 0.0) > 0
+        bits.append(f"价格{'上行' if up else '下行'}，主动买卖基本平衡")
     else:
         bits.append("价格横盘")
 
-    if fund["state"].startswith("crowded_long"):
+    if fund["state"] == "unknown":
+        bits.append("资金费数据不可用")
+    elif fund["state"].startswith("crowded_long"):
         bits.append("多头仍在付资金费、未出清")
     else:
         bits.append("资金费转负、多头已出清")
@@ -210,6 +233,8 @@ def summarize(div24: dict, fund: dict, quad_key: str) -> str:
         "short_cover": "空头在回补",
         "flat": "持仓变化不明显",
     }.get(quad_key, "")
+    if quad_key == "flat" and oi_pct is not None and abs(oi_pct) >= 1.0:
+        tail = f"横盘中持仓{'增加' if oi_pct > 0 else '减少'} {abs(oi_pct):.1f}%"
     if tail:
         bits.append(tail)
     return "；".join(bits) + "。"
@@ -222,7 +247,7 @@ async def brief_payload(rest, symbol: str = "BTCUSDT") -> dict:
         raise RuntimeError("1h K 线数据不足")
     price = float(k1h[-1][_C])
 
-    divs = [divergence(k1h, b) for b in (6, 24, 72)]
+    divs = [divergence(k1h, b, weak_cvd_pct=WEAK_CVD_PCT) for b in (6, 24, 72)]
     seg24 = k1h[-24:]
     cvd_24h = sum(bar_delta(k) for k in seg24)
     vol24 = sum(float(k[_V]) for k in seg24) or 1.0
@@ -239,7 +264,10 @@ async def brief_payload(rest, symbol: str = "BTCUSDT") -> dict:
 
     chg_24h = divs[1].get("price_pct", 0.0)
     chg_7d = pct(price, float(k1h[-min(len(k1h), 168)][_O]))
-    qkey, qtext = quadrant(chg_24h, oi_24h)
+    if oi_h:
+        qkey, qtext = quadrant(chg_24h, oi_24h)
+    else:                      # rest 取数失败返回空列表：缺数据就说缺数据，别当成"减仓"
+        qkey, qtext = "", "持仓量数据暂不可用"
 
     return {
         "price": price, "chg_24h": chg_24h, "chg_7d": chg_7d,
@@ -247,5 +275,5 @@ async def brief_payload(rest, symbol: str = "BTCUSDT") -> dict:
         "oi": oi, "oi_24h": oi_24h, "oi_7d": oi_7d,
         "quadrant": qkey, "quadrant_text": qtext,
         "funding": fund, "funding_days": fdays,
-        "summary": summarize(divs[1], fund, qkey),
+        "summary": summarize(divs[1], fund, qkey, oi_24h if oi_h else None),
     }
