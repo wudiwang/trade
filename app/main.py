@@ -2,6 +2,7 @@
 启动: python -m app.main
 """
 import asyncio
+import html
 import logging
 import sys
 
@@ -11,6 +12,7 @@ from .config import get_config
 from .db import DB
 from .bot.telegram import TgBot
 from .engine.core import Engine
+from .engine.linked_rules import unaudited_tracks
 from .engine.trader import LiveTrader
 from .web.server import create_app, load_setting_overrides
 
@@ -20,6 +22,62 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("main")
+
+# 日报里各 track 的显示名; 没列在这里的 track 直接显示它的名字
+TRACK_LABELS = {
+    "second_buy": "二买(多)",
+    "second_sell": "二卖(空)",
+    "btcbreak_pump": "BTC破位→PUMP(模拟)",
+}
+_TRACK_FIRST = ("second_buy", "second_sell")
+
+
+def daily_track_lines(rows) -> list[str]:
+    """日报的分 track 明细: 近24h 有平仓的每个 track 各一行(二买/二卖在前, 其余按名字排)。
+    只是把同一批平仓记录按 track 拆开看, 不改总计。rows: 含 pnl / track 的行。"""
+    by: dict[str, list] = {}
+    for r in rows:
+        by.setdefault(str(r["track"] or "other"), []).append(r)
+    order = [t for t in _TRACK_FIRST if t in by] + sorted(t for t in by if t not in _TRACK_FIRST)
+    lines = []
+    for tr in order:
+        sub = by[tr]
+        w = sum(1 for r in sub if (r["pnl"] or 0) > 0)
+        nm = TRACK_LABELS.get(tr) or html.escape(tr)
+        lines.append(f"　{nm}: {len(sub)}笔 赚{w}/亏{len(sub)-w} "
+                     f"{sum((r['pnl'] or 0) for r in sub):+.1f}U")
+    return lines
+
+
+def daily_close_lines(rows, hidden=frozenset()) -> list[str]:
+    """日报里「近24h 平仓」这一段。rows: 含 pnl / track 的平仓行; hidden: 还没通过出图审核的 track。
+    未审核的 track(CLAUDE.md 第七条: 审核通过前不出胜率/期望)不进 已平仓/胜率/当日盈亏/手续费 这几行,
+    也不出 赚/亏 明细, 只在最后各占一行报笔数。其余行与旧版逐字相同。"""
+    rows = list(rows or [])
+    shown = [r for r in rows if str(r["track"] or "other") not in hidden]
+    lines: list[str] = []
+    if shown:
+        win = sum(1 for r in shown if (r["pnl"] or 0) > 0)
+        loss = len(shown) - win
+        pnl = sum((r["pnl"] or 0) for r in shown)
+        wr = win / len(shown) * 100
+        lines.append(f"已平仓: <b>{len(shown)}</b> 笔 — 赚 {win} / 亏 {loss}（胜率 {wr:.0f}%）")
+        lines.append(f"当日盈亏: <b>{pnl:+.1f}U</b>")
+        fee = len(shown) * 0.45      # 500U名义×双边0.045% ≈ 0.45U/笔
+        lines.append(f"扣手续费后约: <b>{pnl - fee:+.1f}U</b>（费≈{fee:.1f}U）")
+        # 按 track 拆(每个有平仓的 track 一行)
+        lines.extend(daily_track_lines(shown))
+    else:
+        lines.append("已平仓: 0 笔")
+    held: dict[str, int] = {}
+    for r in rows:
+        tr = str(r["track"] or "other")
+        if tr in hidden:
+            held[tr] = held.get(tr, 0) + 1
+    for tr in sorted(held):
+        nm = TRACK_LABELS.get(tr) or html.escape(tr)
+        lines.append(f"　{nm}: 平仓 {held[tr]} 笔（未审核，不计胜率与盈亏）")
+    return lines
 
 
 async def amain() -> None:
@@ -31,6 +89,7 @@ async def amain() -> None:
     trader = LiveTrader(cfg, db, engine.rest)
     engine.trader = trader            # 让引擎可在 auto_trade 开启时直接下单
     bot = TgBot(cfg, db, trader)
+    bot.engine = engine               # Telegram 的「提醒」指令直接找 engine.alerts / engine.linked(只读写提醒, 不涉及下单)
     engine.signal_subscribers.append(bot.on_signal)
     engine.trade_close_subscribers.append(bot.on_trade_close)
     engine.notice_subscribers.append(bot.notify)
@@ -63,29 +122,12 @@ async def amain() -> None:
                 rows = db.query(
                     "SELECT pnl, pnl_r, result, track FROM paper_trades "
                     "WHERE closed_at > ? AND result IN ('tp','sl','rev')", (since,)) or []
-                win = sum(1 for r in rows if (r["pnl"] or 0) > 0)
-                loss = len(rows) - win
-                pnl = sum((r["pnl"] or 0) for r in rows)
                 n_open = (db.one("SELECT COUNT(*) c FROM paper_trades WHERE result='open'")
                           or {"c": 0})["c"]
                 lines = [f"📅 <b>日报</b>（近24h）",
                          f"触发信号: <b>{n_sig}</b> 个"]
-                if rows:
-                    wr = win / len(rows) * 100
-                    lines.append(f"已平仓: <b>{len(rows)}</b> 笔 — 赚 {win} / 亏 {loss}（胜率 {wr:.0f}%）")
-                    lines.append(f"当日盈亏: <b>{pnl:+.1f}U</b>")
-                    fee = len(rows) * 0.45      # 500U名义×双边0.045% ≈ 0.45U/笔
-                    lines.append(f"扣手续费后约: <b>{pnl - fee:+.1f}U</b>（费≈{fee:.1f}U）")
-                    # 按方向拆
-                    for tr in ("second_buy", "second_sell"):
-                        sub = [r for r in rows if r["track"] == tr]
-                        if sub:
-                            w = sum(1 for r in sub if (r["pnl"] or 0) > 0)
-                            nm = "二买(多)" if tr == "second_buy" else "二卖(空)"
-                            lines.append(f"　{nm}: {len(sub)}笔 赚{w}/亏{len(sub)-w} "
-                                         f"{sum((r['pnl'] or 0) for r in sub):+.1f}U")
-                else:
-                    lines.append("已平仓: 0 笔")
+                # 未通过出图审核的联动规则: 只报笔数, 不进胜率/盈亏(第七条)
+                lines.extend(daily_close_lines(rows, unaudited_tracks(cfg)))
                 lines.append(f"当前持仓: {n_open} 笔")
                 await bot.notify("\n".join(lines))
                 log.info("daily report sent")

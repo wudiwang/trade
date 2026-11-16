@@ -13,6 +13,7 @@ import collections
 import hashlib
 import hmac
 import ipaddress
+import itertools
 import json
 import re
 import logging
@@ -20,6 +21,8 @@ import math
 import re
 import secrets
 import time
+import unicodedata
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -274,6 +277,377 @@ _SYMBOL_RE = re.compile(r"^\w{2,32}$")                      # 币种：字母数
 
 def _clamp(v: int, lo: int, hi: int) -> int:
     return max(lo, min(int(v), hi))
+
+
+# ---------- 价格提醒（仅登录后可用；这里是便于单测的纯函数部分） ----------
+
+MAX_ALERT_BODY = 2048          # 新增/删除提醒的请求体上限（字节）
+ALERT_LEVELS_MAX = 200         # GET /api/alerts 一次最多回多少条
+ALERT_NOTE_MAX = 80            # 备注最长字数（网页端超出拒绝；Telegram 里超出截断）
+ALERT_PRICE_MAX = 1e12
+ALERT_MAX_ACTIVE = 200         # 操作面的硬顶（兜底）；平时生效的是提醒引擎自己的上限(alerts.levels.max_active)
+_ALERT_ROW_KEYS = ("id", "symbol", "op", "price", "note", "status", "created_at", "fired_at", "fired_price")
+_PRICE_RE = re.compile(r"^(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)?(?:\.[0-9]+)?$")
+_PRICE_MULT = {"k": 1000, "w": 10000, "万": 10000}
+
+# 下面这些纯函数是「币种/价格写法」与「状态文本」的唯一一份实现，网页接口与 Telegram 指令共用
+# （app.bot.telegram 从这里导入；反过来不行——本模块不能导入 bot：订单流预览服务只起 web，不该把机器人带进来）。
+
+
+def nfkc(s) -> str:
+    """全角数字/符号/空格 → 半角，去首尾空白。"""
+    return unicodedata.normalize("NFKC", "" if s is None else str(s)).strip()
+
+
+def parse_price(raw) -> float | None:
+    """用户写的价格 → 正的有限浮点数。认 63000 / 63,000 / 63k / 6.3w / 6.3万 / 0.00283 / .5 / $63000 / 63000u。
+    空、0、负数、nan/inf、夹了别的字符、千分位写错、超出上限：一律 None。"""
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            v = float(raw)
+        except OverflowError:
+            return None
+    else:
+        s = nfkc(raw).lower().lstrip("$¥")
+        if not s or len(s) > 32:
+            return None
+        for unit in ("usdt", "usd", "u"):
+            if s.endswith(unit):
+                s = s[:-len(unit)]
+                break
+        mult = 1
+        if s and s[-1] in _PRICE_MULT:
+            mult, s = _PRICE_MULT[s[-1]], s[:-1]
+        if not s or not _PRICE_RE.fullmatch(s):
+            return None
+        try:
+            v = float(Decimal(s.replace(",", "")) * mult)      # Decimal: 0.07k 得到 70 而不是 70.00000000000001
+        except (InvalidOperation, ValueError, OverflowError):
+            return None
+    if not math.isfinite(v) or v <= 0 or v > ALERT_PRICE_MAX:
+        return None
+    return v
+
+
+def norm_symbol(raw) -> str | None:
+    """币种写法归一：btc / BTC / $btc / btc/usdt / btcusdt / pump → BTCUSDT / PUMPUSDT（大写，缺 USDT 就补）。
+    只收字母数字下划线（含中文名合约），总长 ≤32；空的、带其它符号的、纯数字的（多半漏写了币种）返回 None。"""
+    s = nfkc(raw).upper().lstrip("$#").replace("/", "").replace("-", "")
+    if not s or len(s) > 32:
+        return None
+    if not s.endswith("USDT"):
+        s += "USDT"
+    base = s[:-4]
+    if not base or len(s) > 32 or not _SYMBOL_RE.fullmatch(s) or re.fullmatch(r"[0-9_]+", base):
+        return None
+    return s
+
+
+def _clip(s: str, n: int) -> str:
+    return s if len(s) <= n else s[:max(0, n - 1)] + "…"
+
+
+def fmt_alert_px(p) -> str:
+    """提醒里的价格文本：≥100 带千分位并去掉无意义的尾零；小价保留 6 位有效数字、不用科学计数法。"""
+    try:
+        p = float(p)
+    except (TypeError, ValueError, OverflowError):
+        return "–"
+    if not math.isfinite(p):
+        return "–"
+    if abs(p) >= 100:
+        return f"{p:,.2f}".rstrip("0").rstrip(".")
+    return format(Decimal(f"{p:.6g}"), "f")
+
+
+def _short_val(v, depth: int = 0) -> str:
+    """任意 status 值 → 一小段纯文本。"""
+    if v is None:
+        return "–"
+    if isinstance(v, bool):
+        return "是" if v else "否"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        if not math.isfinite(v):
+            return "–"
+        if abs(v) >= 100:
+            return f"{v:.2f}".rstrip("0").rstrip(".")
+        return format(Decimal(f"{v:.6g}"), "f")
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        if depth >= 3:
+            return "{…}"
+        parts = [f"{k}={_short_val(x, depth + 1)}" for k, x in itertools.islice(v.items(), 8)]
+        if len(v) > 8:
+            parts.append(f"…+{len(v) - 8}")
+        body = ", ".join(parts)
+        return ("{" + body + "}") if depth else (body or "–")
+    if isinstance(v, (list, tuple, set, frozenset, collections.deque)):
+        seq = sorted(v, key=str) if isinstance(v, (set, frozenset)) else v
+        parts = [_short_val(x, depth + 1) for x in itertools.islice(seq, 8)]
+        if len(seq) > 8:
+            parts.append(f"…+{len(seq) - 8}")
+        body = ", ".join(parts)
+        return ("[" + body + "]") if depth else (body or "–")
+    return str(v)
+
+
+def kv_text_lines(d, limit: int = 16, width: int = 200) -> list[str]:
+    """把别的模块给的 status 字典渲染成「键: 值」纯文本行（未转义）。键名由对方定义，这里不做假设：
+    有什么写什么；值全是字典的那一层再展开一层（thresholds.drop: …），过长截断，行数有上限。"""
+    if not isinstance(d, dict):
+        return [_clip(_short_val(d), width)] if d not in (None, "") else []
+    rows: list[tuple[str, object]] = []
+    for k, v in d.items():
+        if k == "summary" and isinstance(v, str):             # 摘要另有一行专门显示（见 own_summary）
+            continue
+        if isinstance(v, dict) and v and all(isinstance(x, dict) for x in v.values()):
+            rows += [(f"{k}.{k2}", v2) for k2, v2 in v.items()]
+        else:
+            rows.append((str(k), v))
+    out = [f"{_clip(k, 48)}: {_clip(_short_val(v), width)}" for k, v in rows[:limit]]
+    if len(rows) > limit:
+        out.append(f"…其余 {len(rows) - limit} 项略")
+    return out
+
+
+def _g(x) -> str:
+    return f"{float(x):g}"
+
+
+def own_summary(st) -> str:
+    """status 字典里对方自己写好的一行摘要（键 summary，字符串）；没有返回 ""。"""
+    own = st.get("summary") if isinstance(st, dict) else None
+    return _clip(" ".join(own.split()), 300) if isinstance(own, str) and own.strip() else ""
+
+
+def alert_status_summary(st) -> str:
+    """提醒引擎 status() → 一行中文摘要（生效中的自动提醒），给卡片和 Telegram 列表的那一行用。
+    1) 对方自己给了 summary 字符串，就用它；
+    2) 否则按 app/engine/alerts.py 现在的键名尽力拼：急跌窗口阈值 / N 日破位及参照价 / 报价新鲜度 / 异常数；
+    3) 认不出来返回 ""——调用方退回 kv_text_lines 的原样渲染。对方改了键名，这里只会变短或变空，不会抛。"""
+    try:
+        if not isinstance(st, dict):
+            return ""
+        own = own_summary(st)
+        if own:
+            return own
+        if st.get("enabled") is False:
+            return "" if "error" in st else "已关闭"
+        thr = st.get("thresholds")
+        if not isinstance(thr, dict):
+            return ""
+        short = lambda s: str(s)[:-4] if str(s).endswith("USDT") and len(str(s)) > 4 else str(s)   # noqa: E731
+        rules: list[str] = []
+        drop = thr.get("drop")
+        if isinstance(drop, dict) and drop.get("enabled"):
+            dirs = set(drop.get("directions") or ["down"])
+            word = "涨跌" if {"down", "up"} <= dirs else "涨" if dirs == {"up"} else "跌"
+            for w in list(drop.get("windows") or [])[:6]:
+                rules.append(f"{_g(w['minutes'])}分钟{word}≥{_g(w['pct'])}%")
+        rb = thr.get("range_break")
+        refs = st.get("ref_lows") if isinstance(st.get("ref_lows"), dict) else {}
+        if isinstance(rb, dict) and rb.get("enabled"):
+            for d in list(rb.get("days") or [])[:6]:
+                for side in list(rb.get("directions") or ["down"])[:2]:
+                    low = side != "up"
+                    name = f"{_g(d)}d_{'low' if low else 'high'}"
+                    got = [(sym, r[name].get("price")) for sym, r in refs.items()
+                           if isinstance(r, dict) and isinstance(r.get(name), dict)]
+                    got = [(sym, px) for sym, px in got if isinstance(px, (int, float)) and px > 0]
+                    label = f"破{_g(d)}日{'低' if low else '高'}"
+                    if len(got) == 1:
+                        label += f" {fmt_alert_px(got[0][1])}"
+                    elif got:
+                        label += " " + "/".join(f"{short(sym)} {fmt_alert_px(px)}" for sym, px in got[:4])
+                    else:
+                        label += "(参照价未就绪)"
+                    rules.append(label)
+        if not rules:
+            return ""
+        parts: list[str] = []
+        syms = st.get("symbols")
+        if isinstance(syms, (list, tuple)) and syms:
+            parts.append("/".join(short(s) for s in syms[:4]) + ("…" if len(syms) > 4 else ""))
+        parts += rules
+        ages = st.get("last_tick_age")
+        if isinstance(ages, dict):
+            known = [a for a in ages.values() if isinstance(a, (int, float)) and not isinstance(a, bool)]
+            if known and len(known) == len(ages):
+                parts.append(f"报价 {_g(round(max(known), 1))}s前")
+            else:
+                parts.append("部分币种尚无实时报价" if known else "尚无实时报价")
+        counts = st.get("counts")
+        errs = counts.get("errors") if isinstance(counts, dict) else None
+        if isinstance(errs, int) and errs > 0:
+            parts.append(f"内部异常 {errs} 次")
+        return _clip(" · ".join(parts), 300)
+    except Exception:
+        return ""
+
+
+def health_summary(h) -> str:
+    """引擎提醒通路的健康计数(Engine.notice_health())→ 一行中文; 一切正常(或没有数据)返回 ""。
+    一次性的提醒发不出去就没了, 所以「发送失败 / 被丢弃 / 内部异常」必须让人在列表里看得见。"""
+    try:
+        if not isinstance(h, dict):
+            return ""
+        parts: list[str] = []
+        n = h.get("notice_failed")
+        if isinstance(n, int) and n > 0:
+            more = []
+            for key, word in (("notice_recovered", "已补发"), ("notice_backlog", "待补发"), ("notice_lost", "已放弃")):
+                v = h.get(key)
+                if isinstance(v, int) and v > 0:
+                    more.append(f"{word} {v}")
+            parts.append(f"通知发送失败 {n} 条" + (f"({', '.join(more)})" if more else ""))
+        n = h.get("notice_dropped")
+        if isinstance(n, int) and n > 0:
+            parts.append(f"积压丢弃 {n} 条")
+        n = h.get("notice_retried")
+        if isinstance(n, int) and n > 0:
+            parts.append(f"重试 {n} 次")
+        errs = h.get("hook_errors")
+        if isinstance(errs, dict):
+            bad = [(str(k), v) for k, v in errs.items()
+                   if isinstance(v, int) and v > 0 and k != "notice_send"]      # notice_send 已体现在上面几项
+            if bad:
+                parts.append("内部异常 " + ", ".join(f"{k}×{v}" for k, v in bad[:6]))
+        n = h.get("tick_errors")
+        if isinstance(n, int) and n > 0:
+            parts.append(f"报价通路异常 {n} 次")
+        return _clip(" · ".join(parts), 300)
+    except Exception:
+        return ""
+
+
+def json_safe(obj, depth: int = 0):
+    """把别的模块给的任意 status 值收敛成「一定能序列化、大小有上限」的 JSON 值：
+    nan/inf → None；集合/元组/deque → 列表；未知对象 → 字符串；层数、条目数、字符串长度都夹住。"""
+    if obj is None or isinstance(obj, (bool, int)):
+        return obj
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, str):
+        return obj if len(obj) <= 500 else obj[:500] + "…"
+    if depth >= 5:
+        return str(obj)[:200]
+    if isinstance(obj, dict):
+        return {str(k)[:64]: json_safe(v, depth + 1) for k, v in itertools.islice(obj.items(), 100)}
+    if isinstance(obj, (set, frozenset)):
+        obj = sorted(obj, key=str)
+    if isinstance(obj, (list, tuple, collections.deque)):
+        return [json_safe(v, depth + 1) for v in itertools.islice(obj, 200)]
+    return str(obj)[:200]
+
+
+def parse_alert_body(body: dict) -> tuple[dict | None, str]:
+    """校验「新增提醒」请求体。合法 → ({"symbol", "price", "op", "note"}, "")；否则 (None, 中文原因)。
+    symbol: 字母数字下划线，归一成 XXXUSDT，≤32 位；price: 数字或 "63k" 这类写法，有限且 >0；
+    op: below / above / 留空(自动判断)；note: 文本，去掉控制字符后 ≤ ALERT_NOTE_MAX 字。"""
+    raw_sym = body.get("symbol")
+    if not isinstance(raw_sym, str) or not raw_sym.strip():
+        return None, "请填币种"
+    symbol = norm_symbol(raw_sym) if len(raw_sym) <= 40 else None
+    if symbol is None:
+        return None, "币种不合法（只能是字母数字，如 BTC / PUMPUSDT）"
+    raw_price = body.get("price")
+    if raw_price is None or raw_price == "":
+        return None, "请填价格"
+    price = parse_price(raw_price) if isinstance(raw_price, (int, float, str)) else None
+    if price is None:
+        return None, "价格不合法（须为大于 0 的数字）"
+    op = body.get("op")
+    if op is None or op == "" or op == "auto":
+        op = None
+    elif not isinstance(op, str) or op not in ("below", "above"):
+        return None, "方向只能是 below / above，或留空自动判断"
+    note = body.get("note")
+    if note is None:
+        note = ""
+    if not isinstance(note, str):
+        return None, "备注须为文本"
+    note = " ".join("".join(ch if ch.isprintable() else " " for ch in note).split())   # 换行/控制字符 → 空格
+    if len(note) > ALERT_NOTE_MAX:
+        return None, f"备注过长（最多 {ALERT_NOTE_MAX} 字）"
+    return {"symbol": symbol, "price": price, "op": op, "note": note}, ""
+
+
+def parse_alert_id(raw) -> int | None:
+    """提醒编号：正整数（或纯数字字符串），不超过 2^31-1。"""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, str) and re.fullmatch(r"[0-9]{1,10}", raw):
+        raw = int(raw)
+    if isinstance(raw, int) and 1 <= raw <= 2**31 - 1:
+        return raw
+    return None
+
+
+def alerts_view(engine, include_fired: bool = False) -> dict:
+    """GET /api/alerts 的载荷：手动提醒列表(带现价) + 自动提醒状态 + 联动规则状态。
+    engine / engine.alerts / engine.linked 任何一个缺席或抛异常，只让对应那一块降级（记进 errors），不会 500。
+    只读内存与本地库。status / linked 是对方 status() 的原样(过 json_safe)；
+    *_summary 是一行摘要（可能为空串），*_lines 是「键: 值」明细行——都是纯文本，页面用 textContent 写入。"""
+    alerts = getattr(engine, "alerts", None) if engine is not None else None
+    linked = getattr(engine, "linked", None) if engine is not None else None
+    out = {"enabled": alerts is not None, "levels": [],
+           "status": {}, "status_summary": "", "status_lines": [],
+           "linked_enabled": linked is not None, "linked": {}, "linked_summary": "", "linked_lines": [],
+           "health": {}, "health_summary": "",
+           "errors": [], "note_max": ALERT_NOTE_MAX, "ts": int(time.time())}
+    try:                                                      # 提醒通路的健康计数(发送失败/丢弃/异常)
+        fn = getattr(engine, "notice_health", None) if engine is not None else None
+        if callable(fn):
+            h = fn()
+            out["health"] = json_safe(h) if isinstance(h, dict) else {}
+            out["health_summary"] = health_summary(h)
+    except Exception:
+        log.exception("engine.notice_health failed")
+        out["errors"].append("health")
+    if alerts is not None:
+        try:
+            prices: dict = {}
+            for r in itertools.islice(alerts.list_levels(bool(include_fired)), ALERT_LEVELS_MAX):
+                row = json_safe(dict(r))
+                for k in _ALERT_ROW_KEYS:
+                    row.setdefault(k, None)
+                sym = row["symbol"] if isinstance(row["symbol"], str) else None
+                if sym is not None and sym not in prices:
+                    try:
+                        prices[sym] = json_safe(alerts.last_price(sym))
+                    except Exception:
+                        prices[sym] = None
+                row["last_price"] = prices.get(sym)
+                out["levels"].append(row)
+        except Exception:
+            log.exception("alerts.list_levels failed")
+            out["levels"] = []
+            out["errors"].append("levels")
+        try:
+            st = alerts.status()
+            out["status"] = json_safe(st) if isinstance(st, dict) else {"status": json_safe(st)}
+            out["status_summary"] = alert_status_summary(st)
+            out["status_lines"] = [json_safe(x) for x in kv_text_lines(st)]
+        except Exception:
+            log.exception("alerts.status failed")
+            out["status"], out["status_summary"], out["status_lines"] = {}, "", []
+            out["errors"].append("status")
+    if linked is not None:
+        try:
+            st = linked.status()
+            out["linked"] = json_safe(st) if isinstance(st, dict) else {"status": json_safe(st)}
+            out["linked_summary"] = own_summary(st)
+            out["linked_lines"] = [json_safe(x) for x in kv_text_lines(st)]
+        except Exception:
+            log.exception("linked.status failed")
+            out["linked"], out["linked_summary"], out["linked_lines"] = {}, "", []
+            out["errors"].append("linked")
+    return out
 
 
 # ---------- 密码与会话 ----------
@@ -723,7 +1097,8 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
                 "SELECT pt.track, pt.result, pt.pnl, pt.pnl_r, s.extra AS sig_extra "
                 "FROM paper_trades pt LEFT JOIN signals s ON s.id=pt.signal_id ORDER BY pt.id"
             )
-            return build_strategy_stats([dict(r) for r in rows])
+            hide = _unaudited()                        # 未审核的联动规则: 不出胜率/期望(只在 /api/trades 里逐笔可见)
+            return build_strategy_stats([dict(r) for r in rows if r["track"] not in hide])
         return public(request, ("strategy_stats",), 15, produce)   # 全表扫描，匿名缓存久一点
 
     # ---------- 关注列表 Watchlist (P4) ----------
@@ -745,7 +1120,7 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
             try:
                 await eng.refresh_universe()
                 await eng.backfill_all(only=[sym])
-                await eng.ws.start(eng.symbols, cfg.timeframes)
+                await eng.restart_ws()
             except Exception:
                 log.exception("watch add refresh failed")
         return {"ok": True, "symbol": sym}
@@ -755,6 +1130,101 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
         b = await request.json()
         db.remove_watch((b.get("symbol") or "").upper().strip())
         return {"ok": True}
+
+    # ---------- 价格提醒 ----------
+    # 三个接口全部仅登录后可用（dependencies=LOGIN，且不在 PUBLIC_GET 里 → 匿名一律 401）。
+    # 只调用提醒引擎的 查 / 设 / 删（内存 + 一次本地写库）；不触达、也接触不到任何下单路径。
+    # engine.alerts 由总装挂上，关闭时为 None；engine.linked（联动规则）同理。
+    def _alert_engine():
+        eng = APP_STATE.get("engine")
+        return getattr(eng, "alerts", None) if eng is not None else None
+
+    def _json(data, status: int = 200) -> Response:
+        return Response(content=_dumps(data), media_type="application/json", status_code=status)
+
+    def _unaudited() -> frozenset:
+        """还没通过出图审核的联动规则的 track(配置里 audited: true 之前)。CLAUDE.md 第七条: 审核通过前不出
+        胜率/期望 —— 下面的统计接口把这些 track 整个排除(只在 unaudited 里给笔数), 也不让它们混进别的合计。
+        取不到(异常)时宁可把已知的联动规则 track 都当未审核。"""
+        try:
+            from app.engine.linked_rules import unaudited_tracks
+            return unaudited_tracks(cfg)
+        except Exception:
+            log.exception("unaudited_tracks failed")
+            return frozenset({"btcbreak_pump"})
+
+    def _unaudited_counts(hide) -> list[dict]:
+        """未审核 track 只给笔数(已平/未平), 不给任何结果字段。"""
+        if not hide:
+            return []
+        marks = ",".join("?" * len(hide))
+        rows = db.query(
+            "SELECT track, SUM(result IN ('tp','sl','rev')) closed, "
+            "SUM(result IS NULL OR result='open') open_cnt, COUNT(*) n "
+            f"FROM paper_trades WHERE track IN ({marks}) GROUP BY track ORDER BY track", list(hide))
+        return [{"track": r["track"], "n": r["n"], "closed": r["closed"] or 0, "open": r["open_cnt"] or 0,
+                 "status": "未审核, 不计胜率与盈亏"} for r in rows]
+
+    @app.get("/api/alerts", dependencies=LOGIN)
+    async def alerts_get(fired: bool = False):
+        return _json(alerts_view(APP_STATE.get("engine"), fired))
+
+    @app.post("/api/alerts", dependencies=LOGIN)
+    async def alerts_add(request: Request):
+        body = await read_json(request, MAX_ALERT_BODY)
+        if body is None:
+            return _err(400, "请求格式错误")
+        req, why = parse_alert_body(body)
+        if req is None:
+            return _err(400, why)
+        alerts = _alert_engine()
+        if alerts is None:
+            return _err(503, "价格提醒未启用")
+        try:
+            if len(alerts.list_levels()) >= ALERT_MAX_ACTIVE:
+                return _err(400, f"生效中的提醒已达上限 {ALERT_MAX_ACTIVE} 条")
+            res = alerts.add_level(req["symbol"], req["price"], req["op"], req["note"])
+        except Exception:
+            log.exception("alert add failed")
+            return _err(500, "提醒服务异常")
+        if not (isinstance(res, dict) and res.get("ok")):
+            why = res.get("error") if isinstance(res, dict) else None
+            return _err(400, str(why or "添加失败")[:200])
+        try:
+            alert = json_safe(dict(res.get("alert") or {}))
+        except Exception:
+            alert = {}
+        alert = {"symbol": req["symbol"], "price": req["price"], "op": req["op"], "note": req["note"], **alert}
+        try:
+            db.log("info", "alert", f"web add #{alert.get('id')} {alert.get('symbol')} "
+                                    f"{alert.get('op') or 'auto'} {req['price']:g}")
+        except Exception:
+            log.exception("alert event log failed")
+        return _json({"ok": True, "alert": alert})
+
+    @app.post("/api/alerts/remove", dependencies=LOGIN)
+    async def alerts_remove(request: Request):
+        body = await read_json(request, MAX_ALERT_BODY)
+        if body is None:
+            return _err(400, "请求格式错误")
+        aid = parse_alert_id(body.get("id"))
+        if aid is None:
+            return _err(400, "编号不合法")
+        alerts = _alert_engine()
+        if alerts is None:
+            return _err(503, "价格提醒未启用")
+        try:
+            removed = bool(alerts.remove_level(aid))
+        except Exception:
+            log.exception("alert remove failed")
+            return _err(500, "提醒服务异常")
+        if not removed:
+            return _err(404, "没有这条生效中的提醒")
+        try:
+            db.log("info", "alert", f"web remove #{aid}")
+        except Exception:
+            log.exception("alert event log failed")
+        return {"ok": True, "id": aid}
 
     # ---------- 大盘观点 (P2a，提阿非罗每日例程写入) ----------
     def _macro_token() -> str:
@@ -892,16 +1362,25 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
     async def stats_by_tf(request: Request):
         """按级别(可再按轨道)统计胜率，验证哪个级别准确率最高。"""
         def produce(anon: bool):
+            hide = sorted(_unaudited())                # 未审核的联动规则不进任何一行统计, 也不混进各级别合计
+            marks = ",".join("?" * len(hide))
             rows = db.query(
                 "SELECT tf, track, COUNT(*) n, SUM(result='tp') wins, "
                 "ROUND(SUM(pnl),2) pnl, ROUND(AVG(pnl_r),3) avg_r "
-                "FROM paper_trades WHERE result IN ('tp','sl') GROUP BY tf, track ORDER BY tf, track")
+                "FROM paper_trades WHERE result IN ('tp','sl')"
+                + (f" AND track NOT IN ({marks})" if hide else "")
+                + " GROUP BY tf, track ORDER BY tf, track", hide)
             agg = db.query(
                 "SELECT tf, COUNT(*) n, SUM(result='tp') wins, "
                 "ROUND(SUM(pnl),2) pnl, ROUND(AVG(pnl_r),3) avg_r, "
                 "SUM(result IS NULL OR result='open') open_cnt "
-                "FROM paper_trades GROUP BY tf ORDER BY tf")
-            return {"by_tf_track": [dict(r) for r in rows], "by_tf": [dict(r) for r in agg]}
+                "FROM paper_trades"
+                + (f" WHERE track NOT IN ({marks})" if hide else "")
+                + " GROUP BY tf ORDER BY tf", hide)
+            out = {"by_tf_track": [dict(r) for r in rows], "by_tf": [dict(r) for r in agg]}
+            if hide:
+                out["unaudited"] = _unaudited_counts(hide)
+            return out
         return public(request, ("stats_by_tf",), 30, produce)
 
     @app.get("/api/equity")
@@ -910,6 +1389,8 @@ def create_app(cfg, db, engine=None, bot=None) -> FastAPI:
             return _err(400, "参数不合法")
 
         def produce(anon: bool):
+            if track in _unaudited():                  # 未审核的联动规则: 不出净值曲线
+                return []
             if anon:                                   # 匿名只给最近 3000 个结算点，防无上限响应
                 rows = db.query("SELECT ts, equity FROM equity_curve WHERE track=? "
                                 "ORDER BY ts DESC LIMIT 3000", (track,))

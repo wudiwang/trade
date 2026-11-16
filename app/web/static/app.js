@@ -709,6 +709,142 @@ async function loadStrategyStatus() {
 }
 loadStatus = loadStrategyStatus;
 
+// ---------- 价格提醒(仅登录后)：手动提醒 设/查/删 + 自动提醒与联动规则的当前状态 ----------
+// 币种、备注、status 的键和值都可能是任意字符串：这一段只用 createElement + textContent，不拼 innerHTML。
+const AL_OP = {below: '跌破', above: '涨破'};
+// 曼谷时间(UTC+7)，形如 "11-16 13:05"；秒或毫秒时间戳都认
+function fmtBkk(ts) {
+  const n = Number(ts);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const d = new Date((n > 1e11 ? n : n * 1000) + 7 * 3600 * 1000);
+  const p = x => String(x).padStart(2, '0');
+  return `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+function alEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+const alOpen = {};      // 明细展开状态：定时刷新重画时保持
+// 一行状态：后端给了摘要就显示摘要(「键: 值」明细收进可展开的 <details>)；没有摘要就把明细拼成一行。
+// 摘要和明细都是后端拼好的纯文本(status 的键名由各模块自己定，有什么显示什么)。
+function alStatusLine(box, key, title, summary, lines, failed, off) {
+  lines = Array.isArray(lines) ? lines.map(String) : [];
+  const text = off ? '未启用' : failed ? '状态读取失败' : (summary || lines.join(' · ') || '无');
+  box.appendChild(alEl('div', '', `${title} · ${text}`));
+  if (off || failed || !summary || !lines.length) return;
+  const det = alEl('details', 'al-more');
+  det.dataset.key = key;
+  det.open = !!alOpen[key];
+  det.addEventListener('toggle', () => { alOpen[key] = det.open; });
+  det.appendChild(alEl('summary', '', '明细'));
+  for (const ln of lines) det.appendChild(alEl('div', '', ln));
+  box.appendChild(det);
+}
+const alPx = v => (typeof v === 'number' && Number.isFinite(v)) ? String(fmtP(v)) : '–';
+function alDist(level, last) {
+  if (typeof level !== 'number' || typeof last !== 'number' || !(last > 0) || !Number.isFinite(level)) return '';
+  const pct = (level - last) / last * 100;
+  return ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
+}
+function renderAlerts(d) {
+  const list = $('al-list'), info = $('al-info');
+  if (!list || !info) return;
+  const errs = d.errors || [];
+  list.replaceChildren();
+  info.replaceChildren();
+  $('al-form').style.display = d.enabled ? '' : 'none';
+  list.style.display = d.enabled ? '' : 'none';
+  if (!d.enabled) {
+    $('al-note').textContent = '未启用（引擎未运行或已关闭）';
+  } else {
+    const rows = (d.levels || []).filter(a => (a.status || 'active') === 'active');
+    $('al-note').textContent = errs.includes('levels') ? '列表读取失败' : rows.length ? `${rows.length} 条生效中` : '';
+    for (const a of rows) {
+      const row = alEl('div', 'al-row');
+      const made = fmtBkk(a.created_at);
+      if (made) row.title = `创建于 ${made} (UTC+7)`;
+      const main = alEl('div', 'al-main');           // 左边内容可换行，右边删除键固定
+      main.appendChild(alEl('span', 'muted', '#' + a.id));
+      main.appendChild(alEl('b', '', String(a.symbol ?? '?')));
+      main.appendChild(alEl('span', 'tag ' + (a.op === 'above' ? 'long' : 'short'), AL_OP[a.op] || String(a.op || '?')));
+      main.appendChild(alEl('span', 'al-px', alPx(a.price)));
+      if (a.last_price != null) main.appendChild(alEl('span', 'muted', `现价 ${alPx(a.last_price)}${alDist(a.price, a.last_price)}`));
+      if (a.note) main.appendChild(alEl('span', 'al-note muted', String(a.note)));
+      row.appendChild(main);
+      const del = alEl('button', 'al-del', '✕');
+      del.type = 'button';
+      del.title = `删除提醒 #${a.id}`;
+      del.setAttribute('aria-label', del.title);
+      del.addEventListener('click', () => removeAlert(a.id));
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+    if (!rows.length && !errs.includes('levels')) list.appendChild(alEl('div', 'muted', '暂无手动提醒（到价后 Telegram 推送一次）'));
+    // 最近已触发的(最多 5 条)：价位触发后就从上面的列表消失，Telegram 那条万一没送达，这里还看得到
+    const fired = (d.levels || []).filter(a => a.status === 'fired').slice(0, 5);
+    for (const a of fired) {
+      const row = alEl('div', 'al-row muted');
+      const main = alEl('div', 'al-main');
+      main.appendChild(alEl('span', '', '#' + a.id));
+      main.appendChild(alEl('b', '', String(a.symbol ?? '?')));
+      main.appendChild(alEl('span', '', `${AL_OP[a.op] || String(a.op || '?')} ${alPx(a.price)}`));
+      main.appendChild(alEl('span', '', `已触发 ${fmtBkk(a.fired_at)}${a.fired_price != null ? ' @ ' + alPx(a.fired_price) : ''}`));
+      if (a.note) main.appendChild(alEl('span', 'al-note', String(a.note)));
+      row.appendChild(main);
+      const del = alEl('button', 'al-del', '✕');
+      del.type = 'button';
+      del.title = `从列表移除 #${a.id}`;
+      del.setAttribute('aria-label', del.title);
+      del.addEventListener('click', () => removeAlert(a.id));
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+    alStatusLine(info, 'auto', '⚙️ 自动提醒', d.status_summary, d.status_lines, errs.includes('status'), false);
+  }
+  alStatusLine(info, 'linked', '🔗 联动规则', d.linked_summary, d.linked_lines, errs.includes('linked'), !d.linked_enabled);
+  // 通知通路出过问题(发送失败/积压丢弃/内部异常)才显示这一行
+  if (d.health_summary) info.appendChild(alEl('div', '', `⚠️ 通知通路 · ${d.health_summary}`));
+}
+async function loadAlerts() {
+  if (!ME.logged_in) return;
+  renderAlerts(await api('/api/alerts?fired=1'));
+}
+async function addAlert(ev) {
+  if (ev) ev.preventDefault();
+  if (!needLogin()) return;
+  const symbol = $('al-symbol').value.trim(), price = $('al-price').value.trim();
+  if (!symbol) { toast('❌ 请填币种'); return; }
+  if (!price) { toast('❌ 请填价格'); return; }
+  const btn = $('al-add');
+  btn.disabled = true;
+  try {
+    // 价格按字符串原样发给后端解析(63k / 63,000 都认)，与 Telegram 指令同一套规则
+    const r = await api('/api/alerts', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({symbol, price, op: $('al-op').value, note: $('al-note-in').value.trim()})});
+    if (r.ok) {
+      const a = r.alert || {};
+      toast(`🔔 已设提醒 #${a.id ?? '?'} ${a.symbol || ''} ${AL_OP[a.op] || ''} ${alPx(a.price)}`);
+      $('al-price').value = ''; $('al-note-in').value = ''; $('al-op').value = '';
+      run(loadAlerts);
+    } else toast('❌ ' + (r.error || '添加失败'));
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;      // ApiError 已由 api() 提示过
+  } finally { btn.disabled = false; }
+}
+async function removeAlert(id) {
+  if (!needLogin()) return;
+  try {
+    const r = await api('/api/alerts/remove', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({id})});
+    toast(r.ok ? `🗑 已删除提醒 #${id}` : '❌ ' + (r.error || '删除失败'));
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+  }
+  run(loadAlerts);
+}
+
 // ---------- 账号(仅登录后)：初始密码提醒 + 修改密码 ----------
 async function loadAccount() {
   if (!ME.logged_in) return;
@@ -745,11 +881,12 @@ async function boot() {
   } catch (e) { ME = {logged_in: false, user: null}; }
   applyAuthUI();
   [loadMacro, loadWatch, loadStatus, loadSignals, loadTrades, loadBtcChart].forEach(f => run(f));
-  if (ME.logged_in) [loadSettings, loadPositions, loadAutoSwitch, loadAccount].forEach(f => run(f));
+  if (ME.logged_in) [loadSettings, loadPositions, loadAutoSwitch, loadAccount, loadAlerts].forEach(f => run(f));
   connectWS();
   setInterval(() => run(loadStatus), 15000);
   setInterval(() => ME.logged_in && run(loadAutoSwitch), 20000);
   setInterval(() => ME.logged_in && run(loadPositions), 15000);
+  setInterval(() => ME.logged_in && !document.hidden && run(loadAlerts), 20000);   // 刷新现价与状态；页面不在前台就不刷
   setInterval(() => run(loadBtcChart), 60000);
   setInterval(() => { if (!wsUp) { run(loadSignals); run(loadTrades); } }, 60000);   // 推送不通时的兜底刷新
 }

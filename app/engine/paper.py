@@ -35,9 +35,11 @@ class PaperBroker:
                  s.suggested_qty, int(time.time())),
             )
 
-    def close_opposite(self, symbol: str, tf: str, direction: str, price: float) -> list[dict]:
+    def close_opposite(self, symbol: str, tf: str, direction: str, price: float,
+                       exclude_tracks: tuple = ()) -> list[dict]:
         """反向信号平仓：新信号方向为 direction 时，按市价(price)平掉同币同级别的反向持仓。
-        即 持多(一买)遇一卖→平多；持空(一卖)遇一买→平空。result='rev'。返回平掉的单子。"""
+        即 持多(一买)遇一卖→平多；持空(一卖)遇一买→平空。result='rev'。返回平掉的单子。
+        exclude_tracks: 这些 track 的模拟单不参与反向平仓(联动规则的模拟单只认止盈/止损)。"""
         opp = "short" if direction == "long" else "long"
         rows = self.db.query(
             "SELECT * FROM paper_trades WHERE result='open' AND symbol=? AND tf=? AND direction=?",
@@ -45,6 +47,8 @@ class PaperBroker:
         )
         closed = []
         for r in rows:
+            if exclude_tracks and r["track"] in exclude_tracks:
+                continue
             sign = 1 if r["direction"] == "long" else -1
             pnl = sign * (price - r["entry"]) * r["qty"]
             sl_dist = abs(r["entry"] - r["sl"])
@@ -88,9 +92,11 @@ class PaperBroker:
                 "UPDATE paper_trades SET result=?, exit_price=?, pnl=?, pnl_r=?, closed_at=? WHERE id=?",
                 (res, exit_price, round(pnl, 4), round(pnl_r, 3), int(time.time()), r["id"]),
             )
-            # 止损=打穿分型极值=买卖点失败, 直接把信号标记为失败一买/一卖
+            # 止损=打穿分型极值=买卖点失败, 直接把信号标记为失败一买/一卖。
+            # state='sim' 的行(联动规则的模拟记录)不走缠论买点的 试/成立/失败 生命周期, 不改它。
             if res == "sl" and r["signal_id"]:
-                self.db.execute("UPDATE signals SET state='fail' WHERE id=? AND state!='ok'", (r["signal_id"],))
+                self.db.execute("UPDATE signals SET state='fail' WHERE id=? AND state NOT IN ('ok','sim')",
+                                (r["signal_id"],))
             self._update_equity(r["track"])
             closed.append({**dict(r), "result": res, "pnl": pnl, "pnl_r": pnl_r})
         return closed

@@ -190,6 +190,59 @@ flow:
   half_range_pct: 2.5               # 只记录各交易所中间价 ±该百分比以内的挂单
   sources: [binance, bybit, okx, binance_spot]   # 录哪些源; 页面「全部」只合并三个合约源, 现货需手动点选
 
+# ---- 近实时提醒：只发 Telegram 文字通知，不下单、不产生交易信号 ----
+# 三类：a) 手动价位提醒(Telegram「提醒 btc 63000」/ 网页添加)  b) 急跌  c) 跌破 N 日低点。
+# 实时报价取自 5m K线流里未收盘K的推送(每币每秒最多一笔)；报价断了就退化成每根 5m 收盘补判一次。
+# 下面的阈值来自 scripts/alert_calibrate.py --proxy dense 对约一年 BTCUSDT 1m 的回放(插值成每秒一笔，与实盘节奏一致；只数触发次数)：
+#   急跌两档合计 ≈2.2 条/周(中位 1，P90 5，最多的一周 24，52 周里 23 周为 0)；跌破 2 日低点 ≈3.6 次/周；破位后续跌 ≈0.5 条/周。
+#   (一分钟只喂四笔的粗口径会算出 ≈1.7 条/周，偏少；实盘的条数不会比 2.2 少。)
+#   想更疏/更密：跑一遍校准脚本看表再改；settings 表热覆盖约 5 分钟内生效。
+alerts:
+  enabled: true            # 总开关。启动时为 false=不创建提醒引擎、不开实时报价通路(要重启才能打开)；运行中改成 false 约 5 分钟内停报
+  symbols: ["BTCUSDT"]     # 报「急跌/破位」的币；手动价位提醒不受此限。阈值只按 BTC 校准过
+  base_tf: 5m              # 取实时报价、重算参照低点、断线兜底所用的级别(须在 timeframes 里)
+  levels:
+    max_active: 50         # 同时生效的手动价位提醒上限
+  drop:                    # b) 急跌：现价较滑动窗口内最高价回落 ≥ 阈值
+    enabled: true
+    directions: ["down"]   # 只报下跌；加 "up" 则同时报急涨
+    windows_min: [5, 15]   # 滑动窗口(分钟)
+    pct_5m: 1.5            # 5 分钟窗口阈值%
+    pct_15m: 2.0           # 15 分钟窗口阈值%
+    cooldown_min_5m: 30    # 5 分钟档响过后的冷却(分钟)
+    cooldown_min_15m: 60   # 15 分钟档响过后的冷却(分钟)
+    step_pct_5m: 0.75      # 冷却期内提前再响的步长%：窗口内跌幅比上次响时再深这么多，或(窗口跌幅仍≥阈值且)现价比上次提醒价再低这么多；0=冷却内不再响
+    step_pct_15m: 1.0      # 同上，15 分钟档
+  range_break:             # c) 破位：现价跌破最近 N 日最低价(参照价每根 5m 收盘重算)
+    enabled: true
+    directions: ["down"]   # 只报跌破低点；加 "up" 则同时报突破 N 日高点
+    days: [2]              # N 日，可多档如 [2, 7]。7 日档约 1.8 次/周
+    cooldown_min: 240      # 距上一次创新低不足这么久算同一次破位，不再响(720 → 约 2.4 次/周)
+    buffer_pct: 0          # 要跌破参照价再多这么多%才算(0=刚破就算)
+    step_pct: 3.0          # 同一次破位里(不停创新低、冷却一直顺延)，现价比上一条破位提醒的价格再低这么多%就再响一条「续跌」；0=关
+
+# ---- 联动规则：A 币出现某事件 → 在 B 币上等入场形态。只提醒 + 模拟记账，没有任何实盘通道 ----
+# 状态：未审核(CLAUDE.md 第七条：先出图审核，通过后才算期望)。逻辑说明见 docs/strategies/btcbreak_pump/logic.md。
+# 入场只写进 signals 表(kind=alert, status=sim) + 一笔模拟单(track=规则名)，模拟单只认止盈/止损两种离场。
+# 改这里的任何一项都要重启生效。
+linked_rules:
+  - name: btcbreak_pump        # 规则名 = 模拟单的 track 名 = 幂等键的一部分(上线后不要改名)
+    enabled: true              # false=不创建这条规则
+    paper: false               # true=入场时开模拟单并跟踪到止盈/止损；false=只发通知、只入库(用户 2026-11-17: 模拟统计意义不大, 只要提醒)
+    audited: false             # 出图审核通过后才改成 true。false 期间日报与统计接口对这条规则只报笔数，不出胜率/盈亏/期望(第七条)
+    trigger_symbol: BTCUSDT    # 触发币
+    target_symbol: PUMPUSDT    # 入场币(不在监控范围内时只订阅行情，不评估其它策略信号)
+    tf: 5m                     # 两个币都用这个级别的已收盘K
+    lookback_hours: 48         # 触发①：收盘价 < 前 48h(不含本K)所有K的最低价
+    vol_ma: 20                 # 触发②的均量回看根数(不含本K)
+    vol_mult: 2.0              # 触发②：成交量 ≥ 该倍数 × 均量
+    ttl_hours: 4               # 触发后待命多久；待命期内再次触发则从后一次重新起算
+    require_stall: true        # true=底分型+停顿K(与已锁定的一买定义一致)；false=分型成立那根即入场
+    stall_max_gap: 3           # 分型确认后几根内出现停顿K才算；没有就放弃该分型看下一个
+    sl_buffer_pct: 0.3         # 止损 = 分型低点 × (1 − 该%)
+    rr: 2.0                    # 止盈 = 入场 + rr × (入场 − 止损)
+    require_low_intact: false  # true=停顿前分型低点已被跌破的分型直接剔除(默认不剔除，只在事件里标注)
+
 # ---- Telegram ----
 telegram:
   enabled: true
