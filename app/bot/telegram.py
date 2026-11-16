@@ -167,9 +167,34 @@ class TgBot:
                  f"pnl={trade['pnl']:.2f}U ({trade['pnl_r']:+.2f}R)",
         )
 
-    async def notify(self, text: str) -> None:
+    async def notify(self, text: str) -> dict:
         if self.enabled:
-            await self.api("sendMessage", chat_id=self.chat_id, text=text, parse_mode="HTML")
+            return await self.api("sendMessage", chat_id=self.chat_id, text=text, parse_mode="HTML")
+        return {"ok": False, "description": "telegram disabled"}
+
+    async def _upload(self, method: str, field: str, path: str, caption: str = "") -> dict:
+        if not self.enabled:
+            return {"ok": False, "description": "telegram disabled"}
+        s = await self.session()
+        url = API.format(token=self.token, method=method)
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(self.chat_id))
+        if caption:
+            form.add_field("caption", caption)
+            form.add_field("parse_mode", "HTML")
+        with open(path, "rb") as handle:
+            form.add_field(field, handle, filename=path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1])
+            async with s.post(url, data=form) as resp:
+                data = await resp.json()
+        if not data.get("ok"):
+            log.warning("tg %s failed: %s", method, data.get("description", "unknown"))
+        return data
+
+    async def send_photo(self, path: str, caption: str = "") -> dict:
+        return await self._upload("sendPhoto", "photo", path, caption)
+
+    async def send_document(self, path: str, caption: str = "") -> dict:
+        return await self._upload("sendDocument", "document", path, caption)
 
     # ---------- 回调处理 ----------
     async def start(self) -> None:
